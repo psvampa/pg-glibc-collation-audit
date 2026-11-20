@@ -736,7 +736,8 @@ def check_report(returncode, out, out_dir):
     set beside; every `!!` block of the logs of steps 0, 1 and 2, one by
     one, as a warning of the data file with the same text; the
     summary's warnings block, those warnings once each; and step 11's
-    log against its warnings file (check_step11_warnings). A run that
+    log against its warnings file, and that file against the report's
+    warnings of step 11 (check_step11_warnings). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -1110,7 +1111,33 @@ def _closed_words(kind, data, lo, on):
         # written with is what this checks.
         return [({'plain': lo.CLOSING, 'tables': lo.CLOSING_TABLES,
                   'mixed': lo.CLOSING_MIXED}[data['state']], True)]
-    return [(x, True) for x in _check_phrases(kind, data)]
+    return [(x, True) for x in _check_phrases(kind, data)] + [
+        (x, False) for x in _ctype_absent(kind, data)]
+
+
+def _ctype_absent(kind, data):
+    """The parts of step 11's lines on the character rules and on another
+    encoding that their data says they leave out: the count of the
+    characters the old machine did not classify where it classified every
+    one, and, on another encoding, each clause whose list is empty, so
+    that a list cut to nothing does not pass because its words are no
+    longer looked for, and what a line says where no machine told, in a
+    line a machine told."""
+    if kind in ('ctype_characters_changed', 'euc_characters_changed'):
+        return (['it did not classify']
+                if data['count'] == len(data['classified']) else [])
+    if kind == 'other_encoding':
+        return [x for x, empty in (
+            ('Nor is whether upper()', not data['unknown']),
+            ('does not convert (', not data['errors']),
+            ('convert every byte', not data['whole']),
+            ('converts every byte', not data['whole']),
+            ('On the new machine glibc converts', not data['other']),
+            # What only a line no machine told says, never in one that a
+            # machine told.
+            ('give an error there is not known', data['told']),
+            ('neither its order nor whether', data['told'])) if empty]
+    return []
 
 
 def _check_phrases(kind, data):
@@ -1195,6 +1222,8 @@ def _check_phrases(kind, data):
                 f"process named {' or '.join(data['looked_for'])} was found,"]
     if kind.startswith('use_'):
         return _use_phrases(kind, data, earlier)
+    if kind.startswith(('ctype_', 'euc_', 'utf8_', 'other_encoding')):
+        return _ctype_phrases(kind, data, earlier)
     return []
 
 
@@ -1322,6 +1351,185 @@ def _use_phrases(kind, data, earlier):
     raise AssertionError(f'{kind}: no phrases for it')
 
 
+def _ctype_phrases(kind, data, earlier):
+    """_check_phrases of step 11's lines on the character rules
+    (ctype_texts, euc_texts, utf8_texts) and on a database of another
+    encoding (other_encoding_text): the line's `!!` with its counts and
+    the words of its data, its list whole and in order to its full stop,
+    and each part the data says the line holds. A character is written
+    as the report writes one (locale_order.character, and wide for what
+    UTF-8's converter gives): what is checked is that each value is the
+    data's, in its place."""
+    import locale_order as lo
+    c = 'Character rules (LC_CTYPE)'
+    euc = f'{c} in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database'
+    utf8 = f'{c} in a UTF8 database'
+    on = {'both': 'on both machines', 'old': 'on the old machine',
+          'new': 'on the new machine'}
+
+    def cp(u):
+        return int(u[2:], 16)
+
+    def names(xs):
+        return ', '.join(map(lo.shown, xs))
+
+    def codesets(groups):
+        return '; '.join(f"{g['encoding']}: {names(g['names'])}"
+                         for g in groups)
+
+    def count(groups):
+        return sum(len(g['names']) for g in groups)
+
+    def listed(items):
+        """A list of items, each ended by ';' but the last by '.'."""
+        return ' '.join(x + (';' if i + 1 < len(items) else '.')
+                        for i, x in enumerate(items))
+
+    def group(d, which=''):
+        if not d['names']:
+            return (f"the {d['locales']} locale(s) compared on both "
+                    f"machines{which}")
+        return f"{d['locales']} locale(s): {names(d['names'])}"
+
+    def classified(d, head):
+        known = d['classified']
+        out = [f"holds one. {len(known)} of them the old machine already "
+               f"classified{':' if known else '.'}"]
+        if known:
+            out.append(head + ' ' + listed(
+                [f"{lo.character(cp(x['character']))}: {x['change']}"
+                 for x in known]))
+        return out
+
+    def sequences(d, said):
+        return listed([f"{x['bytes']}: {said(cp(x['old']))} -> "
+                       f"{said(cp(x['new']))}" for x in d['sequences']])
+
+    def lacking(p):
+        cs, sides = p['encoding'], p['sides']
+        if p['alike'] == 'same':
+            return f"{cs}: {sides[0]['count']} byte(s) on both machines"
+        if p['alike'] == 'as many':
+            return (f"{cs}: {sides[0]['count']} byte(s) on each machine, not "
+                    f"the same ones")
+        return f"{cs}: " + ' and '.join(
+            f"{x['count']} byte(s) on the {x['side']} machine"
+            for x in sides) + (', not all the same'
+                               if p['alike'] == 'mixed' else '')
+    if kind == 'ctype_earlier_format':
+        return [f"!! {c} NOT checked: " + earlier(data['side'])]
+    if kind == 'ctype_characters_changed':
+        other = data['count'] - len(data['classified'])
+        return ([f"!! {c} CHANGE for {data['count']} character(s) in "
+                 f"{group(data, ' that a UTF8 database can use')}: each gets"]
+                + classified(data, 'classified:')
+                + ([f"The other {other} it did not classify;"]
+                   if other else []))
+    if kind == 'ctype_bytes_changed':
+        return [f"!! {c} CHANGE for {len(data['bytes'])} byte(s) in "
+                f"{group(data)}. A database",
+                'in regular expressions: ' + listed(
+                    [f"byte {x['byte']}: {x['change']}"
+                     for x in data['bytes']])]
+    if kind == 'ctype_not_checked':
+        where = {'both': 'both machines', 'old': 'old machine',
+                 'new': 'new machine'}
+        n = len({x['name'] for x in data['locales']})
+        return [f"!! {c} NOT checked in {n} locale(s): " + '; '.join(
+            f"{lo.shown(x['name'])} ({where[x['side']]}): {x['why']}"
+            for x in data['locales']) + '.']
+    if kind == 'euc_sequences_changed':
+        return [f"!! {euc}: CHANGE for {len(data['sequences'])} byte "
+                f"sequence(s) in {count(data['groups'])} locale(s) "
+                f"({codesets(data['groups'])}): glibc converts",
+                'text that holds one: ' + sequences(data, lo.character)]
+    if kind == 'euc_characters_changed':
+        other = data['count'] - len(data['classified'])
+        return ([f"!! {euc}: CHANGE for {data['count']} character(s) in "
+                 f"{count(data['groups'])} locale(s) "
+                 f"({codesets(data['groups'])}): each gets"]
+                + classified(data, 'classified:')
+                + ([f"The other {other} it did not classify."]
+                   if other else []))
+    if kind == 'euc_same':
+        return [f"!! {euc}: the same in the "
+                f"{'other ' if data['other'] else ''}"
+                f"{count(data['groups'])} locale(s) compared on both "
+                f"machines:",
+                f"rules change. {codesets(data['groups'])}."]
+    if kind == 'euc_ascii_same':
+        machine = {'both': "neither machine's glibc can",
+                   'old': "the old machine's glibc could not",
+                   'new': "the new machine's glibc cannot"}[data['side']]
+        return [f"!! {euc}: the same for ASCII, the only text compared, in "
+                f"{count(data['groups'])} locale(s), since {machine} convert "
+                f"their encoding;",
+                f"of the text. {codesets(data['groups'])}."]
+    if kind == 'euc_not_checked':
+        n = len({x for r in data['reasons'] for g in r['groups']
+                 for x in g['names']})
+        return [f"!! {euc}: NOT checked in {n} locale(s). " + ' '.join(
+            f"{r['why']} ({on[r['side']]}): {codesets(r['groups'])}."
+            for r in data['reasons'])]
+    if kind == 'utf8_changed':
+        return [f"!! {utf8}: CHANGE for {len(data['sequences'])} byte "
+                f"sequence(s) in {data['locales']} locale(s) of UTF-8: glibc "
+                f"converts",
+                'text that holds one: ' + sequences(data, lo.wide)]
+    if kind == 'utf8_one_side':
+        other = 'old' if data['side'] == 'new' else 'new'
+        said = (f"the {other.upper()} file did not measure this"
+                if not data['why'] else
+                f"the {other} machine could not measure this "
+                f"({data['why'][0]})")
+        return [f"!! {utf8}: on the {data['side']} machine glibc reads "
+                f"{len(data['sequences'])} byte sequence(s) as another "
+                f"character than the one they encode, in {data['locales']} "
+                f"locale(s) of UTF-8,",
+                f"holds one; {said}, so whether it changed is not known: "
+                + sequences(data, lo.wide)]
+    if kind == 'other_encoding':
+        n, same = count(data['groups']), data['same']
+        listed = codesets(data['groups']) + '.'
+        out = [f"!! Not measured in a database of another encoding: {n} "
+               f"locale(s) whose encoding PostgreSQL does not know,"]
+        if not same:
+            out.append(', so neither its order nor whether upper(), lower() '
+                       'and ILIKE give an error there is known. ' + listed
+                       if not data['told'] else
+                       ', so its order there is not known. ' + listed)
+        elif len(same) == n:
+            out.append('its order there is the same on both machines. '
+                       + listed)
+        else:
+            out.append(f"Its order there is the same on both machines in "
+                       f"the {len(same)} whose compiled sort table")
+            out.append(f"in the other {n - len(same)} it is not known. "
+                       f"{listed} The same sort table on both machines: "
+                       f"{names(same)}.")
+        if same and not data['told']:
+            out.append('Whether upper(), lower() and ILIKE give an error '
+                       'there is not known.')
+        if data['unknown']:
+            out.append('there known ' + '; '.join(
+                f"{on[x['side']]}: {codesets(x['groups'])}"
+                for x in data['unknown']) + '.')
+        if data['errors']:
+            out.append('does not convert (' + '; '.join(
+                map(lacking, data['errors'])) + ')')
+        for x in data['whole']:
+            many = len(x['encodings']) > 1
+            out.append(f"glibc's converter{'s' if many else ''} of "
+                       f"{' and '.join(x['encodings'])} "
+                       f"convert{'' if many else 's'} every byte "
+                       f"{on[x['side']]}")
+        for x in data['other']:
+            out.append(f"On the new machine glibc converts {x['count']} "
+                       f"byte(s) of {x['encoding']} to another character")
+        return out
+    raise AssertionError(f'{kind}: no phrases for it')
+
+
 def data_in_text(kind, data, text):
     """Every name and reason a warning's data holds is in the block it was
     printed in, every count above 0 is a number of it, what
@@ -1422,11 +1630,6 @@ def held_warnings(call):
     return out, recs
 
 
-# The kind step 11 writes a `!!` block under while its printer gives it
-# none yet (locale_order.PENDING; branch 24 of the plan).
-STEP11_PENDING = 'step11_pending'
-
-
 def step11_blocks(text):
     """The `!!` blocks of step 11's report: a line opening with `!!` and
     every line after it that opens with a blank (its lists among them), up
@@ -1451,11 +1654,9 @@ def step11_blocks(text):
 def step11_written(text, path, where):
     """The `!!` step 11 printed in `text` against what it wrote to the
     warnings file `path`, one by one and in order, with the same text;
-    each one not pending is read by report_data.warning_item (a kind it
-    does not know is refused) and its data is in its text
-    (data_in_text), and one written as pending has no data. A file that
-    is not there
-    holds none. Returns the records."""
+    each one is read by report_data.warning_item (a kind it does not know
+    is refused) and its data is in its text (data_in_text). A file that
+    is not there holds none. Returns the records."""
     import report_data as rd
     recs = []
     if os.path.exists(path):
@@ -1469,10 +1670,6 @@ def step11_written(text, path, where):
     for w in recs:
         if set(w) != {'kind', 'data', 'text'}:
             raise AssertionError(f'{path}: not a warning: {w!r}')
-        if w['kind'] == STEP11_PENDING:
-            if w['data'] != {}:
-                raise AssertionError(f'{path}: pending with data: {w!r}')
-            continue
         rd.warning_item(path, w['kind'], w['data'], w['text'])
         data_in_text(w['kind'], w['data'], w['text'])
     return recs
@@ -1480,19 +1677,29 @@ def step11_written(text, path, where):
 
 def check_step11_warnings(r, out_dir, path):
     """Step 11's `!!` in the run of the report `r` read from `path`: its
-    log's blocks are the warnings file's, one by one (step11_written); no
-    file where step 11 did not run."""
+    log's blocks are the warnings file's, one by one (step11_written), and
+    the report's warnings of step 11 are that file's, one by one; no file,
+    and no warnings, where step 11 did not run."""
     slug = os.path.basename(path)[len('report.'):-len('.json')]
     f = os.path.join(out_dir, f'step11.{slug}.warnings.jsonl')
+    w = r['warnings']['step11']
     if r['step11']['state'] == 'not run':
         if os.path.exists(f):
             raise AssertionError(f'{f} written, but step 11 did not run')
+        if w['state'] != 'not run':
+            raise AssertionError(f'{path}: step 11 did not run, its '
+                                 f'warnings are {w!r}')
         return
     if not os.path.exists(f):
         raise AssertionError(f'step 11 ran and wrote no {f}')
     log = os.path.join(out_dir, f'measured_order.{slug}.log')
     with open(log, encoding='utf-8') as fh:
-        step11_written(fh.read(), f, log)
+        recs = step11_written(fh.read(), f, log)
+    if w['state'] != 'reported' or [(i['kind'], i['data'], i['text'])
+                                     for i in w['items']] != [
+            (x['kind'], x['data'], x['text']) for x in recs]:
+        raise AssertionError(f'{path}: step 11 warnings {w!r}, {f} holds '
+                             f'{recs!r}')
 
 
 def held_main(main, stdout):

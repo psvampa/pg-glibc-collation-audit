@@ -2012,27 +2012,20 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
 
     def named(self, old, new, label):
         """{locale: encoding} other_encoding_text names for old -> new, as
-        the comparison asks it, taken from the by_codeset it calls and held
-        to the text it returns."""
-        import unittest.mock
+        the comparison asks it, taken from the data of the line it returns
+        and held to that line's text."""
         import locale_order as m
         o, n = old['locales'], new['locales']
         both = sorted(set(o) & set(n))
         only_new = sorted(set(n) - set(o))
-        seen = []
-        real = m.by_codeset
-
-        def spy(names, codesets):
-            seen.append(dict(codesets))
-            return real(names, codesets)
-        with unittest.mock.patch.object(m, 'by_codeset', spy):
-            text = m.other_encoding_text(
-                both + only_new, m.TextModel(old, new, both, only_new), ())
+        text = m.other_encoding_text(
+            both + only_new, m.TextModel(old, new, both, only_new), ())
         self.assertIsNotNone(text, f'{label}: no line')
-        self.assertTrue(seen, f'{label}: by_codeset was not called')
-        self.assertIn(' ' + real(seen[0], seen[0]) + '.', text,
-                      f'{label}: the list captured is not the one printed')
-        return seen[0]
+        got = {x: g['encoding'] for g in text.data['groups']
+               for x in g['names']}
+        self.assertIn(' ' + m.by_codeset(got, got) + '.', text,
+                      f'{label}: the list of its data is not the one printed')
+        return got
 
     def printed(self):
         """[(label, {locale: encoding})] step 11 names for each recorded

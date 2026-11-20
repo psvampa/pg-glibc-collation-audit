@@ -356,6 +356,67 @@ SAMPLES = {
         {'reasons': [{'why': 'w', 'groups': [
             {'encoding': 'EUC-JP', 'names': ['ja_JP']}]}]},
         'upper(), lower() and ILIKE in 1 locale'),
+    # Step 11's lines on the character rules and on a database of another
+    # encoding.
+    'ctype_earlier_format': (
+        {'side': 'new'},
+        'Character rules (LC_CTYPE) on the new machine (a file of an '
+        'earlier version)'),
+    'ctype_characters_changed': (
+        {'locales': 486, 'names': [], 'count': 6525, 'classified': [
+            {'character': 'U+0282', 'change': 'gains the capital'}]},
+        'Character rules (LC_CTYPE) change for 6525 characters in 486 '
+        'locales that a UTF8 database can use'),
+    'ctype_bytes_changed': (
+        {'locales': 2, 'names': ['tr_TR', 'tr_TR.iso88599'],
+         'bytes': [{'byte': 'FD', 'change': 'letter -> punctuation'}]},
+        'Character rules (LC_CTYPE) change for 1 byte in 2 locales'),
+    'ctype_not_checked': (
+        {'locales': [{'name': 'a', 'side': 'old', 'why': 'w'},
+                     {'name': 'a', 'side': 'new', 'why': 'v'}]},
+        'Character rules (LC_CTYPE) in 1 locale'),
+    'euc_sequences_changed': (
+        {'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP', 'japanese']}], 'sequences': [
+            {'bytes': 'A1 C1', 'old': 'U+301C', 'new': 'U+FF5E'}]},
+        'In an EUC database glibc converts 1 byte sequence to another '
+        'character in 2 locales'),
+    'euc_characters_changed': (
+        {'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP', 'japanese']}], 'count': 3, 'classified': []},
+        'Character rules (LC_CTYPE) in an EUC database change for 3 '
+        'characters in 2 locales'),
+    'euc_same': (
+        {'other': False, 'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP', 'japanese']}]},
+        'Character rules (LC_CTYPE) in an EUC database in 2 locales: the '
+        'same for the text glibc converts on both machines'),
+    'euc_ascii_same': (
+        {'side': 'new', 'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP', 'japanese']}]},
+        "Character rules (LC_CTYPE) in an EUC database in 2 locales: only "
+        "ASCII compared, as the new machine's glibc cannot convert their "
+        "encoding"),
+    'euc_not_checked': (
+        {'reasons': [{'why': 'W', 'side': 'both', 'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP', 'japanese']}]}]},
+        'Character rules (LC_CTYPE) in an EUC database in 2 locales'),
+    'utf8_changed': (
+        {'locales': 3, 'sequences': [
+            {'bytes': 'EF BF BD', 'old': 'U+FFFD', 'new': 'U+0041'},
+            {'bytes': 'C2 80', 'old': 'U+0080', 'new': 'U+0041'}]},
+        'In a UTF8 database glibc converts 2 byte sequences to another '
+        'character in 3 locales'),
+    'utf8_one_side': (
+        {'side': 'old', 'why': [], 'locales': 1, 'sequences': [
+            {'bytes': 'C2 80', 'old': 'U+0080', 'new': 'U+0041'}]},
+        'In a UTF8 database, whether 1 byte sequence glibc reads as another '
+        'character on the old machine changed, in 1 locale'),
+    'other_encoding': (
+        {'groups': [{'encoding': 'TIS-620', 'names': ['th_TH', 'thai']}],
+         'same': ['th_TH'], 'told': True,
+         'unknown': [{'side': 'old', 'groups': [
+             {'encoding': 'TIS-620', 'names': ['thai']}]}],
+         'errors': [{'encoding': 'TIS-620', 'alike': 'within', 'sides': [
+             {'side': 'old', 'count': 0}, {'side': 'new', 'count': 2}]}],
+         'whole': [], 'other': [{'encoding': 'TIS-620', 'count': 1}]},
+        '2 locales whose encoding PostgreSQL does not know, in a database '
+        'of another encoding'),
 }
 
 
@@ -424,9 +485,10 @@ class EveryFileWritten(_Folder):
             'not_done': list(rd.STEP11_NOT_DONE)})
         self.assertEqual(r['run']['machines']['state'], 'not given')
         for part in (r['compared'], r['step2']['totals'],
-                     r['step2']['character_sets'],
-                     r['warnings']['step11']):
+                     r['step2']['character_sets']):
             self.assertEqual(part['state'], 'not yet reported')
+        self.assertEqual(r['warnings']['step11'], {
+            'state': 'not run', 'why': "no machines' files"})
         self.assertEqual(r['warnings']['step0']['state'], 'not run')
         for n in (1, 2):
             self.assertEqual(r['warnings'][f'step{n}'], {
@@ -534,9 +596,8 @@ class EveryFileWritten(_Folder):
 
 
 class Warnings(_Folder):
-    """The `!!` of steps 0, 1 and 2, each read from the file its step
-    wrote beside its log, with its list and its title; and every kind
-    of step 11, read the same way from a step's file."""
+    """The `!!` of steps 0, 1, 2 and 11, each read from the file its
+    step wrote beside its log, with its list and its title."""
 
     def test_every_kind_and_its_title(self):
         step2_files(self.d)
@@ -617,9 +678,8 @@ class Warnings(_Folder):
         """The kinds step 11 writes (locale_order.py), each a literal: the
         kind of every Bang, but the two that take their item's
         (`d['kind']`), check_lines' and use_lines' that take their text's
-        (`d['text'].kind`) and the one of the printers whose blocks have
-        no kind yet
-        (`PENDING`); and the kinds those items carry, under the
+        (`d['text'].kind`), and kept's, which takes its text's
+        (`text.kind`); and the kinds those items carry, under the
         key 'kind' of the charmaps' items and as the next to last member
         of the warnings compare() appends to `unchecked` and `warnings`."""
         import ast
@@ -650,10 +710,11 @@ class Warnings(_Folder):
                 self.assertIsInstance(t, ast.Tuple, n.lineno)
                 self.assertIsInstance(t.elts[-2], ast.Constant, n.lineno)
                 kinds.append(t.elts[-2].value)
-        # warning_lines, unchecked_charmaps_lines; pending; check_lines,
-        # use_lines.
-        self.assertEqual(sorted(passed), ['PENDING', "d['kind']", "d['kind']",
-                                          "d['text'].kind", "d['text'].kind"])
+        # warning_lines, unchecked_charmaps_lines; check_lines, use_lines;
+        # kept, which ctype_lines and other_encoding_lines print through.
+        self.assertEqual(sorted(passed), ["d['kind']", "d['kind']",
+                                          "d['text'].kind", "d['text'].kind",
+                                          'text.kind'])
         return kinds
 
     def test_the_lists(self):
@@ -667,7 +728,10 @@ class Warnings(_Folder):
                           'libc_other', 'use_error_new', 'use_error_both',
                           'use_error_moved', 'use_error_any_db',
                           'use_error_one_side', 'use_error_partial',
-                          'use_wrong_result', 'use_back_changed'])
+                          'use_wrong_result', 'use_back_changed',
+                          'ctype_characters_changed', 'ctype_bytes_changed',
+                          'euc_sequences_changed', 'euc_characters_changed',
+                          'utf8_changed'])
 
     def test_titles_by_the_data(self):
         """What the data changes in a title: two signature statuses and
@@ -764,8 +828,9 @@ class Warnings(_Folder):
         """Values each right alone and wrong together: the control's
         lists holding no locale, one twice or one in both; a decimals of
         money that does not change; processes not checked for no reason
-        (review of 24.1c-2, round 1); and the lines on upper(), lower()
-        and ILIKE (use_impossible)."""
+        (review of 24.1c-2, round 1); the lines on upper(), lower() and
+        ILIKE (use_impossible); and the lines on the character rules and
+        on another encoding (ctype_impossible)."""
         c = {'name': 'C', 'side': 'old'}
         e = dict(c, error='e')
         for kind, data in (
@@ -777,13 +842,15 @@ class Warnings(_Folder):
                     {'name': 'b', 'old': 2, 'new': 2}]}),
                 ('libc_not_checked', {'side': 'old', 'machine': [],
                                       'named': [], 'unnamed': 0})) + \
-                self.use_impossible():
+                self.use_impossible() + self.ctype_impossible():
             with self.subTest(kind=kind, data=data), \
                     self.assertRaisesRegex(rd.ReportError,
                                            'cannot be written'):
                 rd.warning_item('w', kind, data, '!! x')
         for kind in ('control_not_checked', 'money_changed',
-                     'libc_not_checked') + tuple(rd.KINDS)[-12:]:
+                     'libc_not_checked') + tuple(
+                         k for k in rd.KINDS if k.split('_')[0] in (
+                             'use', 'ctype', 'euc', 'utf8', 'other')):
             rd.warning_item('w', kind, SAMPLES[kind][0], '!! x')
 
     def use_impossible(self):
@@ -836,6 +903,76 @@ class Warnings(_Folder):
             {'encoding': 'F', 'count': 1, 'names': ['a']}]}))
         return tuple(out)
 
+    def ctype_impossible(self):
+        """The lines on the character rules and on a database of another
+        encoding: more characters the old machine classified than change,
+        one twice; names that are not as many as the locales counted, or
+        one twice; a byte or a byte sequence twice, or a sequence both
+        machines convert alike; a locale given a side twice, or both and
+        one; a locale twice; on another encoding, a locale twice, one of
+        the same sort table not among them, what only a machine that told
+        says where none did, an encoding twice among the errors and those
+        that convert every byte, one that converts otherwise not among
+        them, what two machines refuse told apart against their counts,
+        and a locale not known that is not among them."""
+        cl = {'character': 'U+0041', 'change': 'x'}
+        seq = {'bytes': 'A1', 'old': 'U+0041', 'new': 'U+0042'}
+        g = [{'encoding': 'E', 'names': ['a']}]
+        two = [{'encoding': 'E', 'names': ['a']},
+               {'encoding': 'F', 'names': ['a']}]
+        other = {'groups': [{'encoding': 'E', 'names': ['a', 'b']}],
+                 'same': [], 'told': True, 'unknown': [], 'errors': [],
+                 'whole': [], 'other': []}
+        lack = {'encoding': 'E', 'alike': 'same', 'sides': [
+            {'side': 'old', 'count': 1}, {'side': 'new', 'count': 1}]}
+        return (
+            ('ctype_characters_changed', {'locales': 1, 'names': [],
+                                          'count': 1, 'classified': [cl, cl]}),
+            ('ctype_characters_changed', {'locales': 2, 'names': ['a', 'b'],
+                                          'count': 2, 'classified': [cl, cl]}),
+            ('ctype_characters_changed', {'locales': 2, 'names': ['a'],
+                                          'count': 1, 'classified': []}),
+            ('ctype_characters_changed', {'locales': 2, 'names': ['a', 'a'],
+                                          'count': 1, 'classified': []}),
+            ('ctype_bytes_changed', {'locales': 1, 'names': [], 'bytes': [
+                {'byte': 'E0', 'change': 'x'}, {'byte': 'E0', 'change': 'y'}]}),
+            ('ctype_not_checked', {'locales': [
+                {'name': 'a', 'side': 'old', 'why': 'w'},
+                {'name': 'a', 'side': 'old', 'why': 'v'}]}),
+            ('ctype_not_checked', {'locales': [
+                {'name': 'a', 'side': 'both', 'why': 'w'},
+                {'name': 'a', 'side': 'new', 'why': 'v'}]}),
+            ('euc_sequences_changed', {'groups': g, 'sequences': [seq, seq]}),
+            ('euc_sequences_changed', {'groups': g, 'sequences': [
+                dict(seq, new='U+0041')]}),
+            ('euc_sequences_changed', {'groups': two, 'sequences': [seq]}),
+            ('euc_characters_changed', {'groups': g, 'count': 1,
+                                        'classified': [cl, cl]}),
+            ('euc_same', {'other': False, 'groups': two}),
+            ('euc_ascii_same', {'side': 'old', 'groups': two}),
+            ('euc_not_checked', {'reasons': [
+                {'why': 'w', 'side': 'old', 'groups': g},
+                {'why': 'v', 'side': 'old', 'groups': g}]}),
+            ('utf8_changed', {'locales': 1, 'sequences': [seq, seq]}),
+            ('utf8_changed', {'locales': 1, 'sequences': [
+                dict(seq, new='U+0041')]}),
+            ('utf8_one_side', {'side': 'old', 'why': [], 'locales': 1,
+                               'sequences': [seq, seq]}),
+            ('other_encoding', dict(other, groups=two)),
+            ('other_encoding', dict(other, same=['c'])),
+            ('other_encoding', dict(other, told=False, unknown=[
+                {'side': 'old', 'groups': g}])),
+            ('other_encoding', dict(other, errors=[lack], whole=[
+                {'side': 'both', 'encodings': ['E']}])),
+            ('other_encoding', dict(other, other=[
+                {'encoding': 'E', 'count': 1}])),
+            ('other_encoding', dict(other, errors=[
+                dict(lack, alike='within')])),
+            ('other_encoding', dict(other, unknown=[
+                {'side': 'old', 'groups': [{'encoding': 'E',
+                                            'names': ['c']}]}])),
+        )
+
     def test_step0_with_the_machines(self):
         step2_files(self.d, **MACHINES)
         step11_files(self.d)
@@ -851,6 +988,26 @@ class Warnings(_Folder):
             [i['kind'] for i in
              self.written(**over)['warnings']['step0']['items']],
             ['machine_falls_back_to_tags'])
+
+    def test_step11_with_the_machines(self):
+        """Step 11's file, read as steps 0 to 2's are once step 11 ran:
+        none is not reported, an empty one holds none, and each `!!` it
+        holds comes with its list and title; without step 11 it is not
+        read."""
+        step2_files(self.d, **MACHINES)
+        step11_files(self.d)
+        over = dict(ON_MACHINES)
+        self.assertEqual(self.written(**over)['warnings']['step11'], {
+            'state': 'not reported',
+            'why': f'the step wrote no step11.{PAIR}.warnings.jsonl'})
+        warnings_file(self.d, 11, [])
+        self.assertEqual(self.written(**over)['warnings']['step11'],
+                         {'state': 'reported', 'items': []})
+        kinds = ['ctype_characters_changed', 'other_encoding']
+        warnings_file(self.d, 11, kinds)
+        items = self.written(**over)['warnings']['step11']['items']
+        self.assertEqual([(i['kind'], i['class'], i['title']) for i in items],
+                         [(k, rd.KINDS[k][0], SAMPLES[k][1]) for k in kinds])
 
     def test_a_step0_file_without_the_machines_is_not_read(self):
         step2_files(self.d)
@@ -1210,6 +1367,7 @@ class TheReaderIsStrict(_Folder):
         warnings_file(self.d, 1, ['signatures_unchecked',
                                   'collation_version_same'])
         warnings_file(self.d, 2, ['c_utf8_differs', 'names_untraced'])
+        warnings_file(self.d, 11, ['euc_ascii_same', 'other_encoding'])
         self.good = self.written(**ON_MACHINES)
 
     def refuses(self, change):
@@ -1343,6 +1501,30 @@ class TheReaderIsStrict(_Folder):
         self.refuses(lambda r: step2(r).update(title='Nothing changed'))
         self.refuses(lambda r: step2(r)['data']['names'].pop())
         self.refuses(lambda r: r['warnings'].update(step2=rd.NOT_YET))
+        step11 = lambda r: r['warnings']['step11']['items'][1]
+        self.refuses(lambda r: step11(r).update(title='Nothing changed'))
+        self.refuses(lambda r: step11(r)['data'].update(told='yes'))
+        self.refuses(lambda r: r['warnings'].update(step11=rd.NOT_YET))
+
+    def test_step11_warnings_not_run_exactly_when_step11_did_not_run(self):
+        """Step 11's warnings are not run where step 11 is, and only
+        there: refused by that check, not by another."""
+        def no_warnings(r):
+            r['warnings']['step11'] = {'state': 'not run', 'why': 'x'}
+
+        def no_step11(r):
+            r['step11'] = {'state': 'not run', 'why': "no machines' files",
+                           'not_done': list(rd.STEP11_NOT_DONE)}
+        for change in (no_warnings, no_step11):
+            r = copy.deepcopy(self.good)
+            change(r)
+            p = os.path.join(self.d, 'changed.json')
+            with open(p, 'w', encoding='utf-8') as f:
+                json.dump(r, f)
+            with self.subTest(change=change.__name__), \
+                    self.assertRaisesRegex(rd.ReportError,
+                                           'warnings.step11 is not run'):
+                rd.load(p)
 
     def test_step0_not_run_with_the_machines_given(self):
         def change(r):
