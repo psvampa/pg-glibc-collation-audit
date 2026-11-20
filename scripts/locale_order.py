@@ -7619,12 +7619,24 @@ def ctype_byte_changes(old_part, ok, new_part, nk):
 UTF8_USE = ' that a UTF8 database can use'
 
 
-def ctype_group(members, compared, which=''):
-    """How a line names its locales: all those compared (which says of
-    which kind), or each."""
-    if len(members) == compared:
-        return f'the {compared} locale(s) compared on both machines{which}'
-    return f'{len(members)} locale(s): {", ".join(map(shown, members))}'
+def ctype_group_data(members, compared):
+    """How a line names its locales, as data: how many, and each by name,
+    or none where they are all those compared."""
+    return {'locales': len(members),
+            'names': [] if len(members) == compared else list(members)}
+
+
+def ctype_group(d, which=''):
+    """How a line names its locales, printed from ctype_group_data's d: all
+    those compared (which says of which kind), or each."""
+    if not d['names']:
+        return f'the {d["locales"]} locale(s) compared on both machines{which}'
+    return f'{d["locales"]} locale(s): {", ".join(map(shown, d["names"]))}'
+
+
+def code_point(u):
+    """The code point of 'U+0282'."""
+    return int(u[2:], 16)
 
 
 def ctype_texts(old, new, names, refused, model):
@@ -7660,14 +7672,18 @@ def ctype_texts(old, new, names, refused, model):
     EUC_CN or EUC_TW hands glibc the characters glibc's converter makes of
     its text, so its locales are compared on those, from each machine's
     converter part (euc_texts). Which locales a UTF8 database can use, and
-    each machine's tables, are the model's (TextModel)."""
+    each machine's tables, are the model's (TextModel). Each `!!` is a
+    Bang with its kind and data, its counts and lists printed from that
+    data."""
     earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
                if 'ctype' not in data['held']]
     if earlier:
         files = ('the OLD and NEW files were' if len(earlier) == 2
                  else f'the {earlier[0]} file was')
-        found = [{'text': f'!! {CTYPE_LINE} NOT checked: {files} '
-                          + EARLIER.format(which_machines(earlier)) + '.'}]
+        found = [{'text': Bang(f'!! {CTYPE_LINE} NOT checked: {files} '
+                               + EARLIER.format(which_machines(earlier)) + '.',
+                               'ctype_earlier_format',
+                               {'side': side_of(earlier)})}]
         # What UTF-8's converter reads needs no table of rules: one
         # machine's measurement is said all the same (utf8_texts).
         rows = []
@@ -7738,13 +7754,14 @@ def ctype_texts(old, new, names, refused, model):
                 sql['groups'].append((members, {x: wide_of[x]
                                                 for x in members}))
                 found.append(ctype_character_finding(
-                    got, ctype_group(members, compared, UTF8_USE)))
+                    got, ctype_group_data(members, compared)))
                 rows.append({'names': [label], 'rows': [
                     ('LC_CTYPE changed', f'U+{cp:04X}', exact, '-',
                      'classified' if known else 'not classified', '-',
                      'on both machines') for cp, known, _, exact in got]})
             else:
-                found.append(ctype_byte_finding(got, ctype_group(members, compared)))
+                found.append(ctype_byte_finding(
+                    got, ctype_group_data(members, compared)))
                 rows.append({'names': [label], 'rows': [
                     ('LC_CTYPE changed', f'byte {b:02X}', exact, '-', '-',
                      '-', 'on both machines') for b, _, exact in got]})
@@ -7782,11 +7799,15 @@ def ctype_texts(old, new, names, refused, model):
     if unknown:
         where = {'both': 'both machines', 'old': 'old machine',
                  'new': 'new machine'}
-        found.append({'text': f'!! {CTYPE_LINE} NOT checked in {len(unknown)} '
-                              'locale(s): ' + '; '.join(
-                                  f'{shown(n)} ({where[side]}): {why}'
-                                  for n, sides in sorted(unknown.items())
-                                  for side, why in sides) + '.'})
+        listed = [{'name': n, 'side': side, 'why': why}
+                  for n, sides in sorted(unknown.items())
+                  for side, why in sides]
+        found.append({'text': Bang(
+            f'!! {CTYPE_LINE} NOT checked in '
+            f'{len({x["name"] for x in listed})} locale(s): ' + '; '.join(
+                f'{shown(x["name"])} ({where[x["side"]]}): {x["why"]}'
+                for x in listed) + '.',
+            'ctype_not_checked', {'locales': listed})})
         rows += [{'names': [n], 'rows': [
             ('LC_CTYPE not checked', '-', f'{where[side]}: {why}'.translate(
                 TEXT_ESCAPES), '-', '-', '-', '-') for side, why in sides]}
@@ -7822,7 +7843,8 @@ def euc_texts(model, euc, wide_of, rows):
     machine stops upper() there and is named by use_texts. A machine whose
     converter does not open converts ASCII alone, so only ASCII is
     compared; one that does not say is named with why, never read as the
-    same."""
+    same. Each `!!` is a Bang with its kind and data, its counts and lists
+    printed from that data."""
     old, new = model.old.data, model.new.data
     changes_of, by, unknown, ascii_only = {}, {}, {}, {}
     for name, codeset in sorted(euc.items()):
@@ -7867,7 +7889,9 @@ def euc_texts(model, euc, wide_of, rows):
             # what was compared.
             same.update((n, c) for n, c in group.items() if n not in apart)
             continue
-        listed = f'{len(group)} locale(s) ({by_codeset(group, group)})'
+        groups = by_codeset_data(group, group)
+        listed = (f'{sum(len(g["names"]) for g in groups)} locale(s) '
+                  f'({codeset_said(groups)})')
         if other:
             label = f'LC_CTYPE_group_{sum(1 for r in rows if "label" in r) + 1}'
             rows.append({'names': sorted(group), 'label': label, 'rows': [
@@ -7877,14 +7901,17 @@ def euc_texts(model, euc, wide_of, rows):
             rows.append({'names': [label], 'rows': [
                 ('LC_CTYPE converted', f'bytes {spaced(s)}', f'U+{a:04X} -> U+{b:04X}',
                  '-', '-', '-', 'on both machines') for s, a, b in other]})
+            d = {'groups': groups, 'sequences': sequences_data(
+                (spaced(s), a, b) for s, a, b in other)}
             found.append({
-                'head': f'!! {EUC_LINE}: CHANGE for {len(other)} byte sequence(s) '
-                        f'in {listed}: glibc converts each to another character '
-                        'on the new machine than on the old one, so upper(), '
-                        'lower(), initcap(), ILIKE and full-text search can give '
-                        'other results for text that holds one:',
-                'items': [f'{spaced(s)}: {character(a)} -> {character(b)}'
-                          for s, a, b in other], 'tail': ''})
+                'head': Bang(f'!! {EUC_LINE}: CHANGE for {len(d["sequences"])} '
+                             f'byte sequence(s) in {listed}: glibc converts each '
+                             'to another character on the new machine than on '
+                             'the old one, so upper(), lower(), initcap(), ILIKE '
+                             'and full-text search can give other results for '
+                             'text that holds one:', 'euc_sequences_changed', d),
+                'items': sequences_items(d['sequences'], character),
+                'tail': ''})
         if changed:
             label = f'LC_CTYPE_group_{sum(1 for r in rows if "label" in r) + 1}'
             rows.append({'names': sorted(group), 'label': label, 'rows': [
@@ -7895,29 +7922,34 @@ def euc_texts(model, euc, wide_of, rows):
                 ('LC_CTYPE changed', f'U+{cp:04X}', exact, '-',
                  'classified' if k else 'not classified', '-',
                  'on both machines') for cp, k, _, exact in changed]})
-            known = [(cp, words) for cp, k, words, _ in changed if k]
-            other_count = len(changed) - len(known)
+            d = {'groups': groups, 'count': len(changed),
+                 'classified': classified_data(changed)}
+            known = d['classified']
+            other_count = d['count'] - len(known)
             found.append({
-                'head': f'!! {EUC_LINE}: CHANGE for {len(changed)} character(s) in '
-                        f'{listed}: each gets another upper case, lower case or '
-                        'class, and glibc converts the text of such a database to '
-                        'it alike on both machines. upper(), lower(), initcap(), '
-                        'ILIKE and full-text search read these rules there, so '
-                        'they can give other results for text that holds one. '
-                        f'{len(known)} of them the old machine already '
-                        f'classified{":" if known else "."}',
-                'items': [f'{character(cp)}: {words}' for cp, words in known],
+                'head': Bang(f'!! {EUC_LINE}: CHANGE for {d["count"]} character(s) '
+                             f'in {listed}: each gets another upper case, lower '
+                             'case or class, and glibc converts the text of such '
+                             'a database to it alike on both machines. upper(), '
+                             'lower(), initcap(), ILIKE and full-text search read '
+                             'these rules there, so they can give other results '
+                             f'for text that holds one. {len(known)} of them the '
+                             'old machine already '
+                             f'classified{":" if known else "."}',
+                             'euc_characters_changed', d),
+                'items': classified_items(known),
                 'tail': (f'The other {other_count} it did not classify.'
                          if other_count else '')})
     if same:
-        tail.append({'text': f'!! {EUC_LINE}: the same in the '
-                             f'{"other " if found else ""}'
-                             f'{len(same)} locale(s) compared on both machines: '
-                             'each byte sequence such a database accepts that '
-                             'glibc converts on both machines it converts to the '
-                             'same character on both, and none of those '
-                             "characters' rules change. "
-                             + by_codeset(same, same) + '.'})
+        d = {'other': bool(found), 'groups': by_codeset_data(same, same)}
+        tail.append({'text': Bang(
+            f'!! {EUC_LINE}: the same in the '
+            f'{"other " if d["other"] else ""}'
+            f'{sum(len(g["names"]) for g in d["groups"])} locale(s) compared '
+            'on both machines: each byte sequence such a database accepts that '
+            'glibc converts on both machines it converts to the same character '
+            "on both, and none of those characters' rules change. "
+            + codeset_said(d['groups']) + '.', 'euc_same', d)})
     changed_names = {n for (o, c), group in by.items() if o or c for n in group}
     for where, group in sorted(ascii_only.items()):
         machine = {'both': "neither machine's glibc can",
@@ -7931,13 +7963,15 @@ def euc_texts(model, euc, wide_of, rows):
                 # Only ASCII compared, beside a clean answer: easy to
                 # over-read, so it keeps its !!.
                 same_ascii = how.startswith('the same')
-                tail.append({'text': f'{"!! " if same_ascii else ""}{EUC_LINE}: '
-                                     f'{how} in {len(names)} '
-                                     f'locale(s), since {machine} convert their '
-                                     'encoding; the line on upper(), lower() and '
-                                     'ILIKE above says what that does to the rest '
-                                     'of the text. '
-                                     + by_codeset(names, euc) + '.'})
+                groups = by_codeset_data(names, euc)
+                text = (f'{"!! " if same_ascii else ""}{EUC_LINE}: {how} in '
+                        f'{sum(len(g["names"]) for g in groups)} locale(s), '
+                        f'since {machine} convert their encoding; the line on '
+                        'upper(), lower() and ILIKE above says what that does '
+                        'to the rest of the text. ' + codeset_said(groups) + '.')
+                tail.append({'text': Bang(text, 'euc_ascii_same',
+                                          {'side': where, 'groups': groups})
+                             if same_ascii else text})
     if unknown:
         where = {'both': 'both machines', 'old': 'old machine', 'new': 'new machine'}
         # Each reason once, with the machine it is about and its locales.
@@ -7945,12 +7979,16 @@ def euc_texts(model, euc, wide_of, rows):
         for n, sides in unknown.items():
             for side, why in sides:
                 whys.setdefault((why, side), {})[n] = euc[n]
-        tail.append({'text': f'!! {EUC_LINE}: NOT checked in {len(unknown)} '
-                             'locale(s). ' + ' '.join(
-                                 f'{sentence(why)} (on '
-                                 f'{"both machines" if side == "both" else f"the {side} machine"}'
-                                 f'): {by_codeset(group, group)}.'
-                                 for (why, side), group in sorted(whys.items()))})
+        reasons = [{'why': sentence(why), 'side': side,
+                    'groups': by_codeset_data(group, group)}
+                   for (why, side), group in sorted(whys.items())]
+        tail.append({'text': Bang(
+            f'!! {EUC_LINE}: NOT checked in '
+            f'{len({n for r in reasons for g in r["groups"] for n in g["names"]})}'
+            ' locale(s). ' + ' '.join(
+                f'{r["why"]} ({SIDE_WHERE[r["side"]]}): '
+                f'{codeset_said(r["groups"])}.' for r in reasons),
+            'euc_not_checked', {'reasons': reasons})})
         rows += [{'names': [n], 'rows': [
             ('LC_CTYPE not checked', '-', f'{where[side]}: {why}'.translate(
                 TEXT_ESCAPES), '-', '-', '-', '-') for side, why in sides]}
@@ -7974,7 +8012,8 @@ def utf8_texts(model, names, rows):
     read as the same other character on both is no change. Where one
     machine cannot say, what the other measured is said as that machine's
     alone, with why (a side that cannot answer never hides what the other
-    measured)."""
+    measured). The head is a Bang with its kind and data, its counts and
+    list printed from that data."""
     members = [n for n in names
                if all(v.codeset == 'UTF-8' and v.state in ('accepted', 'unread')
                       for v in model.views[n])
@@ -7986,28 +8025,16 @@ def utf8_texts(model, names, rows):
         do, dn = (f.read for f in got)
         rows_of = [(c, do.get(c, c), dn.get(c, c)) for c in sorted(set(do) | set(dn))
                    if do.get(c, c) != dn.get(c, c) and do.get(c, c) and dn.get(c, c)]
-        head = (f'CHANGE for {len(rows_of)} byte sequence(s) in {len(members)} '
-                'locale(s) of UTF-8: glibc converts each to another character on '
-                'the new machine than on the old one, so upper(), lower(), '
-                'initcap(), ILIKE and full-text search can give other results for '
-                'text that holds one:')
-        measured = 'on both machines'
+        measured, d = 'on both machines', {}
     else:
         measured_on = [(m, f) for m, f in zip(model.machines, got) if f.state == 'converts']
         if len(measured_on) != 1:
             return []
         (m, f), = measured_on
-        other, of = next((x, g) for x, g in zip(model.machines, got) if x is not m)
+        of = next(g for x, g in zip(model.machines, got) if x is not m)
         rows_of = [(c, c, v) for c, v in sorted(f.read.items()) if v]
-        said = (f'the {other.side.upper()} file did not measure this'
-                if of.state == 'earlier' else
-                f'the {other.side} machine could not measure this ({of.why})')
-        head = (f'on the {m.side} machine glibc reads {len(rows_of)} byte '
-                'sequence(s) as another character than the one they encode, in '
-                f'{len(members)} locale(s) of UTF-8, so upper(), lower(), '
-                'initcap(), ILIKE and full-text search can give other results for '
-                f'text that holds one; {said}, so whether it changed is not known:')
         measured = f'on the {m.side} machine'
+        d = {'side': m.side, 'why': [] if of.state == 'earlier' else [of.why]}
     if not rows_of:
         return []
     label = f'LC_CTYPE_group_{sum(1 for r in rows if "label" in r) + 1}'
@@ -8019,9 +8046,43 @@ def utf8_texts(model, names, rows):
         ('LC_CTYPE converted', f'bytes {spaced(chr(c).encode("utf-8"))}',
          f'U+{a:04X} -> U+{b:04X}', '-', '-', '-', measured)
         for c, a, b in rows_of]})
-    return [{'head': f'!! {UTF8_LINE}: {head}',
-             'items': [f'{spaced(chr(c).encode("utf-8"))}: {wide(a)} -> {wide(b)}'
-                       for c, a, b in rows_of], 'tail': ''}]
+    d.update(locales=len(members), sequences=sequences_data(
+        (spaced(chr(c).encode('utf-8')), a, b) for c, a, b in rows_of))
+    n = len(d['sequences'])
+    if 'side' not in d:
+        head = Bang(f'!! {UTF8_LINE}: CHANGE for {n} byte sequence(s) in '
+                    f'{d["locales"]} locale(s) of UTF-8: glibc converts each to '
+                    'another character on the new machine than on the old one, so '
+                    'upper(), lower(), initcap(), ILIKE and full-text search can '
+                    'give other results for text that holds one:',
+                    'utf8_changed', d)
+    else:
+        other = 'old' if d['side'] == 'new' else 'new'
+        said = (f'the {other.upper()} file did not measure this' if not d['why']
+                else f'the {other} machine could not measure this ({d["why"][0]})')
+        head = Bang(f'!! {UTF8_LINE}: on the {d["side"]} machine glibc reads {n} '
+                    'byte sequence(s) as another character than the one they '
+                    f'encode, in {d["locales"]} locale(s) of UTF-8, so upper(), '
+                    'lower(), initcap(), ILIKE and full-text search can give other '
+                    f'results for text that holds one; {said}, so whether it '
+                    'changed is not known:', 'utf8_one_side', d)
+    return [{'head': head, 'items': sequences_items(d['sequences'], wide),
+             'tail': ''}]
+
+
+def sequences_data(got):
+    """[{'bytes', 'old', 'new'}] of each (byte sequence as spaced writes it,
+    the character one machine converts it to, the other's): the data of
+    the lines on what glibc converts otherwise (euc_texts, utf8_texts)."""
+    return [{'bytes': s, 'old': f'U+{a:04X}', 'new': f'U+{b:04X}'}
+            for s, a, b in got]
+
+
+def sequences_items(sequences, said):
+    """The items of such a line, printed from sequences_data's list, each
+    character as said writes it."""
+    return [f'{x["bytes"]}: {said(code_point(x["old"]))} -> '
+            f'{said(code_point(x["new"]))}' for x in sequences]
 
 
 def wide(v):
@@ -8030,35 +8091,60 @@ def wide(v):
     return character(v) if v < 0x110000 else f'U+{v:04X}'
 
 
+def classified_data(got):
+    """[{'character', 'change'}] of each character of got (ctype_wide_changes)
+    the old machine classified: its code point and what the report says of
+    it."""
+    return [{'character': f'U+{cp:04X}', 'change': words}
+            for cp, k, words, _ in got if k]
+
+
+def classified_items(known):
+    """The items of a finding, printed from classified_data's list."""
+    return [f'{character(code_point(x["character"]))}: {x["change"]}'
+            for x in known]
+
+
 def ctype_character_finding(got, group):
     """The finding of a group of locales whose wide tables change alike:
-    a head, one item per character the old machine classified, a tail."""
-    known = [(cp, words) for cp, k, words, _ in got if k]
-    head = (f'!! {CTYPE_LINE} CHANGE for {len(got)} character(s) in '
-            f'{group}: each gets another upper case, '
-            'lower case or class. upper(), lower(), initcap(), ILIKE, regular '
-            'expressions and full-text search read these rules in a UTF8 '
-            'database, so they can give other results there for text that '
-            f'holds one. {len(known)} of them the old machine already '
-            f'classified{":" if known else "."}')
-    other = len(got) - len(known)
+    a head, one item per character the old machine classified, a tail.
+    The head is a Bang whose data is the group's (ctype_group_data), how
+    many characters change and those classified (classified_data); all
+    of it is printed from that data."""
+    d = dict(group, count=len(got), classified=classified_data(got))
+    known = d['classified']
+    head = Bang(f'!! {CTYPE_LINE} CHANGE for {d["count"]} character(s) in '
+                f'{ctype_group(d, UTF8_USE)}: each gets another upper case, '
+                'lower case or class. upper(), lower(), initcap(), ILIKE, regular '
+                'expressions and full-text search read these rules in a UTF8 '
+                'database, so they can give other results there for text that '
+                f'holds one. {len(known)} of them the old machine already '
+                f'classified{":" if known else "."}',
+                'ctype_characters_changed', d)
+    other = d['count'] - len(known)
     tail = (f'The other {other} it did not classify; a UTF8 database can hold '
             'them too, and they change those results as well.' if other else '')
-    return {'head': head, 'items': [f'{character(cp)}: {words}'
-                                    for cp, words in known], 'tail': tail}
+    return {'head': head, 'items': classified_items(known), 'tail': tail}
 
 
 def ctype_byte_finding(got, group):
-    head = (f'!! {CTYPE_LINE} CHANGE for {len(got)} byte(s) in '
-            f'{group}. A database of one byte per '
-            'character, SQL_ASCII too, reads them in upper(), lower(), '
-            'initcap(), ILIKE, regular expressions and full-text search. A '
-            'database of any other encoding, UTF8 too, reads every byte in '
-            'fuzzystrmatch and, on PostgreSQL 14 to 18.1, in ltree\'s labels, and '
-            'reads the ASCII bytes in the character tests of full-text search, '
-            'ltree and pg_trgm and, except in UTF8, in regular expressions:')
-    return {'head': head, 'items': [f'byte {b:02X}: {words}' for b, words, _ in got],
-            'tail': ''}
+    """The finding of a group of locales whose byte tables change alike: a
+    head, which is a Bang whose data is the group's (ctype_group_data) and
+    each byte with what the report says of it, and an item per byte, all
+    printed from that data."""
+    d = dict(group, bytes=[{'byte': f'{b:02X}', 'change': words}
+                           for b, words, _ in got])
+    head = Bang(f'!! {CTYPE_LINE} CHANGE for {len(d["bytes"])} byte(s) in '
+                f'{ctype_group(d)}. A database of one byte per '
+                'character, SQL_ASCII too, reads them in upper(), lower(), '
+                'initcap(), ILIKE, regular expressions and full-text search. A '
+                'database of any other encoding, UTF8 too, reads every byte in '
+                'fuzzystrmatch and, on PostgreSQL 14 to 18.1, in ltree\'s labels, and '
+                'reads the ASCII bytes in the character tests of full-text search, '
+                'ltree and pg_trgm and, except in UTF8, in regular expressions:',
+                'ctype_bytes_changed', d)
+    return {'head': head, 'items': [f'byte {x["byte"]}: {x["change"]}'
+                                    for x in d['bytes']], 'tail': ''}
 
 
 def ctype_text(d, where):
@@ -8078,19 +8164,28 @@ def ctype_where(d, ctx):
             f'Pass --characters-to FILE for every such {d["where"]}.')
 
 
+def kept(text, line):
+    """line, a Bang with text's kind and data where text is one."""
+    return Bang(line, text.kind, text.data) if isinstance(text, Bang) else line
+
+
 def ctype_lines(items, ctx):
+    """The lines on the character rules; each `!!` of them, a line's text
+    or a list's head, is a Bang with its kind (ctype_texts, euc_texts,
+    utf8_texts), and one that is not stops report_blocks."""
     out = []
     for d in items:
         if 'items' not in d:
-            out.append('\n'.join(whole_words(
-                ctype_text(d, lambda d: ctype_where(d, ctx)), 0, 3)))
+            text = ctype_text(d, lambda d: ctype_where(d, ctx))
+            out.append(kept(text, '\n'.join(whole_words(text, 0, 3))))
             continue
-        out += wrapped(d['head'], 0, 3)
+        head = wrapped(d['head'], 0, 3)
+        out += [kept(d['head'], head[0])] + head[1:]
         for i, item in enumerate(d['items']):
             out += wrapped(item + (';' if i + 1 < len(d['items']) else '.'), 5, 7)
         if d['tail']:
             out += wrapped(d['tail'], 3, 3)
-    return pending(out)
+    return out
 
 
 def ctype_summary(items, ctx):
@@ -8120,9 +8215,12 @@ def where_text(sides):
 
 
 def lacking_data(codeset, got):
-    """What lacking_text says, as data, from {side: what glibc refuses}:
-    the encoding, how many each side refuses (old first), and how the two
-    sides' compare (alike): 'same' ones, 'as many' and not the same ones,
+    """What a line says of what glibc refuses of an encoding on each
+    machine, as data, from {side: what glibc refuses}: the bytes its
+    converter does not convert (other_encoding_text), the byte sequences
+    (partial_said) or the characters it does not convert back
+    (wrong_said). It holds the encoding, how many each side refuses (old
+    first), and how the two sides' compare (alike): 'same' ones, 'as many' and not the same ones,
     'mixed' where neither refuses every one the other does, 'within' where
     one does, or 'one side' where one side alone refuses."""
     if len(got) < 2:
@@ -8142,7 +8240,10 @@ def lacking_data(codeset, got):
 
 
 def lacking_said(d, unit='byte(s)'):
-    """lacking_text, printed from lacking_data's d."""
+    """'TIS-620: 41 byte(s) on both machines', printed from lacking_data's
+    d; two machines that refuse as many, not the same ones, are told apart,
+    and so are two that refuse a different number where neither refuses
+    every one the other does."""
     cs, sides = d['encoding'], d['sides']
     if d['alike'] == 'same':
         return f'{cs}: {sides[0]["count"]} {unit} on both machines'
@@ -8152,15 +8253,6 @@ def lacking_said(d, unit='byte(s)'):
     return f'{cs}: ' + ' and '.join(
         f'{x["count"]} {unit} on the {x["side"]} machine' for x in sides) + (
             ', not all the same' if d['alike'] == 'mixed' else '')
-
-
-def lacking_text(codeset, got, unit='byte(s)'):
-    """'TIS-620: 41 byte(s) on both machines', from {side: what glibc
-    refuses}; two machines that refuse as many, not the same ones, are told
-    apart, and so are two that refuse a different number where neither
-    refuses every one the other does. Printed from its data
-    (lacking_data)."""
-    return lacking_said(lacking_data(codeset, got), unit)
 
 
 def other_encoding_text(names, model, firm):
@@ -8187,7 +8279,8 @@ def other_encoding_text(names, model, firm):
     bytes by the table, so the order of such a locale in a database of
     another encoding is the same on both machines too, under the same
     assumption the table's verdict rests on (CLOSING_TABLES or
-    CLOSING_MIXED)."""
+    CLOSING_MIXED).
+    The line is a Bang with its data, printed from it (other_encoding_said)."""
     known = model.known
     codesets, unmeasured, lacking, told = {}, {}, {}, False
     for name in names:
@@ -8224,22 +8317,54 @@ def other_encoding_text(names, model, firm):
                 lacking.setdefault(cs, {})[side] = g
     if not codesets:
         return None
+    d = {'groups': by_codeset_data(codesets, codesets),
+         'same': sorted(x for x in codesets if x in firm), 'told': told,
+         'unknown': [], 'errors': [], 'whole': [], 'other': []}
+    if told:
+        groups = {}
+        for name, sides in unmeasured.items():
+            groups.setdefault(where_text(sides), {})[name] = codesets[name]
+        d['unknown'] = [{'side': WHERE_SIDE[where.replace('on ', '', 1)],
+                         'groups': by_codeset_data(group, group)}
+                        for where, group in sorted(groups.items())]
+        errs = {cs: {side: g[0] for side, g in got.items()}
+                for cs, got in lacking.items() if any(g[0] for g in got.values())}
+        d['errors'] = [lacking_data(cs, got) for cs, got in sorted(errs.items())]
+        whole = {}
+        for cs, got in lacking.items():
+            if cs not in errs:
+                whole.setdefault(where_text(got), []).append(cs)
+        d['whole'] = [{'side': WHERE_SIDE[where.replace('on ', '', 1)],
+                       'encodings': sorted(group)}
+                      for where, group in sorted(whole.items())]
+        for cs, got in sorted(lacking.items()):
+            if len(got) == 2:
+                other = sum(1 for x, y in zip(got['old'][1], got['new'][1])
+                            if x and y and x != y)
+                if other:
+                    d['other'].append({'encoding': cs, 'count': other})
+    return Bang(other_encoding_said(d), 'other_encoding', d)
+
+
+def other_encoding_said(d):
+    """other_encoding_text's line, printed from its data d."""
+    count = sum(len(g['names']) for g in d['groups'])
+    same = d['same']
     text = (f'!! Not measured in a database of another encoding: '
-            f'{len(codesets)} locale(s) whose encoding PostgreSQL does not '
+            f'{count} locale(s) whose encoding PostgreSQL does not '
             'know, so that CREATE DATABASE and CREATE COLLATION let a database '
             'of any encoding use one, with only a WARNING ("could not '
             'determine encoding for locale"). In such a database, a UTF8 one '
             'say, PostgreSQL hands the locale the database\'s bytes, not the '
             'ones measured here')
-    listed = by_codeset(codesets, codesets) + '.'
-    same = sorted(x for x in codesets if x in firm)
+    listed = codeset_said(d['groups']) + '.'
     if not same:
-        if not told:
+        if not d['told']:
             return (text + ', so neither its order nor whether upper(), '
                     'lower() and ILIKE give an error there is known. ' + listed)
         text += ', so its order there is not known. ' + listed
     else:
-        if len(same) == len(codesets):
+        if len(same) == count:
             text += ('. Each one\'s compiled sort table is the same on both '
                      'machines, and glibc orders any bytes by that table, so '
                      'its order there is the same on both machines. ' + listed)
@@ -8247,53 +8372,41 @@ def other_encoding_text(names, model, firm):
             text += (f'. Its order there is the same on both machines in the '
                      f'{len(same)} whose compiled sort table is the same on '
                      'both, since glibc orders any bytes by that table; in the '
-                     f'other {len(codesets) - len(same)} it is not known. '
+                     f'other {count - len(same)} it is not known. '
                      + listed + ' The same sort table on both machines: '
                      + ', '.join(shown(x) for x in same) + '.')
-        if not told:
+        if not d['told']:
             return (text + ' Whether upper(), lower() and ILIKE give an error '
                     'there is not known.')
-    if unmeasured:
-        groups = {}
-        for name, sides in unmeasured.items():
-            groups.setdefault(where_text(sides), {})[name] = codesets[name]
+    if d['unknown']:
         text += (' Nor is whether upper(), lower() and ILIKE give an error '
                  'there known ' + '; '.join(
-                     f'{where}: {by_codeset(group, group)}'
-                     for where, group in sorted(groups.items())) + '.')
-    if lacking:
-        errs = {cs: {side: g[0] for side, g in got.items()}
-                for cs, got in lacking.items() if any(g[0] for g in got.values())}
-        whole = {}
-        for cs, got in lacking.items():
-            if cs not in errs:
-                whole.setdefault(where_text(got), []).append(cs)
+                     f'{SIDE_WHERE[x["side"]]}: {codeset_said(x["groups"])}'
+                     for x in d['unknown']) + '.')
+    if d['errors'] or d['whole']:
         parts = []
-        if errs:
+        if d['errors']:
             parts.append('upper(), lower() and ILIKE stop with "ERROR: invalid '
                          'multibyte character for locale" on text holding a byte '
                          'that glibc\'s converter of the locale\'s encoding does '
-                         'not convert (' + '; '.join(
-                             lacking_text(cs, got) for cs, got in sorted(errs.items()))
+                         'not convert (' + '; '.join(map(lacking_said, d['errors']))
                          + ')')
-        for where, group in sorted(whole.items()):
+        for x in d['whole']:
+            group = x['encodings']
             parts.append(f'glibc\'s converter{"s" if len(group) > 1 else ""} of '
-                         f'{" and ".join(sorted(group))} '
-                         f'convert{"" if len(group) > 1 else "s"} every byte {where}')
+                         f'{" and ".join(group)} '
+                         f'convert{"" if len(group) > 1 else "s"} every byte '
+                         f'{SIDE_WHERE[x["side"]]}')
         text += (' Measured: in a database of more than one byte per character, '
                  + ', and '.join(parts) + '; on other text upper(), lower() and '
                  'ILIKE change the database\'s bytes as if they were of the '
                  'locale\'s encoding, which can give text that is not valid in '
                  'the database\'s encoding.')
-        for cs, got in sorted(lacking.items()):
-            if len(got) == 2:
-                other = sum(1 for x, y in zip(got['old'][1], got['new'][1])
-                            if x and y and x != y)
-                if other:
-                    text += (f' On the new machine glibc converts {other} byte(s) '
-                             f'of {cs} to another character than on the old '
-                             'one, so upper(), lower() and ILIKE can give '
-                             'another result there.')
+        for x in d['other']:
+            text += (f' On the new machine glibc converts {x["count"]} byte(s) '
+                     f'of {x["encoding"]} to another character than on the old '
+                     'one, so upper(), lower() and ILIKE can give '
+                     'another result there.')
     return text
 
 
@@ -8307,7 +8420,10 @@ def whole_words(text, indent, more):
 
 
 def other_encoding_lines(items, ctx):
-    return pending(['\n'.join(whole_words(d['text'], 0, 3)) for d in items])
+    """The line on a database of another encoding, a Bang with its kind
+    (other_encoding_text)."""
+    return [kept(d['text'], '\n'.join(whole_words(d['text'], 0, 3)))
+            for d in items]
 
 
 def other_encoding_summary(items, ctx):
@@ -9268,20 +9384,6 @@ class Bang(str):
         s = str.__new__(cls, text)
         s.kind, s.data = kind, data
         return s
-
-
-# The kind a `!!` block of the report is written under while its printer
-# gives it none yet (branch 24 of the plan, 24.1c-4): said by
-# that printer (pending), so that a block no printer marks is an error,
-# never one written as pending.
-PENDING = 'step11_pending'
-
-
-def pending(lines):
-    """The report's lines of a printer whose `!!` have no kind yet, each
-    one that opens a block marked PENDING."""
-    return [Bang(x, PENDING, {}) if x.startswith('!!') else x
-            for x in lines]
 
 
 def report_blocks(report):

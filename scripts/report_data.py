@@ -9,12 +9,10 @@ was not looked at" for "nothing was found". What the steps hold today
 only inside a sentence (step 2's totals and character sets, step 11's
 counts and findings, the provenance of each side) is 'not yet
 reported': a later step of the work turns each one into data (branch
-24 of the plan). The `!!` notices of steps 0, 1 and 2
+24 of the plan). The `!!` notices of steps 0, 1, 2 and 11
 are data: a file beside each step's log holds them (step 0's copied
-there by audit.sh), and KINDS gives each kind its list and its short
-title. Step 11 writes its file too, step11.<pair>.warnings.jsonl, with
-the blocks whose printer gives no kind yet under 'step11_pending'; this
-file reads it once none is.
+there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
+gives each kind its list and its short title.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -604,6 +602,94 @@ def _one_side_title(d):
             f"{_use_locales(d)} {said}")
 
 
+# Step 11's lines on the character rules (ctype_texts, euc_texts,
+# utf8_texts) and on a database of another encoding (other_encoding_text):
+# a character as 'U+0282', a byte as 'E0', a byte sequence as 'AD E2'; the
+# characters of a change with what the line says of each; how a line names
+# its locales (ctype_group_data: how many, and each by name, or none where
+# they are all those compared).
+_C = 'Character rules (LC_CTYPE)'
+_EUC_DB = f'{_C} in an EUC database'
+
+
+def _is_cp(v):
+    return isinstance(v, str) and re.fullmatch(r'U\+[0-9A-F]{4,8}', v) is not None
+
+
+def _is_byte(v):
+    return isinstance(v, str) and re.fullmatch(r'[0-9A-F]{2}', v) is not None
+
+
+def _is_bytes(v):
+    return (isinstance(v, str)
+            and re.fullmatch(r'[0-9A-F]{2}( [0-9A-F]{2})*', v) is not None)
+
+
+_CLASSIFIED = _maybe(_objects(character=_is_cp, change=_is_str))
+_SEQUENCES = _objects(bytes=_is_bytes, old=_is_cp, new=_is_cp)
+
+
+def _named(d):
+    """Each locale named once, or none where they are all those compared,
+    as many as the line counts."""
+    return (d['names'] == [] or (len(d['names']) == d['locales']
+                                 and len(set(d['names'])) == d['locales']))
+
+
+def _changed(d):
+    """No more characters the old machine classified than change, each
+    once."""
+    cs = [x['character'] for x in d['classified']]
+    return len(cs) <= d['count'] and len(cs) == len(set(cs))
+
+
+def _once(xs, key):
+    """Each entry's key once."""
+    vs = [x[key] for x in xs]
+    return len(vs) == len(set(vs))
+
+
+def _side_sets(pairs):
+    """The sides each name is given (name, side): one of both, old or new,
+    or old and new, each once (a reason of each machine, or one of both)."""
+    by = {}
+    for name, side in pairs:
+        by.setdefault(name, []).append(side)
+    return all(sorted(v) in (['both'], ['old'], ['new'], ['new', 'old'])
+               for v in by.values())
+
+
+def _other_encoding(d):
+    """other_encoding_text's data: each locale once; those of the same
+    sort table among them; what only a machine that told says (told)
+    empty where none did; each encoding once among the errors and the
+    converters that convert every byte, and one that converts otherwise
+    among them."""
+    names = _names(d)
+    if len(names) != len(set(names)) or not set(d['same']) <= set(names):
+        return False
+    if not d['told'] and (d['unknown'] or d['errors'] or d['whole']
+                          or d['other']):
+        return False
+    unknown = [x for u in d['unknown'] for g in u['groups'] for x in g['names']]
+    if len(unknown) != len(set(unknown)) or not set(unknown) <= set(names):
+        return False
+    if not all(map(_part, d['errors'])):
+        return False
+    measured = ([e['encoding'] for e in d['errors']]
+                + [c for w in d['whole'] for c in w['encodings']])
+    return (len(measured) == len(set(measured))
+            and _once(d['other'], 'encoding')
+            and {x['encoding'] for x in d['other']} <= set(measured))
+
+
+_ASCII_ONLY = {'both': "neither machine's glibc can convert their encoding",
+               'old': "the old machine's glibc could not convert their "
+                      "encoding",
+               'new': "the new machine's glibc cannot convert their "
+                      "encoding"}
+
+
 def _processes(d):
     return _n(d['processes'], 'PostgreSQL process', 'PostgreSQL processes')
 
@@ -627,11 +713,9 @@ CLOSING_TITLES = {
     'mixed': "Whether the two machines compare strings with the same glibc "
              "code, and rules of several letters",
 }
-# Every kind of `!!` the steps write as data, but step 11's provisional
-# 'step11_pending', which this file does not read yet: its list, the exact
-# keys of its data with a check for each value, and its short title, made
-# from the data alone. A kind not here, or data of another shape, is
-# refused.
+# Every kind of `!!` the steps write as data: its list, the exact keys of
+# its data with a check for each value, and its short title, made from the
+# data alone. A kind not here, or data of another shape, is refused.
 KINDS = {
     'same_commit': (
         'not checked', _PAIR,
@@ -971,6 +1055,77 @@ KINDS = {
     'use_not_checked': (
         'not checked', {'reasons': _objects(why=_is_str, groups=_GROUPS)},
         lambda d: f"{_FN} in {_use_locales(d)}"),
+    # Step 11's lines on the character rules (ctype_texts, euc_texts,
+    # utf8_texts) and on a database of another encoding
+    # (other_encoding_text).
+    'ctype_earlier_format': (
+        'not checked', {'side': _SIDES},
+        lambda d: f"{_C} on {_machines([d['side']])} (a file of an earlier "
+                  f"version)"),
+    'ctype_characters_changed': (
+        'change',
+        {'locales': _is_positive, 'names': _maybe(_is_strs),
+         'count': _is_positive, 'classified': _CLASSIFIED},
+        lambda d: f"{_C} change for "
+                  f"{_n(d['count'], 'character', 'characters')} in "
+                  f"{_locales_n(d['locales'])} that a UTF8 database can use"),
+    'ctype_bytes_changed': (
+        'change',
+        {'locales': _is_positive, 'names': _maybe(_is_strs),
+         'bytes': _objects(byte=_is_byte, change=_is_str)},
+        lambda d: f"{_C} change for {_n(len(d['bytes']), 'byte', 'bytes')} "
+                  f"in {_locales_n(d['locales'])}"),
+    'ctype_not_checked': (
+        'not checked',
+        {'locales': _objects(name=_is_str, side=_SIDES, why=_is_str)},
+        lambda d: f"{_C} in {_locales({x['name'] for x in d['locales']})}"),
+    'euc_sequences_changed': (
+        'change', {'groups': _GROUPS, 'sequences': _SEQUENCES},
+        lambda d: f"In an EUC database glibc converts "
+                  f"{_n(len(d['sequences']), 'byte sequence', 'byte sequences')}"
+                  f" to another character in {_use_locales(d)}"),
+    'euc_characters_changed': (
+        'change',
+        {'groups': _GROUPS, 'count': _is_positive, 'classified': _CLASSIFIED},
+        lambda d: f"{_EUC_DB} change for "
+                  f"{_n(d['count'], 'character', 'characters')} in "
+                  f"{_use_locales(d)}"),
+    'euc_same': (
+        'not checked', {'other': _is_bool, 'groups': _GROUPS},
+        lambda d: f"{_EUC_DB} in {_use_locales(d)}: the same for the text "
+                  f"glibc converts on both machines"),
+    'euc_ascii_same': (
+        'not checked', {'side': _SIDES, 'groups': _GROUPS},
+        lambda d: f"{_EUC_DB} in {_use_locales(d)}: only ASCII compared, as "
+                  f"{_ASCII_ONLY[d['side']]}"),
+    'euc_not_checked': (
+        'not checked',
+        {'reasons': _objects(why=_is_str, side=_SIDES, groups=_GROUPS)},
+        lambda d: f"{_EUC_DB} in {_use_locales(d)}"),
+    'utf8_changed': (
+        'change', {'locales': _is_positive, 'sequences': _SEQUENCES},
+        lambda d: f"In a UTF8 database glibc converts "
+                  f"{_n(len(d['sequences']), 'byte sequence', 'byte sequences')}"
+                  f" to another character in {_locales_n(d['locales'])}"),
+    'utf8_one_side': (
+        'not checked',
+        {'side': _SIDE, 'why': _why, 'locales': _is_positive,
+         'sequences': _SEQUENCES},
+        lambda d: f"In a UTF8 database, whether "
+                  f"{_n(len(d['sequences']), 'byte sequence', 'byte sequences')}"
+                  f" glibc reads as another character on the {d['side']} "
+                  f"machine changed, in {_locales_n(d['locales'])}"),
+    'other_encoding': (
+        'not checked',
+        {'groups': _GROUPS, 'same': _maybe(_is_strs), 'told': _is_bool,
+         'unknown': _maybe(_objects(side=_SIDES, groups=_GROUPS)),
+         'errors': _maybe(_objects(
+             encoding=_is_str, alike=_one_of_f(*_ALIKE),
+             sides=_objects(side=_SIDE, count=_is_count))),
+         'whole': _maybe(_objects(side=_SIDES, encodings=_is_strs)),
+         'other': _maybe(_objects(encoding=_is_str, count=_is_positive))},
+        lambda d: f"{_use_locales(d)} whose encoding PostgreSQL does not "
+                  f"know, in a database of another encoding"),
 }
 
 
@@ -1006,6 +1161,25 @@ WHOLE = {
     'use_partial_unknown': _distinct,
     'use_back_not_checked': lambda d: d['utf8'] <= sum(
         x['count'] for x in d['encodings']),
+    'ctype_characters_changed': lambda d: _named(d) and _changed(d),
+    'ctype_bytes_changed': lambda d: _named(d) and _once(d['bytes'], 'byte'),
+    'ctype_not_checked': lambda d: _side_sets(
+        (x['name'], x['side']) for x in d['locales']),
+    # Two machines that convert a sequence to the same character are no
+    # change.
+    'euc_sequences_changed': lambda d: _distinct(d) and _once(
+        d['sequences'], 'bytes') and all(x['old'] != x['new']
+                                         for x in d['sequences']),
+    'euc_characters_changed': lambda d: _distinct(d) and _changed(d),
+    'euc_same': _distinct,
+    'euc_ascii_same': _distinct,
+    'euc_not_checked': lambda d: _side_sets(
+        (x, r['side']) for r in d['reasons'] for g in r['groups']
+        for x in g['names']),
+    'utf8_changed': lambda d: _once(d['sequences'], 'bytes') and all(
+        x['old'] != x['new'] for x in d['sequences']),
+    'utf8_one_side': lambda d: _once(d['sequences'], 'bytes'),
+    'other_encoding': _other_encoding,
 }
 
 
@@ -1048,14 +1222,15 @@ def step_warnings(path):
 
 
 def warnings_section(a):
-    """Steps 0, 1 and 2 from their files (step 0 runs only for the
-    machines' files); step 11 not yet, as some of its blocks have no
-    kind yet ('step11_pending')."""
+    """Steps 0, 1, 2 and 11 from their files (step 0 runs only for the
+    machines' files, step 11 only with --step11)."""
     f = lambda n: _file(a.out_dir, f'step{n}.{a.pair}.warnings.jsonl')
     step0 = (step_warnings(f(0)) if a.old_node else
              {'state': 'not run', 'why': 'no --old-node and --new-node'})
+    step11 = (step_warnings(f(11)) if a.step11 else
+              {'state': 'not run', 'why': "no machines' files"})
     return {'step0': step0, 'step1': step_warnings(f(1)),
-            'step2': step_warnings(f(2)), 'step11': NOT_YET}
+            'step2': step_warnings(f(2)), 'step11': step11}
 
 
 # ---------------------------------------------------------------- whole
@@ -1180,7 +1355,9 @@ def load(path):
                           'machine files were given')
     _stated('warnings.step1', w['step1'], ('reported', 'not reported'), wr)
     _stated('warnings.step2', w['step2'], ('reported', 'not reported'), wr)
-    _not_yet('warnings.step11', w['step11'])
+    _stated('warnings.step11', w['step11'],
+            ('reported', 'not run', 'not reported'),
+            {**wr, 'not run': ['why']})
 
     s2 = r['step2']
     _keys('step2', s2, ['listed', 'removed', 'rules_by_name',
@@ -1329,6 +1506,10 @@ def load(path):
         _not_yet(f'{where}.findings', o['findings'])
     _stated('step11', r['step11'], ('not run', 'reported', 'not reported'),
             {'not run': s11_not_run, 'reported': s11, **nr})
+    if ((r['warnings']['step11']['state'] == 'not run')
+            != (r['step11']['state'] == 'not run')):
+        raise ReportError('warnings.step11 is not run exactly when step 11 '
+                          'did not run')
     return r
 
 

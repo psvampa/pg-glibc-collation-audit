@@ -11338,6 +11338,21 @@ class CtypeCompared(Checks):
         self.assertEqual([(r['chars'], r['how']) for r in rows[('LC_CTYPE_group_1',)]],
                          [('byte B5', 'upper: itself -> CC; classes: none -> alpha')])
 
+    def test_two_bytes(self):
+        """Two bytes that change, each with what changes in it, in the
+        order of the bytes (two entries, which no other run of the suite
+        prints: what changes in one, moved to the other, is caught by the
+        data held to the text)."""
+        changed = byte_rules({('toupper', 0xB5): 0xCC, ('alpha', 0xB5): 1,
+                              ('tolower', 0xB6): 0xB7})
+        report, summary, rows = self.outputs(*self.pair(
+            self.every(BASE), self.every(BASE, changed)))
+        found = [d for kind, d in report['checks'] if kind == 'ctype']
+        self.assertEqual(found[0], {
+            'all': 4, 'change': 'byte', 'count': 2,
+            'bytes': {0xB5: 'no class -> letter, gains the capital 0xCC',
+                      0xB6: 'gains the small letter 0xB7'}})
+
     def test_every_byte_row_counts(self):
         """Each of the 12 rows of a byte table on its own: toupper, tolower
         and the ten classes."""
@@ -11392,6 +11407,21 @@ class CtypeCompared(Checks):
                        retabled(self.every(BASE))]))
         self.assertEqual(found[-1], {'unknown': {'de_DE.utf8': {
             'old machine': 'x', 'new machine': 'y'}}})
+
+    def test_two_locales_not_checked(self):
+        """Two locales not checked, each on its machine with its reason:
+        each named with its own (two locales, which no other run of the
+        suite prints in this line: a name moved to the other's reason is
+        caught by the data held to the text)."""
+        old, new = self.pair(
+            self.every(BASE), self.every(BASE),
+            old_edits=[entry_set('de_DE.utf8', ['not checked', 'x']),
+                       retabled(self.every(BASE))],
+            new_edits=[entry_set('sv_SE.utf8', ['not checked', 'y']),
+                       retabled(self.every(BASE))])
+        self.assertEqual(self.ctype(old, new)[-1], {'unknown': {
+            'de_DE.utf8': {'old machine': 'x'},
+            'sv_SE.utf8': {'new machine': 'y'}}})
 
     def test_a_table_not_checked(self):
         for side in ('old', 'new'):
@@ -11621,6 +11651,22 @@ class CtypeComparedInEuc(Checks):
         self.assertEqual([(r['chars'], r['how']) for r in rows[(label,)]],
                          [('bytes A1 A2', 'U+3001 -> U+3002'),
                           ('bytes B0 A1', 'U+AC00 -> U+AC01')])
+
+    def test_a_sequence_two_encodings_convert_alike_to_another(self):
+        """A1 A2, which EUC-KR and GB2312 both convert to U+3001, converted
+        by the new machine's glibc to U+3002 in both: one line names the
+        locales of the two encodings, each under its own (two encodings,
+        which no other run of the suite prints in this line: a locale moved
+        from one to the other is caught by the data held to the text)."""
+        new = {**self.entry('EUC-KR', 'ko_KR', other=(b'\xa1\xa2',)),
+               **self.entry('GB2312', 'zh_CN', other=(b'\xa1\xa2',))}
+        found, rows = self.rows(*self.pair(new_use=8, new_converter=new))
+        euc = [d for kind, d in found if kind == 'ctype'
+               and 'euc converted' in d]
+        self.assertEqual(euc, [
+            {'euc converted': {'A1 A2': (0x3001, 0x3002)},
+             'names': {n: c for n, c in EUC_OF.items()
+                       if c in ('EUC-KR', 'GB2312')}}])
 
     def test_a_sequence_refused_on_one_machine_is_not_a_change_here(self):
         """A sequence one machine refuses gives an error there, which the
@@ -12066,6 +12112,25 @@ class ConverterCompared(PostgresUseCompared):
         self.assertEqual(line['other character'], {'TIS-620': 2})
         self.assertNotIn('other character', self.lacking(
             old_converter=self.tis(0x80), new_converter=self.tis(0x80)))
+
+    def test_two_encodings_refused_and_converted_otherwise(self):
+        """Two encodings whose converters refuse bytes and convert one to
+        another character: each counted with its own numbers, in the order
+        of the encodings (two entries, which no other run of the suite
+        prints: a count moved from one to the other is caught by the data
+        held to the text)."""
+        def arm(*drop, other=()):
+            return self.entry('ARMSCII-8', 'hy_AM.armscii8',
+                              tuple(bytes([b]) for b in drop),
+                              tuple(bytes([b]) for b in other))
+        line = self.lacking(
+            old_converter={**self.tis(0x80), **arm(0xB0, 0xB1)},
+            new_converter={**self.tis(0x80, 0xC1, other=(0xC0,)),
+                           **arm(0xB0, 0xB1, 0xB2, other=(0xB3, 0xB4))})
+        self.assertEqual(line['lacking'], {'ARMSCII-8': {'old': 2, 'new': 3},
+                                           'TIS-620': {'old': 1, 'new': 2}})
+        self.assertEqual(line['other character'], {'ARMSCII-8': 2,
+                                                   'TIS-620': 1})
 
     def test_a_side_that_does_not_say(self):
         """A converter that does not open is named among the errors, and
@@ -14627,6 +14692,31 @@ class BackPrinted(ConverterCompared):
                                           'side': side, 'count': 1, 'why': why}])
                 self.assertEqual(rows, [('bytes C3 A9', 'U+00E9 -> U+00EA',
                                          f'on the {side} machine')])
+
+    def test_two_sequences_read_otherwise(self):
+        """Two sequences UTF-8's converter reads as another character, on
+        one machine and on both: the line lists both, each with its own
+        characters, in the order of their bytes (two entries, which no
+        other run of the suite prints: a value that moves from one to the
+        other is caught by the data held to the text)."""
+        def otherwise(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0xEA, 0xE8: 0xEB})
+        five = lambda base, tag: self.made(base, tag, with_parts(
+            use=measured_use(8, **EUC_TW_USE), form='locale_order/5'))
+        six = lambda base, tag, *e: self.made(base, tag, with_parts(
+            use=measured_use(8, **EUC_TW_USE)), *e)
+        found, rows = self.one_side(five(RHEL8, 'o5'),
+                                    six(RHEL9, 'n6', otherwise))
+        self.assertEqual(found, [{'utf8 read': {'C3 A8': (0xE8, 0xEB),
+                                                'C3 A9': (0xE9, 0xEA)},
+                                  'side': 'new', 'count': 1,
+                                  'why': 'the OLD file did not measure this'}])
+        report, summary, rows = self.outputs(six(RHEL8, 'o6'),
+                                             six(RHEL9, 'n6', otherwise))
+        changed = [d for kind, d in report['checks']
+                   if kind == 'ctype' and 'utf8 converted' in d]
+        self.assertEqual(changed, [{'utf8 converted': {
+            'C3 A8': (0xE8, 0xEB), 'C3 A9': (0xE9, 0xEA)}, 'count': 1}])
 
     def test_utf8_refused_on_one_machine_only(self):
         """The new machine refuses U+00E9 and the old file is of the fifth
@@ -17449,12 +17539,6 @@ class ReportBlocksAreWrittenWithTheirKind(unittest.TestCase):
             m.main()
         self.assertEqual(os.listdir(out), [])
         self.assertEqual(stdout.getvalue(), '')
-
-    def test_pending_marks_only_the_blocks(self):
-        got = m.pending(['!! x\n   y', 'Plain.', '!! z'])
-        self.assertEqual([getattr(x, 'kind', None) for x in got],
-                         [m.PENDING, None, m.PENDING])
-        self.assertEqual(got, ['!! x\n   y', 'Plain.', '!! z'])
 
 
 if __name__ == '__main__':
