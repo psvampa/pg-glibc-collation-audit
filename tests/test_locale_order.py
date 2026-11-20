@@ -14251,6 +14251,20 @@ class BackPrinted(ConverterCompared):
                           if r['finding'] == 'upper/lower back changed'],
                          [([0x41], 'bytes 41 -> A3 C1')])
 
+    def test_turned_back_otherwise_in_two_encodings(self):
+        """Two encodings turned back otherwise, by another count each: two
+        entries, each held to its own words (_harness.data_in_text), so
+        two that swap their count, encoding or names do not pass. No
+        comparison of the suite printed two before (24.1c-3)."""
+        report, summary, rows = self.outputs(*self.both8(new_edits=[
+            self.back('EUC-JP', **{'U+0041': b'\xa3\xc1'}),
+            self.back('EUC-KR', **{'U+0041': b'\xa3\xc1',
+                                   'U+0042': b'\xa3\xc2'})]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'back change': {
+            'ja_JP': ('EUC-JP', 1), 'ja_JP.eucjp': ('EUC-JP', 1),
+            'ko_KR': ('EUC-KR', 2), 'ko_KR.euckr': ('EUC-KR', 2)}}, use)
+
     def test_a_file_before_the_back_part_on_each_side(self):
         """Counted on the machine whose file it is, each locale a row; de_DE.utf8
         is also not known past one character of UTF-8 there."""
@@ -14367,6 +14381,26 @@ class BackPrinted(ConverterCompared):
                 untold, = [d['untold'] for d in self.use(old, new) if 'untold' in d]
                 self.assertEqual(untold['the new machine']['ja_JP.eucjp'], 'EUC-JP')
                 self.assertEqual(untold['the new machine']['ja_JP'], 'EUC-JP')
+
+    def test_the_rest_not_known_in_two_places(self):
+        """Both files of the fourth format, ja_JP.eucjp refused by glibc on
+        the old machine: what the rest of the text does is not known on
+        both machines for ja_JP and on the new one for ja_JP.eucjp, two
+        places of one line, each held to its own words in the printed
+        report (_harness.held_main, data_in_text), so two places that
+        swap their locales do not pass. No comparison of the suite
+        printed two before (24.1c-3)."""
+        old_use = measured_use(8, **EUC_TW_USE)
+        old_use['ja_JP.eucjp'] = refused_use('ja_JP.eucjp', 8, ctype='accepted')
+        old = self.made(RHEL8, 'o4', with_parts(use=old_use,
+                                                form='locale_order/4'),
+                        selected_not('ja_JP.eucjp'))
+        new = self.made(RHEL9, 'n4', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                form='locale_order/4'))
+        untold, = [d['untold'] for d in self.use(old, new) if 'untold' in d]
+        self.assertEqual(untold['both machines']['ja_JP'], 'EUC-JP')
+        self.assertEqual(untold['the new machine']['ja_JP.eucjp'], 'EUC-JP')
+        self.assertIn('NOT known in', self.report_text(old, new))
 
     def test_utf8_refuses_a_character(self):
         """The new machine's converter of UTF-8 refuses U+00E9: de_DE.utf8 gives

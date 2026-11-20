@@ -977,10 +977,13 @@ def check_summary_warnings(r, out, path):
 
 # Data keys whose value is a word of a closed list (a side, a state, the
 # kind of reason, or a reason the block prints in fixed words, as
-# libc_not_checked's), not a name the block prints: checked by
+# libc_not_checked's; how two machines' refusals compare, and the sides
+# whose file cannot say, of the lines on upper()), not a name the block
+# prints: checked by
 # report_data.KINDS, not as a name of the text; step 11's kinds hold each
 # such word to its block too (closed_phrases).
-CLOSED_WORDS = {'status', 'classes', 'ask', 'side', 'state', 'reason'}
+CLOSED_WORDS = {'status', 'classes', 'ask', 'side', 'state', 'reason',
+                'alike', 'unknown_on'}
 # The side each kind's block names first: "{old} and {new} ...", or "the
 # new side ... against the old side ..." (the direction's and the reversed
 # pair's). Only same_commit names one side twice.
@@ -1112,7 +1115,8 @@ def _closed_words(kind, data, lo, on):
 
 def _check_phrases(kind, data):
     """closed_phrases of step 11's control, decimals of money and
-    PostgreSQL processes (control_texts, money_texts, libc_texts): each
+    PostgreSQL processes (control_texts, money_texts, libc_texts), and of
+    its lines on upper(), lower() and ILIKE (use_texts, _use_phrases): each
     block's words around its data, written out here from the data alone,
     from its `!!` (and money_changed's list from the words opening it) to
     the fixed words after the last value the data gives, so that a
@@ -1189,7 +1193,133 @@ def _check_phrases(kind, data):
     if kind == 'libc_no_process':
         return [f"!! PostgreSQL on the {up(data['side'])} machine: no "
                 f"process named {' or '.join(data['looked_for'])} was found,"]
+    if kind.startswith('use_'):
+        return _use_phrases(kind, data, earlier)
     return []
+
+
+def _use_phrases(kind, data, earlier):
+    """_check_phrases of step 11's lines on upper(), lower() and ILIKE
+    (use_texts): the line's `!!` with its count and the words of its
+    data, and its list whole, from the words before it to its full stop
+    (the pointer to the characters file, after it, is not data)."""
+    fn = 'upper(), lower() and ILIKE'
+    gconv = 'measure that machine again. '
+    machines = {'both': 'both machines', 'new': 'the new machine',
+                'old': 'the old machine'}
+
+    def codesets(groups):
+        return '; '.join(f"{g['encoding']}: {', '.join(g['names'])}"
+                         for g in groups)
+
+    def count(groups):
+        return sum(len(g['names']) for g in groups)
+
+    def lacking(p, unit):
+        cs, sides = p['encoding'], p['sides']
+        if p['alike'] == 'same':
+            return f"{cs}: {sides[0]['count']} {unit} on both machines"
+        if p['alike'] == 'as many':
+            return (f"{cs}: {sides[0]['count']} {unit} on each machine, not "
+                    f"the same ones")
+        return f"{cs}: " + ' and '.join(
+            f"{x['count']} {unit} on the {x['side']} machine"
+            for x in sides) + (', not all the same'
+                               if p['alike'] == 'mixed' else '')
+
+    def entries(said):
+        return '; '.join(f"{said(e)} ({', '.join(e['names'])})"
+                         for e in data['entries'])
+
+    def partial(e):
+        return (' and '.join(lacking(p, 'sequence(s)') for p in e['parts'])
+                + ''.join(f", not known on the {s} machine"
+                          for s in e['unknown_on']))
+
+    def wrong(e):
+        text = ' and '.join(lacking(p, 'character(s)') for p in e['parts'])
+        if len(e['lower']) == 1:
+            k = e['lower'][0]['count']
+            return text + (f", {k} of them through lower()" if k
+                           else ", none through lower()")
+        return text + ', through lower(): ' + ' and '.join(
+            f"{x['count']} on the {x['side']} machine" for x in e['lower'])
+
+    def names(es):
+        return sum(len(e['names']) for e in es)
+    if kind == 'use_earlier_format':
+        return [f"!! {fn} NOT checked: " + earlier(data['side'])]
+    if kind == 'use_error_new':
+        return [f"!! {fn} give an ERROR on the new machine in "
+                f"{count(data['groups'])} locale(s) whose encoding the old",
+                gconv + codesets(data['groups']) + '.']
+    if kind == 'use_error_both':
+        return [f"!! {fn} give an ERROR on both machines in "
+                f"{count(data['groups'])} locale(s), as before the upgrade:",
+                gconv + codesets(data['groups']) + '.']
+    if kind == 'use_error_moved':
+        x, y = data['from'], data['to']
+        before = ''.join(f"; what they do on the old machine is not known "
+                         f"({w})" for w in data['why'])
+        return [f"!! {fn} give an ERROR on {machines[data['side']]} in "
+                f"{count(data['groups'])} locale(s) whose encoding changed "
+                f"from {x} on the old machine to {y} on the new one: a "
+                f"database of {x} made on the old machine opens there under "
+                f"{y}, and a glibc that cannot convert {y} converts no text "
+                f"that is not ASCII (\"ERROR: invalid multibyte character for "
+                f"locale\"){before}. On RHEL",
+                gconv + codesets(data['groups']) + '.']
+    if kind == 'use_error_any_db':
+        return [f"!! {fn} give an ERROR on {machines[data['side']]} in "
+                f"{count(data['groups'])} locale(s) that databases of an "
+                f"encoding not known here may use ({data['why']}): in such",
+                gconv + codesets(data['groups']) + '.']
+    if kind == 'use_error_one_side':
+        other = 'old' if data['side'] == 'new' else 'new'
+        said = {'refused': f" that glibc refused on the {other} machine, "
+                           f"where no database could use them",
+                'absent': " that the old machine does not have",
+                'unknown': ''.join(f", where it is not known what they do "
+                                   f"on the {other} machine ({w})"
+                                   for w in data['why'])}[data['reason']]
+        return [f"!! {fn} give an ERROR on the {data['side']} machine in "
+                f"{count(data['groups'])} locale(s){said}. In a database",
+                gconv + codesets(data['groups']) + '.']
+    if kind == 'use_error_partial':
+        return [f"!! {fn} give an ERROR on part of the text in "
+                f"{names(data['entries'])} locale(s): in a database",
+                'character for locale". ' + entries(partial) + '.']
+    if kind == 'use_wrong_result':
+        return [f"!! {fn} give a wrong result on part of the text in "
+                f"{names(data['entries'])} locale(s): in a database",
+                'or as other bytes). ' + entries(wrong) + '.']
+    if kind == 'use_back_changed':
+        return [f"!! {fn} CHANGE on part of the text in "
+                f"{names(data['entries'])} locale(s): glibc's",
+                'than on the old one. ' + entries(
+                    lambda e: f"{e['encoding']}: {e['count']} character(s)")
+                + '.']
+    if kind == 'use_partial_unknown':
+        n = sum(count(p['groups']) for p in data['places'])
+        return [f"!! {fn}: whether they give an ERROR on part of the text is "
+                f"NOT known in {n} locale(s): a file",
+                "can refuse others. " + ' '.join(
+                    f"On {machines[p['side']]}: {codesets(p['groups'])}."
+                    for p in data['places'])]
+    if kind == 'use_back_not_checked':
+        n = sum(x['count'] for x in data['encodings'])
+        nor = (f", nor, in {data['utf8']} of UTF-8, whether glibc reads all "
+               f"their text as it is" if data['utf8'] else '')
+        return [f"!! {fn}: whether their result converts back to the "
+                f"database's bytes is NOT checked in {n} locale(s){nor}: "
+                + earlier(data['side']) + ' ' + '; '.join(
+                    f"{x['encoding']}: {x['count']} locale(s)"
+                    for x in data['encodings']) + '.']
+    if kind == 'use_not_checked':
+        n = sum(count(r['groups']) for r in data['reasons'])
+        return [f"!! {fn} NOT checked in {n} locale(s): " + ' '.join(
+            f"{r['why']}: {codesets(r['groups'])}." for r in data['reasons'])]
+    raise AssertionError(f'{kind}: no phrases for it')
 
 
 def data_in_text(kind, data, text):

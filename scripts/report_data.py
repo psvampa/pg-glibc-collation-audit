@@ -513,6 +513,97 @@ def _machines(sides):
     return f"the {sides.pop()} machine"
 
 
+# Step 11's lines on upper(), lower() and ILIKE (use_texts): the locales
+# of a line by encoding (by_codeset_data), a reason given or not (a list of
+# none or one), what each machine refuses of an encoding (lacking_data),
+# and the count through lower() (one, or one a machine).
+_GROUPS = _objects(encoding=_is_str, names=_is_strs)
+_ALIKE = ('same', 'as many', 'mixed', 'within', 'one side')
+_LACKING = _objects(encoding=_is_str, alike=_one_of_f(*_ALIKE),
+                    sides=_objects(side=_SIDE, count=_is_positive))
+_LOWER = _objects(side=_SIDES, count=_is_count)
+_UNKNOWN_ON = _one_of_f([], ['new'], ['old'], ['new', 'old'])
+_FN = 'upper(), lower() and ILIKE'
+
+
+def _why(v):
+    """A reason given, or none: a list of one, or empty."""
+    return v == [] or (_is_strs(v) and len(v) == 1)
+
+
+def _names(d):
+    """Every name a line of use_texts lists, in its groups, entries,
+    places or reasons."""
+    if 'groups' in d:
+        return [x for g in d['groups'] for x in g['names']]
+    if 'entries' in d:
+        return [x for e in d['entries'] for x in e['names']]
+    if 'places' in d:
+        return [x for p in d['places'] for g in p['groups']
+                for x in g['names']]
+    return [x for r in d['reasons'] for g in r['groups'] for x in g['names']]
+
+
+def _use_locales(d):
+    return _locales(set(_names(d)))
+
+
+def _locales_n(n):
+    return _n(n, 'locale', 'locales')
+
+
+def _distinct(d):
+    """Each name once in the line: one locale goes in one place."""
+    names = _names(d)
+    return len(names) == len(set(names))
+
+
+def _part(p):
+    """What one machine or two refuse of an encoding, as lacking_data
+    writes it: one side alone, or old and new told apart by alike."""
+    sides = [x['side'] for x in p['sides']]
+    counts = [x['count'] for x in p['sides']]
+    if p['alike'] == 'one side':
+        return len(sides) == 1
+    if sides != ['old', 'new']:
+        return False
+    return (counts[0] == counts[1]) == (p['alike'] in ('same', 'as many'))
+
+
+def _parts(e):
+    """One part, or two of one machine each and another encoding (the
+    new machine's first, as use_texts sorts them)."""
+    ps = e['parts']
+    if not all(map(_part, ps)):
+        return False
+    if len(ps) == 1:
+        return True
+    return (len(ps) == 2 and all(p['alike'] == 'one side' for p in ps)
+            and [p['sides'][0]['side'] for p in ps] == ['new', 'old']
+            and ps[0]['encoding'] != ps[1]['encoding'])
+
+
+def _lower(e):
+    """One count through lower(), of the machines the entry's parts name
+    (both, or the one), or the old machine's and the new one's where the
+    parts name both: one count's side is in no text, so it is held to the
+    parts here."""
+    sides = [x['side'] for x in e['lower']]
+    named = sorted({x['side'] for p in e['parts'] for x in p['sides']})
+    if len(sides) == 1:
+        return sides[0] == ('both' if len(named) == 2 else named[0])
+    return sides == ['old', 'new'] and len(named) == 2
+
+
+def _one_side_title(d):
+    other = 'old' if d['side'] == 'new' else 'new'
+    said = {'refused': f"that glibc refused on the {other} machine",
+            'absent': "the old machine does not have",
+            'unknown': f"not known on the {other} machine"}[d['reason']]
+    return (f"{_FN} give an error on the {d['side']} machine in "
+            f"{_use_locales(d)} {said}")
+
+
 def _processes(d):
     return _n(d['processes'], 'PostgreSQL process', 'PostgreSQL processes')
 
@@ -817,6 +908,69 @@ KINDS = {
         lambda d: f"Which C library PostgreSQL runs on the {d['side']} "
                   f"machine: no process named {' or '.join(d['looked_for'])} "
                   f"found"),
+    # Step 11's lines on upper(), lower() and ILIKE (use_texts).
+    'use_earlier_format': (
+        'not checked', {'side': _SIDES},
+        lambda d: f"{_FN} on {_machines([d['side']])} (a file of an earlier "
+                  f"version)"),
+    'use_error_new': (
+        'change', {'groups': _GROUPS},
+        lambda d: f"{_FN} give an error on the new machine in "
+                  f"{_use_locales(d)}: its glibc cannot convert their "
+                  f"encoding"),
+    'use_error_both': (
+        'change', {'groups': _GROUPS},
+        lambda d: f"{_FN} give an error on both machines in "
+                  f"{_use_locales(d)}, as before the upgrade"),
+    'use_error_moved': (
+        'change',
+        {'side': _one_of_f('both', 'new'), 'from': _is_str, 'to': _is_str,
+         'why': _why, 'groups': _GROUPS},
+        lambda d: f"{_FN} give an error on {_machines([d['side']])} in "
+                  f"{_use_locales(d)} whose encoding changed from "
+                  f"{d['from']} to {d['to']}"),
+    'use_error_any_db': (
+        'change', {'side': _SIDES, 'why': _is_str, 'groups': _GROUPS},
+        lambda d: f"{_FN} give an error on {_machines([d['side']])} in "
+                  f"{_use_locales(d)} that a database of any encoding may "
+                  f"use"),
+    'use_error_one_side': (
+        'change',
+        {'side': _SIDE, 'reason': _one_of_f('refused', 'absent', 'unknown'),
+         'why': _why, 'groups': _GROUPS},
+        _one_side_title),
+    'use_error_partial': (
+        'change',
+        {'entries': _objects(parts=_LACKING, unknown_on=_UNKNOWN_ON,
+                             names=_is_strs)},
+        lambda d: f"{_FN} give an error on part of the text in "
+                  f"{_use_locales(d)}"),
+    'use_wrong_result': (
+        'change',
+        {'entries': _objects(parts=_LACKING, lower=_LOWER, names=_is_strs)},
+        lambda d: f"{_FN} give a wrong result on part of the text in "
+                  f"{_use_locales(d)}"),
+    'use_back_changed': (
+        'change',
+        {'entries': _objects(encoding=_is_str, count=_is_positive,
+                             names=_is_strs)},
+        lambda d: f"{_FN} give another result on part of the text in "
+                  f"{_use_locales(d)}"),
+    'use_partial_unknown': (
+        'not checked', {'places': _objects(side=_SIDES, groups=_GROUPS)},
+        lambda d: f"Whether {_FN} give an error on part of the text in "
+                  f"{_use_locales(d)} (a file of an earlier version)"),
+    'use_back_not_checked': (
+        'not checked',
+        {'side': _SIDES, 'utf8': _is_count,
+         'encodings': _objects(encoding=_is_str, count=_is_positive)},
+        lambda d: f"Whether the result of {_FN} converts back to the "
+                  f"database's bytes in "
+                  f"{_locales_n(sum(x['count'] for x in d['encodings']))} "
+                  f"(a file of an earlier version)"),
+    'use_not_checked': (
+        'not checked', {'reasons': _objects(why=_is_str, groups=_GROUPS)},
+        lambda d: f"{_FN} in {_use_locales(d)}"),
 }
 
 
@@ -835,6 +989,23 @@ WHOLE = {
                                    for x in d['locales']),
     'libc_not_checked': lambda d: bool(d['machine'] or d['named']
                                        or d['unnamed']),
+    'use_error_new': _distinct,
+    'use_error_both': _distinct,
+    'use_error_moved': lambda d: _distinct(d) and d['from'] != d['to'],
+    'use_error_any_db': _distinct,
+    # A reason only where what the other machine does is not known; a
+    # locale the old machine does not have, only on the new one.
+    'use_error_one_side': lambda d: (
+        _distinct(d) and bool(d['why']) == (d['reason'] == 'unknown')
+        and (d['reason'] != 'absent' or d['side'] == 'new')),
+    'use_error_partial': lambda d: _distinct(d) and all(
+        map(_parts, d['entries'])),
+    'use_wrong_result': lambda d: _distinct(d) and all(
+        _parts(e) and _lower(e) for e in d['entries']),
+    'use_back_changed': _distinct,
+    'use_partial_unknown': _distinct,
+    'use_back_not_checked': lambda d: d['utf8'] <= sum(
+        x['count'] for x in d['encodings']),
 }
 
 
