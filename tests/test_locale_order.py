@@ -330,21 +330,26 @@ NOTES = (m.OTHER_STRINGS, m.SEVERAL_CHARACTERS,
          m.OTHER_STRINGS + ' ' + m.SEVERAL_CHARACTERS)
 
 
-def run_compare(old, new, *more):
+def run_compare(old, new, *more, counts_unread=None):
     """(exit status, stdout, stderr) of `locale_order.py --compare old new`.
 
     A subprocess, because what the script offers a reader is its printed
     report and its exit status. The output is UTF-8 whatever the runner's
     locale, so that the characters print the same way everywhere.
+    COUNTS_UNREAD is why parse_report cannot read this report, so that its
+    counts are not held to it (_harness.step11_counts_held).
     """
-    return run_script('--compare', old, new, *more)
+    return run_script('--compare', old, new, *more,
+                      counts_unread=counts_unread)
 
 
-def run_script(*args):
+def run_script(*args, counts_unread=None):
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
     if '--compare' in args:
-        # Every `!!` a comparison prints is one it writes as data.
-        p = _harness.held_compare([sys.executable, SCRIPT, *args], env=env)
+        # Every `!!` a comparison prints is one it writes as data, and so
+        # are its counts.
+        p = _harness.held_compare([sys.executable, SCRIPT, *args],
+                                  counts_unread=counts_unread, env=env)
     else:
         p = subprocess.run([sys.executable, SCRIPT, *args],
                            capture_output=True, env=env)
@@ -2193,15 +2198,9 @@ def parse_report(text):
         follow += 1
     lines[at[0]:follow] = [' '.join([lines[at[0]]] + [
         x.strip() for x in lines[at[0] + 1:follow]])]
-    mt = take(r'Of the (\d+) locale\(s\) on the old machine: (\d+) changed, '
-              r'(\d+) unchanged(?: \((\d+) of them only as far as measured\))?, '
-              r'(\d+) not measured, (?:([1-9]\d*) refused by glibc, )?(\d+) not '
-              r'on the new machine\.')
+    mt = take(TOTALS)
     r['totals_line'] = mt[0]
-    r['totals'] = {'old': int(mt[1]), 'changed': int(mt[2]),
-                   'unchanged': int(mt[3]), 'partly': int(mt[4] or 0),
-                   'not measured': int(mt[5]), 'refused': int(mt[6] or 0),
-                   'not on new': int(mt[7])}
+    r['totals'] = totals_of(mt[0])
     if r['totals']['refused'] != len(r['refused']):
         fail(f'the totals count {r["totals"]["refused"]} refused and the '
              f'report lists {len(r["refused"])}')
@@ -2218,6 +2217,24 @@ def parse_report(text):
     if line() != END:
         fail('a line after the closing paragraph')
     return r
+
+
+# The line of totals the report and the summary print, whole.
+TOTALS = (r'Of the (\d+) locale\(s\) on the old machine: (\d+) changed, '
+          r'(\d+) unchanged(?: \((\d+) of them only as far as measured\))?, '
+          r'(\d+) not measured, (?:([1-9]\d*) refused by glibc, )?(\d+) not '
+          r'on the new machine\.')
+
+
+def totals_of(text):
+    """The counts of a line of totals (TOTALS); any other line raises."""
+    mt = re.fullmatch(TOTALS, text)
+    if not mt:
+        raise ReportShapeError(f'not the line of totals: {text!r}')
+    return {'old': int(mt[1]), 'changed': int(mt[2]),
+            'unchanged': int(mt[3]), 'partly': int(mt[4] or 0),
+            'not measured': int(mt[5]), 'refused': int(mt[6] or 0),
+            'not on new': int(mt[7])}
 
 
 def number(text):
@@ -4280,6 +4297,55 @@ class TagsOfTheAuditedPair(SmallFiles, Variants):
         self.assertFalse(os.path.exists(path))
 
 
+class TheCountsFile(SmallFiles, Variants):
+    """The file compare writes its counts to (STEP11_DATA_ENV,
+    write_counts), which every comparison of the suite holds to what it
+    printed (_harness.step11_counts_held): one an earlier run left is gone
+    when this run is refused; one that cannot be written ends the run with
+    a message and no file; and one test alone says why the readers do not
+    read its report."""
+
+    def compare(self, path, *args):
+        env = dict(os.environ, PYTHONIOENCODING='utf-8',
+                   **{m.STEP11_DATA_ENV: path})
+        return subprocess.run([sys.executable, SCRIPT, '--compare', *args],
+                              capture_output=True, env=env, text=True)
+
+    def test_an_earlier_file_goes_when_the_run_is_refused(self):
+        path = os.path.join(self.tmp, 'stale-data.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('{"step": 11, "counts": {}}\n')
+        p = self.compare(path, RHEL9, RHEL9)
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn('the two files hold the same measurement', p.stderr)
+        self.assertEqual(p.stdout, '')
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_file_that_cannot_be_written(self):
+        path = os.path.join(self.tmp, 'no-such-folder', 'data.json')
+        p = self.compare(path, RHEL8, RHEL9)
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertTrue(p.stdout.startswith('Old machine: '), p.stdout[:200])
+        self.assertTrue(p.stderr.startswith(
+            f'locale_order.py: cannot write {path}: '), p.stderr)
+        self.assertFalse(os.path.exists(os.path.dirname(path)))
+
+    def test_one_test_alone_names_why_its_report_is_not_read(self):
+        """Every other comparison of the suite has its counts held to its
+        report: a second report the readers cannot read is a case to fix
+        in them, not one more to leave out."""
+        # Any value but None or the name passed on, with any spacing: the
+        # holders take it by keyword only.
+        given = re.compile(r'\bcounts_unread\s*=\s*(?!None\b|counts_unread\b)')
+        uses = []
+        for name in sorted(os.listdir(_harness.TESTS_DIR)):
+            if name.endswith('.py'):
+                with open(os.path.join(_harness.TESTS_DIR, name),
+                          encoding='utf-8') as f:
+                    uses += [name for _ in given.finditer(f.read())]
+        self.assertEqual(uses, ['test_locale_order.py'])
+
+
 class Refusals(SmallFiles, Variants):
     """A measurement that is not whole is refused: exit 2, a message, and not
     one line of report.
@@ -4655,7 +4721,10 @@ class Reports(Variants):
                 f.write(json.dumps(data, sort_keys=True) + '\n')
             paths.append(path)
         chars = os.path.join(self.tmp, 'odd-name.tsv')
-        rc, out, err = run_compare(*paths, '--characters-to', chars)
+        rc, out, err = run_compare(
+            *paths, '--characters-to', chars,
+            counts_unread='parse_report splits the names of a list at ", ", '
+                          'and this name holds one')
         self.assertEqual((rc, err), (0, ''))
         with open(chars, encoding='utf-8') as f:
             text = f.read()

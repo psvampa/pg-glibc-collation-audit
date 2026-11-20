@@ -85,6 +85,16 @@ def step11_files(d):
     # Another pair's, whose new side's name extends this one's (16.109).
     write(d, f'measured_order_confirm.{PAIR}.1.UTF8.sql', 'select 1;\n')
     write(d, f'measured_order_rules.{PAIR}.txt', '     Each locale...\n')
+    write(d, f'step11.{PAIR}.data.json',
+          json.dumps({'step': 11, 'counts': COUNTS}) + '\n')
+
+
+# The counts of step11_files' two locales, C unchanged (firm, built into
+# glibc) and sv_SE changed, as locale_order.write_counts writes them.
+COUNTS = {'machines': {'old': {'label': 'glibc-2.28-251.el8', 'locales': 2},
+                       'new': {'label': 'glibc-2.34-100.el9', 'locales': 2}},
+          'changed': 1, 'unchanged': 1, 'unchanged_as_far_as_measured': 0,
+          'not_measured': 0, 'refused': 0, 'only_old': 0, 'only_new': 0}
 
 
 # One `!!` of each kind as a step writes it (kind, data), with the title
@@ -510,6 +520,7 @@ class EveryFileWritten(_Folder):
             {'encoding': 'UTF8',
              'file': f'measured_order_confirm.{PAIR}.UTF8.sql'}])
         self.assertEqual(s11['rules_beside']['state'], 'set beside')
+        self.assertEqual(s11['counts'], {'state': 'reported', **COUNTS})
         self.assertEqual(r['step2']['rules_by_name']['locales'], {
             'state': 'reported', 'by_name': {
                 'C': {'key': 'none', 'rules': 'built in',
@@ -1248,7 +1259,8 @@ class AFileNotWritten(_Folder):
         for name, ext, part in (
                 ('measured_order_summary', '.txt', None),
                 ('measured_order_verdicts', '.json', None),
-                ('measured_order_characters', '.tsv', 'characters')):
+                ('measured_order_characters', '.tsv', 'characters'),
+                ('step11', '.data.json', 'counts')):
             with self.subTest(name=name):
                 step2_files(self.d, **MACHINES)
                 step11_files(self.d)
@@ -1417,6 +1429,65 @@ class TheReaderIsStrict(_Folder):
                         x = x[k]
                     x['state'] = 'clean'
                 self.refuses(change)
+
+    def test_counts_that_do_not_add_up(self):
+        """Step 11's counts, each written wrong alone: every count and
+        each machine's number of locales, by one more, against the sums
+        of its line of totals and the verdicts beside them; a count that
+        is not a count; a machine with no name; old and new swapped
+        where they differ."""
+        for k in rd.COUNT_KEYS:
+            with self.subTest(count=k):
+                self.refuses(lambda r: r['step11']['counts'].update(
+                    {k: r['step11']['counts'][k] + 1}))
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                self.refuses(lambda r: r['step11']['counts']['machines']
+                             [side].update(locales=3))
+                self.refuses(lambda r: r['step11']['counts']['machines']
+                             [side].update(label=''))
+        # Both machines one more: the new machine's count still follows
+        # from the old one's, and the verdicts are kept; only the old
+        # machine's sum is wrong.
+        self.refuses(lambda r: [r['step11']['counts']['machines'][s].update(
+            locales=3) for s in ('old', 'new')])
+        self.refuses(lambda r: r['step11']['counts'].update(changed=True))
+        self.refuses(lambda r: r['step11']['counts'].update(changed=-1))
+
+        def right(r):
+            # One locale only on the new machine, with step 2's rules
+            # for it: the new machine holds three.
+            c = r['step11']['counts']
+            r['step11']['verdicts']['de_DE'] = {'verdict': 'only new',
+                                                'words': 'x'}
+            by_name = r['step2']['rules_by_name']['locales']['by_name']
+            by_name['de_DE'] = dict(by_name['sv_SE'])
+            c['only_new'] = 1
+            c['machines']['new']['locales'] = 3
+
+        def swapped(r):
+            # The same, the two machines swapped.
+            right(r)
+            m = r['step11']['counts']['machines']
+            m['old'], m['new'] = m['new'], m['old']
+        self.refuses(swapped)
+        r = copy.deepcopy(self.good)
+        right(r)
+        p = os.path.join(self.d, 'right.json')
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        self.assertEqual(rd.load(p), r)
+
+    def test_the_counts_file_is_read_whole(self):
+        """A file step 11 did not write as it writes it: refused, never
+        read as counts."""
+        for text in ('{"step": 11}\n', '{"step": 2, "counts": {}}\n',
+                     '{"step": 11, "counts": {"state": "reported"}}\n',
+                     '{"step": 11, "counts": []}\n', '{"step": 11, "co'):
+            with self.subTest(text=text):
+                write(self.d, f'step11.{PAIR}.data.json', text)
+                with self.assertRaises(rd.ReportError):
+                    rd.build(args(self.d, **ON_MACHINES))
 
     def test_a_value_outside_its_list(self):
         self.refuses(lambda r: r['run'].update(order='reversed'))

@@ -1235,8 +1235,14 @@ class WrapperRefusesBadInput(unittest.TestCase):
         # locale_order.py, which removes it too, does not run.
         listed = os.path.join(self.out_dir, 'measured_order_characters.'
                               + pair_slug(NEW, NEW) + '.tsv')
-        with open(listed, 'w', encoding='utf-8') as fh:
-            fh.write('left by an earlier run\n')
+        # And its counts file, and one cut short (nothing in
+        # locale_order.py removes the counts file's .partial: only audit.sh
+        # does).
+        counts = os.path.join(self.out_dir, 'step11.' + pair_slug(NEW, NEW)
+                              + '.data.json')
+        for path in (listed, counts, counts + '.partial'):
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write('left by an earlier run\n')
         # And its SQL files, one per database encoding, and one a run cut
         # short left half written.
         sql = [os.path.join(self.out_dir, 'measured_order_confirm.'
@@ -1258,6 +1264,8 @@ class WrapperRefusesBadInput(unittest.TestCase):
         self.assertFalse(os.path.exists(changed))
         self.assertFalse(os.path.exists(keyed))
         self.assertFalse(os.path.exists(listed))
+        self.assertFalse(os.path.exists(counts))
+        self.assertFalse(os.path.exists(counts + '.partial'))
         self.assertEqual([x for x in sql if os.path.exists(x)], [])
         self.assertEqual([x for x in other if os.path.exists(x)], other)
 
@@ -2690,16 +2698,19 @@ class WrapperNodeFileRefused(unittest.TestCase):
         self.assertIn("the new node's file could not be used", out)
 
     def test_the_same_file_twice(self):
-        """Step 11 refuses, and the characters file, SQL and data file an
-        earlier run left are gone: a refused run leaves nothing that reads
-        as its list."""
+        """Step 11 refuses, and the characters file, SQL, data file and
+        counts file an earlier run left are gone: a refused run leaves
+        nothing that reads as its list."""
         stale = os.path.join(self.out_dir, 'measured_order_characters.'
                              + pair_slug(OLD, OLD) + '.tsv')
         sql = os.path.join(self.out_dir, 'measured_order_confirm.'
                            + pair_slug(OLD, OLD) + '.UTF8.sql')
         report = os.path.join(self.out_dir,
                               'report.' + pair_slug(OLD, OLD) + '.json')
-        for path in (stale, sql, report, report + '.partial'):
+        counts = os.path.join(self.out_dir,
+                              'step11.' + pair_slug(OLD, OLD) + '.data.json')
+        for path in (stale, sql, report, report + '.partial', counts,
+                     counts + '.partial'):
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('left by an earlier run\n')
         out = self.assertRefusedBeforeTheSides('--old-node', self.old,
@@ -2712,6 +2723,8 @@ class WrapperNodeFileRefused(unittest.TestCase):
         self.assertFalse(os.path.exists(sql))
         self.assertFalse(os.path.exists(report))
         self.assertFalse(os.path.exists(report + '.partial'))
+        self.assertFalse(os.path.exists(counts))
+        self.assertFalse(os.path.exists(counts + '.partial'))
 
     def test_latest_with_the_machines_files(self):
         """A side typed as latest-elN stands for a machine not installed
