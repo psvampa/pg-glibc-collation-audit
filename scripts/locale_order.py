@@ -4858,11 +4858,12 @@ def postgres_names(locales):
     return names
 
 
-def heading(names, o, n):
-    """The locale names of one change, each with its encoding."""
+def heading(names, entries):
+    """The locale names of one change, each with its encoding, from each
+    locale's entry of change_locales."""
     by_codeset = {}
     for name in sorted(names):
-        before, now = o[name].get('codeset'), n[name].get('codeset')
+        before, now = entries[name]['codeset']
         if before == now:
             label = before or 'encoding unknown'
         else:
@@ -4895,13 +4896,15 @@ def postgres_reach(codeset):
     return 'imported'
 
 
-def also_known_as(names, pg_names, locales):
-    """What else a PostgreSQL user may call the locales of one change or
-    of one finding, and, for those PostgreSQL never imports, where a
-    database or CREATE COLLATION can use them."""
-    aliases, spellings = {}, []
-    elsewhere = {'anywhere': ([], []), 'superuser': ([], [])}
-    for name in sorted(names):
+def postgres_of(names, pg_names, locales):
+    """{name: (codeset, alias, spelling, reach)}: for each locale of NAMES,
+    its encoding on the machine of LOCALES (None where not read), the
+    collation alias and database locale spelling PostgreSQL may know it by
+    (postgres_names; None where it has none), and where PostgreSQL lets it
+    be used (postgres_reach). The one place that works these out, for
+    also_known_as and for the data of each change (change_locales)."""
+    out = {}
+    for name in names:
         # An encoding that was not read keeps the line as it was: the names
         # come from the alias and spelling alone.
         # C and POSIX are collations of every encoding already, whatever
@@ -4909,15 +4912,31 @@ def also_known_as(names, pg_names, locales):
         codeset = locales.get(name, {}).get('codeset')
         reach = ('imported' if not codeset or name in ('C', 'POSIX')
                  else postgres_reach(codeset))
-        if name in pg_names:
-            alias, spelling = pg_names[name]
-            if alias:
-                aliases.setdefault(codeset, []).append(f'"{alias}"')
-            if reach == 'superuser':
-                if spelling and spelling not in names:
-                    elsewhere[reach][1].append(spelling)
-            elif spelling and spelling not in names and spelling not in spellings:
-                spellings.append(spelling)
+        alias, spelling = pg_names.get(name, (None, None))
+        out[name] = (codeset, alias, spelling, reach)
+    return out
+
+
+def also_known_as(names, pg_names, locales):
+    """What else a PostgreSQL user may call the locales of one change or
+    of one finding, and, for those PostgreSQL never imports, where a
+    database or CREATE COLLATION can use them."""
+    return also_from(names, postgres_of(names, pg_names, locales))
+
+
+def also_from(names, entries):
+    """also_known_as's line, from each locale's entry of postgres_of."""
+    aliases, spellings = {}, []
+    elsewhere = {'anywhere': ([], []), 'superuser': ([], [])}
+    for name in sorted(names):
+        codeset, alias, spelling, reach = entries[name]
+        if alias:
+            aliases.setdefault(codeset, []).append(f'"{alias}"')
+        if reach == 'superuser':
+            if spelling and spelling not in names:
+                elsewhere[reach][1].append(spelling)
+        elif spelling and spelling not in names and spelling not in spellings:
+            spellings.append(spelling)
         if reach != 'imported':
             elsewhere[reach][0].append(name)
     parts = []
@@ -5032,6 +5051,27 @@ class Names:
         return p[0] if p is not None and len(p) == 1 else None
 
 
+def count_words(chars, others, noun='character(s)'):
+    """'3 character(s)', or '3 character(s) and 2 other string(s)', or
+    '2 other string(s)' where no character is among them: a count of
+    change_data's, as the outputs print it."""
+    if not others:
+        return f'{chars:,} {noun}'
+    if not chars:
+        return f'{others:,} other string(s)'
+    return f'{chars:,} {noun} and {others:,} other string(s)'
+
+
+def string_token(names, e):
+    """The string at E of NAMES as the data name it: 'U+0057', or 'bytes
+    80' for a string that is not a character (Naming.token's spelling,
+    with nothing recorded)."""
+    c = names.cps[e]
+    if c is not None:
+        return f'U+{c:04X}'
+    return 'bytes ' + spaced(names.strings[e])
+
+
 def names_for(strings, codeset, charmap=None):
     key = (id(strings), codeset, id(charmap))
     got = NAMES.get(key)
@@ -5042,8 +5082,10 @@ def names_for(strings, codeset, charmap=None):
 
 class Naming:
     """One locale's change, named through its Names: and whether anything
-    named or counted is a string that is not a character (others), which
-    puts the line that says how such a string is named under the report."""
+    named through it is a string that is not a character (others), which
+    describe_change checks names_bytes against. Of step 11's findings,
+    names_bytes and not this decides whether the line that says how such
+    a string is named goes under the report."""
 
     def __init__(self, names):
         self.names, self.others = names, False
@@ -5088,12 +5130,9 @@ class Naming:
         return self.count_text(len(elements) - others, others, noun)
 
     def count_text(self, chars, others, noun='character(s)'):
-        if not others:
-            return f'{chars:,} {noun}'
-        self.others = True
-        if not chars:
-            return f'{others:,} other string(s)'
-        return f'{chars:,} {noun} and {others:,} other string(s)'
+        if others:
+            self.others = True
+        return count_words(chars, others, noun)
 
     def runs(self, elements):
         """[(first, last)] of the runs the strings make, in the order the
@@ -5402,28 +5441,136 @@ def locale_findings(old, new, o, n, naming):
     return found
 
 
+# The kinds of locale_findings whose data change_data writes; the others
+# are written as not yet reported.
+DATA_KINDS = ('moved', 'reversed', 'did not move', 'undecided')
+NOT_YET = {'state': 'not yet reported',
+           'why': 'today said only in the text of the run'}
+
+
+def change_data(found, naming):
+    """[{'kind', ...}]: the data of a locale's findings (locale_findings),
+    in their order, each added to its finding as 'data', from which its
+    lines and phrases print their counts. A kind of DATA_KINDS gets how
+    many strings it holds, of them characters and other strings
+    (Names.other), and its runs or pairs, each string as string_token
+    names it; moved and did not move say how the report lists them
+    (LIST_LIMIT); the other kinds are NOT_YET."""
+    names = naming.names
+
+    def split(elements):
+        others = sum(map(names.other.__getitem__, elements))
+        return {'count': len(elements), 'characters': len(elements) - others,
+                'other_strings': others}
+
+    def runs(rs):
+        return [[string_token(names, a), string_token(names, b)]
+                for a, b in rs]
+
+    out = []
+    for kind, d in found:
+        if kind == 'moved':
+            m = d['moved']
+            x = {'kind': kind, **split(m), 'runs': runs(d['runs']),
+                 'listed': ('none' if not m else 'each' if len(m) <= LIST_LIMIT
+                            else 'runs' if len(d['runs']) <= LIST_LIMIT
+                            else 'too many')}
+        elif kind == 'reversed':
+            x = {'kind': kind, **split(d['flagged']), 'all': d['all'],
+                 'runs': runs(d['runs'])}
+        elif kind == 'did not move':
+            x = {'kind': kind, **split(d['still']), 'runs': runs(d['runs']),
+                 'listed': 'runs' if len(d['runs']) <= LIST_LIMIT
+                 else 'too many'}
+        elif kind == 'undecided':
+            x = {'kind': kind, 'count': len(d['pairs']),
+                 'pairs': runs(d['pairs'])}
+        elif kind in LOCALE_KINDS:
+            x = {'kind': kind, **NOT_YET}
+        else:
+            raise LookupError(f'no data for a finding of kind {kind!r}')
+        d['data'] = x
+        out.append(x)
+    return out
+
+
+def names_bytes(found, naming, probes):
+    """Whether a locale's findings name or count a string that is not a
+    character, which puts OTHER_STRINGS under the changes (a sort table
+    that names one puts it there too, compare): the one rule for step
+    11's findings, worked out from them, never from the printing. Every
+    string the outputs name or count: what moved and the string each run is
+    tested against, what sorts differently, what did not move, the pairs
+    no measurement decides, every string of a chain of neighbours told
+    apart differently and the two strings of the probe pair its test
+    takes (test_level), and the probe pairs that changed. describe_change
+    checks that the printing named no such string this misses."""
+    names = naming.names
+    other = names.other
+
+    def not_char(s):
+        return names.code_point(s) is None
+
+    for kind, d in found:
+        if kind == 'moved':
+            if any(other[e] for e in d['moved']) or any(
+                    other[d['partner'][a][0]] for a, b in d['runs']):
+                return True
+        elif kind == 'reversed':
+            if any(other[e] for e in d['flagged']):
+                return True
+        elif kind == 'did not move':
+            if any(other[e] for e in d['still']):
+                return True
+        elif kind == 'undecided':
+            if any(other[a] or other[b] for a, b in d['pairs']):
+                return True
+        elif kind == 'probes changed':
+            for spec in (d['before'], d['now']):
+                for token in spec.split(' '):
+                    if token not in ('?', 'none') and any(
+                            not_char(bytes.fromhex(h))
+                            for h in token[:-1].split('.')):
+                        return True
+        elif kind == 'told apart':
+            for chain, before, now, t, tb, side in d['chains']:
+                if any(other[e] for run in chain for e in run):
+                    return True
+                got = test_level(before, now, probes, d['levels'])
+                if got is not None and (not_char(got[0]) or not_char(got[1])):
+                    return True
+        elif kind != 'left out':
+            raise LookupError(f'no rule for the strings of kind {kind!r}')
+    return False
+
+
 def moved_lines(d):
-    moved, runs, nm = d['moved'], d['runs'], d['naming']
-    if not moved:
+    moved, runs, nm, x = d['moved'], d['runs'], d['naming'], d['data']
+    if x['listed'] == 'none':
         return ['no character moved']
-    if len(moved) <= LIST_LIMIT:
-        return ([f'{nm.counted(moved)} moved:']
+    if x['listed'] == 'each':
+        return ([f'{counts_of(x)} moved:']
                 + [line for c in moved for line in report_lines(nm.long(c), '  ')])
-    if len(runs) <= LIST_LIMIT:
-        return report_lines(f'{nm.counted(moved, "characters")} moved: '
+    if x['listed'] == 'runs':
+        return report_lines(f'{counts_of(x, "characters")} moved: '
                             f'{nm.runs_text(runs, whole=True)}', '')
-    return report_lines(f'{nm.counted(moved, "characters")} moved, too many '
+    return report_lines(f'{counts_of(x, "characters")} moved, too many '
                         'to list here', '')
 
 
+def counts_of(x, noun='character(s)'):
+    """count_words of one entry of change_data."""
+    return count_words(x['characters'], x['other_strings'], noun)
+
+
 def moved_brief(d):
-    moved, nm = d['moved'], d['naming']
-    if not moved:
+    moved, nm, x = d['moved'], d['naming'], d['data']
+    if x['listed'] == 'none':
         return ['no character moved']
-    if len(moved) <= LIST_LIMIT:
-        return [f'{nm.counted(moved)} moved: '
+    if x['listed'] == 'each':
+        return [f'{counts_of(x)} moved: '
                 + ', '.join(nm.short(c) for c in moved)]
-    return [f'{nm.counted(moved, "characters")} moved']
+    return [f'{counts_of(x, "characters")} moved']
 
 
 def moved_rows(d):
@@ -5448,13 +5595,14 @@ def moved_sql(d):
 
 
 def reversed_lines(d):
-    everyone = 'all ' if d['all'] else ''
-    return report_lines(f'{everyone}{d["naming"].counted(d["flagged"])} sort '
+    x = d['data']
+    everyone = 'all ' if x['all'] else ''
+    return report_lines(f'{everyone}{counts_of(x)} sort '
                         'differently against at least one other', '')
 
 
 def reversed_brief(d):
-    return [f'{len(d["flagged"]):,} sort differently against another']
+    return [f'{d["data"]["count"]:,} sort differently against another']
 
 
 def reversed_rows(d):
@@ -5580,18 +5728,18 @@ def told_apart_sql(d):
 
 
 def among(d):
-    return f'among them {d["naming"].counted(d["still"])} that did not move'
+    return f'among them {counts_of(d["data"])} that did not move'
 
 
 def still_lines(d):
-    if len(d['runs']) <= LIST_LIMIT:
+    if d['data']['listed'] == 'runs':
         return report_lines(f'{among(d)}: '
                             f'{d["naming"].runs_text(d["runs"], whole=True)}', '  ')
     return report_lines(f'{among(d)}, too many to list here', '  ')
 
 
 def still_brief(d):
-    if len(d['runs']) <= LIST_LIMIT:
+    if d['data']['listed'] == 'runs':
         return [f'{among(d)}: {d["naming"].runs_text(d["runs"], whole=True)}']
     return [among(d)]
 
@@ -5608,12 +5756,14 @@ def still_sql(d):
 
 
 def undecided_lines(d):
-    return report_lines(f'{len(d["pairs"]):,} more pair(s) may be told apart '
-                        'differently; what was measured cannot decide', '')
+    return report_lines(f'{d["data"]["count"]:,} more pair(s) may be told '
+                        'apart differently; what was measured cannot '
+                        'decide', '')
 
 
 def undecided_brief(d):
-    return [f'{len(d["pairs"]):,} more pair(s) the measurement cannot decide']
+    return [f'{d["data"]["count"]:,} more pair(s) the measurement cannot '
+            'decide']
 
 
 def undecided_rows(d):
@@ -5654,28 +5804,40 @@ def printer(table, kind, part):
 
 
 def describe_change(old, new, o, n, charmaps=None):
-    """(lines, phrase, rows, others, sql): what changed between two
+    """(lines, phrase, rows, others, sql, data): what changed between two
     measurements of a locale, drawn from its findings for the report, the
     summary and the characters file, in which nothing is cut short;
-    whether any of the three names or counts a string that is not a
-    character; and its test pairs in bytes and its changes without one,
-    for the SQL files (confirm_groups). The strings are named under the
-    old machine's encoding, the one a database made there holds, with the
-    old machine's charmaps (CHARMAPS, a MachineCharmaps, or None)."""
+    whether any of the outputs names or counts a string that is not a
+    character (names_bytes); its test pairs in bytes and its changes
+    without one, for the SQL files (confirm_groups); and its findings as
+    data (change_data), from which the report's lines and the summary's
+    phrase of each kind of DATA_KINDS take their counts. The strings are
+    named under the old machine's encoding, the one a database made there
+    holds, with the old machine's charmaps (CHARMAPS, a MachineCharmaps,
+    or None)."""
     naming = Naming(names_for(strings_of(old, o['corpus'])[0], o['codeset'],
                               charmap_table(charmaps, o['codeset'])))
+    found = locale_findings(old, new, o, n, naming)
+    data = change_data(found, naming)
+    others = names_bytes(found, naming, o['probes'])
     lines, brief, rows, sql = [], [], [], []
-    for kind, d in locale_findings(old, new, o, n, naming):
+    for kind, d in found:
         lines += printer(LOCALE_KINDS, kind, REPORT)(d)
         brief += printer(LOCALE_KINDS, kind, SUMMARY)(d)
         rows += printer(LOCALE_KINDS, kind, FILE)(d)
         sql += printer(LOCALE_KINDS, kind, SQL)(d)
-    return lines, '; '.join(brief), rows, naming.others, sql
+    if naming.others and not others:
+        # A string named by its bytes that names_bytes does not see would
+        # leave the report without the line that explains such names.
+        raise LookupError('a change names a string by its bytes that '
+                          'names_bytes does not count')
+    return lines, '; '.join(brief), rows, others, sql, data
 
 
 # Printed under the report and the summary, and at the head of the
 # characters file, when a change names or counts a string that is not a
-# character (Naming): how such a string is named.
+# character (names_bytes, or a sort table that names one): how such a
+# string is named.
 OTHER_STRINGS = ("In the sort orders, a string that this comparison cannot "
                  "name as a character of the locale's encoding is named by "
                  "its bytes in hexadecimal: bytes 80 is the single byte 80, "
@@ -9883,9 +10045,9 @@ def summary_lines(counts, groups, run, totals, o, n, characters_to=None,
         for names, brief in groups:
             # Wrapped at the same indent, as in the report, so that where the
             # names end and what moved begins is plain.
-            out += wrapped(heading(names, o, n), 7, 7)
+            out += wrapped(heading(names, run.ctx['changes']), 7, 7)
             out += wrapped(brief, 9, 11)
-            also = also_known_as(names, run.ctx['pg_names'], o)
+            also = change_also(names, run.ctx['changes'])
             if also:
                 out += wrapped(also, 9, 11)
         if characters_to:
@@ -10510,23 +10672,74 @@ def totals_text(c):
             f'{in_refused}{c["only_old"]} not on the new machine.')
 
 
-# The file compare() writes its counts to, once its report is printed, for
-# the run's data file (scripts/report_data.py); unset, nothing is written.
+def change_locales(names, o, n, pg_names):
+    """{name: {'codeset': (old, new), 'postgres': postgres_of's entry}}:
+    each changed locale's encoding on each machine (None where not read)
+    and the names PostgreSQL may know it by, taken from the old machine,
+    as for every other line (also_known_as). The heading of each change
+    and the names under it print from these (heading, change_also), and
+    change_groups writes them."""
+    pg = postgres_of(names, pg_names, o)
+    return {x: {'codeset': (o[x].get('codeset'), n[x].get('codeset')),
+                'postgres': pg[x]} for x in names}
+
+
+def change_also(names, entries):
+    """also_known_as's line for the locales of one change, from their
+    entries of change_locales."""
+    return also_from(names, {x: entries[x]['postgres'] for x in names})
+
+
+def change_groups(measured, groups, entries):
+    """step 11's findings as data: one group per set of locales measured
+    alike, sorted by their names, each with its locales (their encodings
+    and PostgreSQL names, from ENTRIES), the heading it prints under
+    (printed_under: its place among GROUPS, the changes as the report
+    prints them, where groups that read alike share one), whether step 11
+    found it or its sort table alone, its findings (change_data), whether
+    they name a string by its bytes (names_bytes), and its sort table,
+    not yet reported. MEASURED is [(names, names_bytes, data or None for
+    a change its sort table alone found, the lines it prints)]."""
+    printed = {lines: k for k, (lines, names) in enumerate(groups)}
+    out = []
+    for names, named, data, lines in sorted(measured, key=lambda m: m[0]):
+        locales = {}
+        for x in names:
+            (before, now), (cs, alias, spelling, reach) = (
+                entries[x]['codeset'], entries[x]['postgres'])
+            locales[x] = {'codeset': {'old': before or 'unknown',
+                                      'new': now or 'unknown'},
+                          'postgres': {'alias': alias or 'none',
+                                       'spelling': spelling or 'none',
+                                       'reach': reach}}
+        out.append({'locales': locales, 'printed_under': printed[lines],
+                    'found_by': ('step 11' if data is not None
+                                 else 'its sort table alone'),
+                    'findings': data if data is not None else [],
+                    'names_bytes': named, 'sort_table': dict(NOT_YET)})
+    return {'state': 'reported', 'groups': out}
+
+
+# The file compare() writes its counts and findings to, once its report
+# is printed, for the run's data file (scripts/report_data.py); unset,
+# nothing is written.
 STEP11_DATA_ENV = 'PG_GLIBC_AUDIT_STEP11_DATA'
 
 
-def write_counts(counts):
-    """Write COUNTS to the file STEP11_DATA_ENV names, as {'step': 11,
-    'counts': ...}: first under another name, then given its own, so that
-    a file cut short is never there under it. A file that cannot be
-    written ends the comparison: counts printed and not written would be
-    a report the data file says nothing of."""
+def write_counts(counts, findings):
+    """Write COUNTS and FINDINGS to the file STEP11_DATA_ENV names, as
+    {'step': 11, 'counts': ..., 'findings': ...}: first under another
+    name, then given its own, so that a file cut short is never there
+    under it. A file that cannot be written ends the comparison: what was
+    printed and not written would be a report the data file says nothing
+    of."""
     path = os.environ.get(STEP11_DATA_ENV)
     if not path:
         return
     try:
         with open(path + '.partial', 'w', encoding='utf-8') as f:
-            json.dump({'step': 11, 'counts': counts}, f, sort_keys=True)
+            json.dump({'step': 11, 'counts': counts, 'findings': findings},
+                      f, sort_keys=True)
             f.write('\n')
         os.replace(path + '.partial', path)
     except OSError as e:
@@ -10827,13 +11040,16 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     confirm = []     # (names, encoding, what the SQL files get)
     others = False   # whether a string is named by its bytes
     several = False  # whether a sort table names a string of several characters
+    measured = []    # (names, step 11's names_bytes, its data or None, lines)
     for names in measured_alike.values():
         table = by_table.get(names[0])
         if table and table[1] != 'changed':
             lines, brief, found, named, sql = [], '', [], False, []
+            data = None
         else:
-            lines, brief, found, named, sql = describe_change(
+            lines, brief, found, named, sql, data = describe_change(
                 old, new, o[names[0]], n[names[0]], machines[0])
+        step11_named = named
         if table:
             more, phrase, counted = table_change_lines(*table)
             if sql_to and table[2] and table[2][2]:
@@ -10868,6 +11084,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                 for chars, how in (table[2][2] if table[2] else ()))
         others = others or named
         reads_alike.setdefault(tuple(lines), []).extend(names)
+        measured.append((sorted(names), step11_named, data, tuple(lines)))
         briefs[tuple(lines)] = brief
         rows.append((sorted(names), found))
         confirm.append((sorted(names), o[names[0]].get('codeset'), sql))
@@ -10876,6 +11093,11 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # The names PostgreSQL gives the locales, taken from the old machine: a
     # cluster being upgraded had its collations created there.
     pg_names = postgres_names(o)
+    # Each changed locale's encodings and PostgreSQL names, from which the
+    # heading of its change and the names under it print, and the data of
+    # each group measured alike (change_groups).
+    entries = change_locales(changed, o, n, pg_names)
+    findings = change_groups(measured, groups, entries)
     # Unchanged only as far as it was measured: some neighbours were not
     # measured at every level (unclassified), so a change in how they are
     # told apart would not show.
@@ -10965,7 +11187,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     by_tables = any(r == 'identical' for r in routes.values())
     found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
                          refused, beside, closing_text(same, firm, by_tables))
-    ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to}
+    ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to,
+           'changes': entries}
 
     report = [f'{side.capitalize()} machine: {m["label"]}, {m["locales"]} '
               'locale(s)' for side, m in counts['machines'].items()]
@@ -10976,8 +11199,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     report += run('postgres libc above')
     report += ['', f'Sort order CHANGED in {counts["changed"]} locale(s):']
     for lines, names in groups:
-        report += ['', filled(heading(names, o, n), 2, 2)]
-        also = also_known_as(names, pg_names, o)
+        report += ['', filled(heading(names, entries), 2, 2)]
+        also = change_also(names, entries)
         if also:
             report.append(filled(also, 4, 6))
         report += [f'    {line}' for line in lines]
@@ -11151,7 +11374,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     for line in report:
         print(line)
     report_warnings(blocks, g)
-    write_counts(counts)
+    write_counts(counts, findings)
     return 0
 
 
