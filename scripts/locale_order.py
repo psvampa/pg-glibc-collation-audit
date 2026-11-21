@@ -6369,10 +6369,20 @@ def postgres_codesets():
             collation_keys.MULTIBYTE_CODESETS)
 
 
-def error_row(cp, hexed, before, now, measured):
+def measured_of(before, now):
+    """Where a row of the characters file was measured, from what each
+    machine does (before, now): 'on both machines', or the one machine
+    that measured it."""
+    return ('on both machines' if 'not measured' not in (before, now) else
+            'on the old machine' if now == 'not measured' else
+            'on the new machine')
+
+
+def error_row(cp, hexed, before, now):
     return ('upper/lower/ILIKE error', '-' if cp is None else f'U+{cp:04X}',
             f'bytes {spaced(bytes.fromhex(hexed))}, converted to a wide '
-            'character as PostgreSQL does', '-', before, now, measured)
+            'character as PostgreSQL does', '-', before, now,
+            measured_of(before, now))
 
 
 # The one model of a database's text on a machine (backlog 16.19).
@@ -6795,13 +6805,22 @@ def sequence_state(view, machine, hexed):
     return 'not measured'
 
 
-def refused_rows_of(partial, views, machines):
-    """The characters file's rows of the line on part of the text: each
-    sequence a machine's converter refuses (partial, from refused_in_own),
-    a row each with what each machine does with it (sequence_state, the
-    answer the rows of an error read too), under a label per encoding and
-    per what the machines do, its locales named once (a locale named on
-    each row would make the file many times larger)."""
+# What a machine's converter does with a byte sequence a database holds
+# (sequence_state), and with a character's upper or lower case on the way
+# back (back_groups_of): the states the rows of the characters file print.
+SEQUENCE_STATES = ('converts', 'error', 'not measured')
+BACK_STATES = ('not turned back', 'turned back', 'not read', 'not measured')
+
+
+def refused_groups_of(partial, views, machines):
+    """The groups of the line on part of the text, as data: each sequence
+    a machine's converter refuses (partial, from refused_in_own), with what
+    each machine does with it (sequence_state, the answer the rows of an
+    error read too), grouped per encoding and per what the machines do,
+    its locales named once (a locale named on each row would make the file
+    many times larger): [{'names', 'encoding', 'sequences': [{'before',
+    'now', 'bytes': [hex, ...]}]}], the sequences grouped by what the two
+    machines do with them."""
     groups = {}
     for name, sides in partial.items():
         for enc in sorted({e for e, _ in sides.values()}):
@@ -6812,64 +6831,192 @@ def refused_rows_of(partial, views, machines):
             groups.setdefault((enc, rows), []).append(name)
     out = []
     for (enc, rows), names in sorted(groups.items(), key=lambda g: sorted(g[1])):
-        label = f'upper_lower_ILIKE_group_{len(out) // 2 + 1}'
-        out.append({'names': sorted(names), 'label': label, 'rows': [(
-            'upper/lower/ILIKE group', '-', f'{label}: the byte sequence(s) a '
-            f"database of these locale(s) accepts and glibc's converter of {enc} "
-            'does not convert on a machine, each a row under that name',
-            '-', '-', '-', '-')]})
-        out.append({'names': [label], 'rows': [error_row(
-            None, seq.hex(), before, now,
-            'on both machines' if 'not measured' not in (before, now) else
-            'on the old machine' if now == 'not measured' else 'on the new machine')
-            for seq, before, now in rows]})
+        by = {}
+        for seq, before, now in rows:
+            by.setdefault((before, now), []).append(seq.hex())
+        out.append({'names': sorted(names), 'encoding': enc, 'sequences': [
+            {'before': b, 'now': n, 'bytes': got}
+            for (b, n), got in sorted(by.items())]})
     return out
 
 
-def back_bytes(data):
-    """What glibc gives converting a character back: its bytes, 'no bytes'
-    or 'refused'."""
-    return 'refused' if data is None else spaced(data) if data else 'no bytes'
+def refused_rows_of(groups):
+    """The characters file's rows of the line on part of the text, printed
+    from refused_groups_of's groups: a row naming each group's locales,
+    then a row each of its sequences, in their order, under the group's
+    label."""
+    out = []
+    for i, g in enumerate(groups, 1):
+        label = f'upper_lower_ILIKE_group_{i}'
+        out.append({'names': g['names'], 'label': label, 'rows': [(
+            'upper/lower/ILIKE group', '-', f'{label}: the byte sequence(s) a '
+            f"database of these locale(s) accepts and glibc's converter of "
+            f"{g['encoding']} does not convert on a machine, each a row under "
+            'that name', '-', '-', '-', '-')]})
+        out.append({'names': [label], 'rows': [
+            error_row(None, h, b, n) for h, b, n in sorted(
+                (h, s['before'], s['now']) for s in g['sequences']
+                for h in s['bytes'])]})
+    return out
 
 
-def back_rows_of(back_error):
-    """The characters file's rows of the line on what does not convert
-    back: each character a database holds whose conversion back, or that
-    of its upper or lower case, a machine's converter refuses, a row each
-    with what upper() and lower() do with it on each machine, under a label
-    per encoding and per what the machines do, its locales named once."""
+def back_groups_of(back_error):
+    """The groups of the line on what does not convert back, as data:
+    each character a database holds whose conversion back, or that of its
+    upper or lower case, a machine's converter refuses, with the functions
+    that give what is refused and what each machine does (BACK_STATES),
+    grouped per encoding and per what the machines do, its locales named
+    once: [{'names', 'encoding', 'characters': [{'char', 'through':
+    [{'fn', 'to'}], 'before', 'now'}]}]."""
     groups = {}
     for name, (sides, reads) in back_error.items():
         for enc in sorted({e for e, _ in sides.values()}):
             got = {s: r for s, (e, r) in sides.items() if e == enc}
             rows = []
             for c in sorted(set().union(*got.values())):
-                fns = next(r[c] for r in got.values() if c in r)
+                fns = tuple((f, t) for f, t in next(r[c] for r in got.values()
+                                                    if c in r))
                 # A machine read under another encoding was not measured
                 # for this one.
                 states = tuple(
                     'not turned back' if c in got.get(side, {}) else
                     ('turned back' if reads[side, enc](c) else 'not read')
                     if (side, enc) in reads else 'not measured' for side in ('old', 'new'))
-                how = '; '.join(f'{f}(): U+{t:04X}{" (itself)" if t == c else ""}, '
-                                f'which glibc\'s converter of {enc} does not turn '
-                                'back into bytes' for f, t in fns)
-                rows.append((c, how) + states)
+                rows.append((c, fns) + states)
             groups.setdefault((enc, tuple(rows)), []).append(name)
+    return [{'names': sorted(names), 'encoding': enc, 'characters': [
+        {'char': c, 'through': [{'fn': f, 'to': t} for f, t in fns],
+         'before': before, 'now': now} for c, fns, before, now in rows]}
+        for (enc, rows), names in sorted(groups.items(),
+                                         key=lambda g: sorted(g[1]))]
+
+
+def back_rows_of(groups):
+    """The characters file's rows of the line on what does not convert
+    back, printed from back_groups_of's groups."""
     out = []
-    for (enc, rows), names in sorted(groups.items(), key=lambda g: sorted(g[1])):
-        label = f'upper_lower_back_group_{len(out) // 2 + 1}'
-        out.append({'names': sorted(names), 'label': label, 'rows': [(
+    for i, g in enumerate(groups, 1):
+        label = f'upper_lower_back_group_{i}'
+        enc = g['encoding']
+        out.append({'names': g['names'], 'label': label, 'rows': [(
             'upper/lower back group', '-', f'{label}: the character(s) a database '
             'of these locale(s) holds whose upper or lower case '
             f"glibc's converter of {enc} does not turn back into bytes on a "
             'machine, each a row under that name', '-', '-', '-', '-')]})
         out.append({'names': [label], 'rows': [(
-            'upper/lower back error', f'U+{c:04X}', how, '-', before, now,
-            'on both machines' if 'not measured' not in (before, now) else
-            'on the old machine' if now == 'not measured' else 'on the new machine')
-            for c, how, before, now in rows]})
+            'upper/lower back error', f'U+{x["char"]:04X}', '; '.join(
+                f'{t["fn"]}(): U+{t["to"]:04X}'
+                f'{" (itself)" if t["to"] == x["char"] else ""}, '
+                f"which glibc's converter of {enc} does not turn "
+                'back into bytes' for t in x['through']),
+            '-', x['before'], x['now'], measured_of(x['before'], x['now']))
+            for x in g['characters']]})
     return out
+
+
+def back_side(data):
+    """What one machine gives converting a character back that both turn
+    back otherwise, as data: {'state': 'bytes', 'bytes': hex} or {'state':
+    'no bytes'}. Never a refusal: back_changed leaves out a character
+    either machine refuses, which is that machine's error (back_refused),
+    and one that reaches here stops the comparison."""
+    if data is None:
+        raise ValueError('a character turned back otherwise with a refusal')
+    return ({'state': 'bytes', 'bytes': data.hex()} if data else
+            {'state': 'no bytes'})
+
+
+def back_side_said(x):
+    """What one machine gives back, printed from back_side's data: its
+    bytes ('A3 C1') or 'no bytes'."""
+    return (spaced(bytes.fromhex(x['bytes'])) if x['state'] == 'bytes'
+            else x['state'])
+
+
+# What a row of a locale on upper(), lower() and ILIKE is: its error, or
+# why it is not checked (the reason the line on what is not checked
+# gives).
+USE_LOCALE_KINDS = ('error', 'not checked')
+# What step 11 could check of upper(), lower() and ILIKE: on both
+# machines, on one (the other's file is of an earlier format), or on
+# neither.
+USE_STATES = ('checked', 'partly', 'not checked')
+# The line each locale goes to (TextModel.use_records' 'line'; 'none'
+# where only another line names it), which the counts of the line on
+# what converts are counted from.
+USE_LINES = ('one byte', 'left out', 'error', 'unknown', 'elsewhere',
+             'converts', 'back unknown', 'none')
+
+
+def use_row(cp, hexed, before, now):
+    """An error row of a locale as data: its bytes, what each machine does
+    with them, and the character they are, where one was measured (a
+    machine that converts nothing past ASCII names none)."""
+    row = {'bytes': hexed, 'before': before, 'now': now}
+    if cp is not None:
+        row['char'] = cp
+    return row
+
+
+def use_held(d):
+    """D, use_texts' data, after checking each state, kind and line it
+    holds is one of its constants (USE_STATES, USE_LOCALE_KINDS,
+    USE_LINES, SEQUENCE_STATES, BACK_STATES): a value written outside them
+    would refuse the run in report_data, or pass where it reads the
+    constant."""
+    got = {('state', d['state'])}
+    got |= {('line', v) for k in ('lines', 'added') for v in d.get(k, {}).values()}
+    for x in d.get('rows', ()):
+        got.add(('kind', x['kind']))
+        got |= {('sequence', r[k]) for r in x.get('rows', ())
+                for k in ('before', 'now')}
+    got |= {('sequence', q[k]) for g in d.get('groups', ())
+            for q in g['sequences'] for k in ('before', 'now')}
+    got |= {('back', c[k]) for g in d.get('back_groups', ())
+            for c in g['characters'] for k in ('before', 'now')}
+    allowed = {'state': USE_STATES, 'line': USE_LINES,
+               'kind': USE_LOCALE_KINDS, 'sequence': SEQUENCE_STATES,
+               'back': BACK_STATES}
+    bad = sorted((k, v) for k, v in got if v not in allowed[k])
+    if bad:
+        raise ValueError(f'upper(), lower() and ILIKE: values outside their '
+                         f'constants: {bad!r}')
+    return d
+
+
+def use_rows_of(d):
+    """The characters file's rows of upper(), lower() and ILIKE, printed
+    from use_texts' data D, in the order the file holds them."""
+    rows = []
+    for x in d.get('rows', ()):
+        if x['kind'] == 'not checked':
+            rows.append({'names': [x['name']], 'rows': [(
+                'upper/lower/ILIKE not checked', '-',
+                x['why'].translate(TEXT_ESCAPES), '-', '-', '-', '-')]})
+        else:
+            rows.append({'names': [x['name']], 'rows': [
+                error_row(r.get('char'), r['bytes'], r['before'], r['now'])
+                for r in x['rows']]})
+    rows += refused_rows_of(d.get('groups', ()))
+    rows += back_rows_of(d.get('back_groups', ()))
+    rows += [{'names': [x['name']], 'rows': [(
+        'upper/lower back changed', f'U+{c["char"]:04X}',
+        f'bytes {back_side_said(c["old"])} -> {back_side_said(c["new"])}',
+        '-', '-', '-', 'on both machines') for c in x['characters']]}
+        for x in d.get('back_changed', ())]
+    rows += [{'names': [x['name']], 'rows': [(
+        'upper/lower/ILIKE not checked', '-',
+        f'whether part of the text gives an error: not known '
+        f'{SIDE_WHERE[x["side"]]}', '-', '-', '-', '-')]}
+        for x in d.get('part_unknown', ())]
+    rows += [{'names': [x['name']], 'rows': [(
+        'upper/lower back not checked', '-',
+        ('whether glibc reads all the text as it is, and ' if x['utf8']
+         else '')
+        + 'whether the result converts back to bytes: not known '
+        f'{SIDE_WHERE[x["side"]]}', '-', '-', '-', '-')]}
+        for x in d.get('back_not_checked', ())]
+    return rows
 
 
 class TextModel:
@@ -7427,7 +7574,9 @@ def use_texts(model):
     new one; a locale only on the new machine only where its databases
     made there give an error, were not checked, or are of an encoding
     PostgreSQL does not know. A `!!` is a Bang with its kind and data
-    (report_warnings), its lists printed from that data."""
+    (report_warnings), its lists printed from that data; the rest, and the
+    characters file's rows, are data too (the third value: state, one of
+    USE_STATES, and what the lines and rows print), printed from it."""
     old, new = model.old.data, model.new.data
     earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
                if 'postgres_use' not in data['held']]
@@ -7440,7 +7589,18 @@ def use_texts(model):
                          'use_earlier_format', {'side': side_of(earlier)}),
                     True))
         if len(earlier) == 2:
-            return out, []
+            return out, [], use_held({'state': 'not checked'})
+    items = []   # the rows of each locale, in their order (use_rows_of)
+    # The line each locale goes to, those on both machines and those only
+    # on the new one apart: what the counts of the line on what converts
+    # are counted from, held to the locales of the comparison.
+    lines, added = {}, {}
+    only_new = set(model.only_new)
+    data = {'state': 'checked', 'rows': items, 'lines': lines,
+            'added': added, 'back': [], 'groups': [], 'back_groups': [],
+            'back_changed': [], 'part_unknown': [], 'back_not_checked': []}
+    if earlier:
+        data.update(state='partly', earlier=side_of(earlier))
     groups = {k: [] for k in ('changed', 'back', 'both', 'converts', 'one byte',
                               'left out', 'elsewhere', 'back unknown')}
     back_earlier = {}   # {name: the sides whose file has no back part}
@@ -7467,23 +7627,20 @@ def use_texts(model):
                     continue
                 other = (sequence_state(vn, model.new, t[1][1]) if side == 'old'
                          else sequence_state(vo, model.old, t[1][1]))
-                states = ('error', other) if side == 'old' else (other, 'error')
-                row = error_row(*t[1], *states, 'on both machines'
-                                if other != 'not measured' else f'on the {side} machine')
+                b, n = ('error', other) if side == 'old' else (other, 'error')
+                row = use_row(t[1][0], t[1][1], b, n)
                 # Each machine's row, once where both say the same.
                 if row not in out:
                     out.append(row)
-            rows.append({'names': [name], 'rows': out})
+            items.append({'name': name, 'kind': 'error', 'rows': out})
             return
-        measured = ('on both machines' if before in USE_BEFORE and after in USE_BEFORE
-                    else 'on the new machine' if after in USE_BEFORE
-                    else 'on the old machine')
-        rows.append({'names': [name], 'rows': [error_row(
-            *text[1], USE_BEFORE.get(before, 'not measured'),
-            USE_BEFORE.get(after, 'not measured'), measured)]})
+        items.append({'name': name, 'kind': 'error', 'rows': [use_row(
+            text[1][0], text[1][1], USE_BEFORE.get(before, 'not measured'),
+            USE_BEFORE.get(after, 'not measured'))]})
 
     for rec in model.use_records():
         name, line = rec['name'], rec['line']
+        (added if name in only_new else lines)[name] = line or 'none'
         if 'views' in rec:
             views[name] = rec['views']
             if rec['partial']:
@@ -7502,9 +7659,8 @@ def use_texts(model):
                 # In an error line, which says nothing of the back leg.
                 codesets.setdefault(name, rec['label'])
                 unknown.setdefault(rec['back_why'], []).append(name)
-                rows.append({'names': [name], 'rows': [(
-                    'upper/lower/ILIKE not checked', '-',
-                    rec['back_why'].translate(TEXT_ESCAPES), '-', '-', '-', '-')]})
+                items.append({'name': name, 'kind': 'not checked',
+                              'why': rec['back_why']})
             # A file before the converter part says nothing of the rest of
             # the text on a side whose forward leg works in some database,
             # whatever line the locale is in (16.24: only on the new
@@ -7531,9 +7687,8 @@ def use_texts(model):
         elif line == 'unknown':
             codesets[name] = rec['label']
             unknown.setdefault(rec['why'], []).append(name)
-            rows.append({'names': [name], 'rows': [(
-                'upper/lower/ILIKE not checked', '-',
-                rec['why'].translate(TEXT_ESCAPES), '-', '-', '-', '-')]})
+            items.append({'name': name, 'kind': 'not checked',
+                          'why': rec['why']})
         elif line is not None:
             groups[line].append(name)
     if groups['changed']:
@@ -7548,11 +7703,12 @@ def use_texts(model):
                          'machine\'s glibc cannot convert that encoding. '
                          + GCONV + ' ' + codeset_said(listed) + '.',
                          'use_error_new', {'groups': listed}), True))
-    if groups['back']:
+    data['back'] = by_codeset_data(groups['back'], codesets)
+    if data['back']:
         out.append((f'{FN} convert text on the new machine in '
-                    f'{len(groups["back"])} locale(s) whose encoding the old '
-                    'machine\'s glibc could not convert: '
-                    + by_codeset(groups['back'], codesets) + '.', False))
+                    f'{sum(len(g["names"]) for g in data["back"])} locale(s) '
+                    'whose encoding the old machine\'s glibc could not convert: '
+                    + codeset_said(data['back']) + '.', False))
     if groups['both']:
         listed = by_codeset_data(groups['both'], codesets)
         out.append((Bang(f'!! {FN} give an ERROR on both machines in '
@@ -7634,7 +7790,7 @@ def use_texts(model):
                          + entries_said(entries, partial_said) + '.',
                          'use_error_partial', {'entries': entries}),
                     True, 'byte sequence'))
-        rows += refused_rows_of(partial, views, model.machines)
+        data['groups'] = refused_groups_of(partial, views, model.machines)
         # Counted there, never as converting.
         groups['converts'] = [n for n in groups['converts'] if n not in partial]
     if back_error:
@@ -7679,7 +7835,7 @@ def use_texts(model):
                     'bytes). ' + entries_said(entries, wrong_said) + '.',
                     'use_wrong_result', {'entries': entries}),
                     True, 'character'))
-        rows += back_rows_of(back_error)
+        data['back_groups'] = back_groups_of(back_error)
         groups['converts'] = [n for n in groups['converts'] if n not in back_error]
     if back_change:
         said = {}
@@ -7697,11 +7853,9 @@ def use_texts(model):
                          + entries_said(entries, changed_said) + '.',
                          'use_back_changed', {'entries': entries}),
                     True, 'character'))
-        rows += [{'names': [name], 'rows': [(
-            'upper/lower back changed', f'U+{c:04X}',
-            f'bytes {back_bytes(a)} -> {back_bytes(b)}', '-', '-', '-',
-            'on both machines') for c, a, b in chg]}
-                 for name, chg in sorted(back_change.items())]
+        data['back_changed'] = [{'name': name, 'characters': [
+            {'char': c, 'old': back_side(a), 'new': back_side(b)}
+            for c, a, b in chg]} for name, chg in sorted(back_change.items())]
         groups['converts'] = [n for n in groups['converts'] if n not in back_change]
     # A file of the format before the converter part tried one character,
     # which says nothing of the sequences glibc refuses: a locale that the
@@ -7733,11 +7887,9 @@ def use_texts(model):
                                     f'{codeset_said(p["groups"])}.'
                                     for p in places),
                          'use_partial_unknown', {'places': places}), True))
-        rows += [{'names': [n], 'rows': [(
-            'upper/lower/ILIKE not checked', '-',
-            f'whether part of the text gives an error: not known {where}',
-            '-', '-', '-', '-')]} for where, group in sorted(untold.items())
-                 for n in sorted(group)]
+        data['part_unknown'] = [{'name': n, 'side': WHERE_SIDE[where[3:]]}
+                                for where, group in sorted(untold.items())
+                                for n in sorted(group)]
         groups['converts'] = [n for n in groups['converts']
                               if not any(n in g for g in untold.values())]
     def compact():
@@ -7772,17 +7924,14 @@ def use_texts(model):
                          + '.', 'use_back_not_checked',
                          {'side': side_of(sides), 'utf8': len(utf8_earlier),
                           'encodings': encodings}), True, 'locale'))
-        rows.extend({'names': [n], 'rows': [(
-            'upper/lower back not checked', '-',
-            ('whether glibc reads all the text as it is, and ' if n in utf8_earlier
-             else '')
-            + f'whether the result converts back to bytes: not known '
-            f'{where_text(either[n])}', '-', '-', '-', '-')]}
-                    for n in sorted(either))
+        data['back_not_checked'] = [
+            {'name': n, 'utf8': n in utf8_earlier,
+             'side': WHERE_SIDE[where_text(either[n])[3:]]}
+            for n in sorted(either)]
 
     if earlier:
         compact()
-        return out, rows
+        return out, use_rows_of(data), use_held(data)
     if unknown:
         reasons = [{'why': why, 'groups': by_codeset_data(group, codesets)}
                    for why, group in sorted(unknown.items())]
@@ -7792,21 +7941,25 @@ def use_texts(model):
                                     for x in reasons),
                          'use_not_checked', {'reasons': reasons}), True))
     compact()
+    data.update(converts=len(groups['converts']),
+                one_byte=len(groups['one byte']),
+                left_out=by_codeset_data(groups['left out'], codesets),
+                elsewhere=len(groups['elsewhere']))
     line = (f'{FN}: text that is not ASCII converts on both machines in '
-            f'{len(groups["converts"])} locale(s); in the '
-            f'{len(groups["one byte"])} of an encoding of one byte PostgreSQL '
+            f'{data["converts"]} locale(s); in the '
+            f'{data["one_byte"]} of an encoding of one byte PostgreSQL '
             'never converts it in a database of that encoding.')
-    if groups['left out']:
-        line += (f' Left out: {len(groups["left out"])} locale(s) of an '
-                 'encoding PostgreSQL allows only on the client, so no '
-                 'database converts text with them ('
-                 + by_codeset(groups['left out'], codesets) + ').')
-    if groups['elsewhere']:
-        line += (f' The {len(groups["elsewhere"])} locale(s) of an encoding '
+    if data['left_out']:
+        line += (f' Left out: {sum(len(g["names"]) for g in data["left_out"])} '
+                 'locale(s) of an encoding PostgreSQL allows only on the '
+                 'client, so no database converts text with them ('
+                 + codeset_said(data['left_out']) + ').')
+    if data['elsewhere']:
+        line += (f' The {data["elsewhere"]} locale(s) of an encoding '
                  'PostgreSQL does not know are in the line on a database of '
                  'another encoding.')
     out.append((line, False))
-    return out, rows
+    return out, use_rows_of(data), use_held(data)
 
 
 CTYPE_LINE = 'Character rules (LC_CTYPE)'
@@ -11357,7 +11510,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
               ('money', money_texts(check_data['money'])),
               ('postgres libc',
                [(text, warning) for text, warning, above in libc if not above]))
-    use, use_rows = use_texts(model)
+    use, use_rows, check_data['postgres_use'] = use_texts(model)
     checks += (('postgres use', use),)
     ctype, ctype_rows, ctype_sql = ctype_texts(old, new, both, refused,
                                                model)

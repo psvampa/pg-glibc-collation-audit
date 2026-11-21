@@ -1757,9 +1757,10 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     machine's name and number of locales, and the line of totals of both;
     then the findings it wrote beside them (step11_groups_held), with
     the characters file's text (`characters`, None where none was
-    written); and the checks beside the order (step11_checks_held), read
-    by report_data's reader too, against the run's `!!` (WARNINGS, as
-    report.json holds step 11's warnings).
+    written); and the checks beside the order (step11_checks_held) and
+    upper(), lower() and ILIKE (step11_use_held), read by report_data's
+    reader too, against the run's `!!` (WARNINGS, as report.json holds
+    step 11's warnings).
     A file that is not there is right only where no report was printed
     (a comparison refused). UNREAD is why the readers cannot read this
     report (a test whose locale names they cannot split): then the file
@@ -1828,6 +1829,9 @@ def step11_counts_held(report, summary, path, where, *, warnings,
                        characters)
     step11_checks_held(r, s if summary is not None else None, files,
                        rd.step11_data(path)['checks'], path, where)
+    step11_use_held(r, s if summary is not None else None, files,
+                    rd.step11_data(path)['checks']['postgres_use'], path,
+                    where)
     return c
 
 
@@ -1955,6 +1959,135 @@ def step11_checks_held(r, s, files, checks, path, where):
         if got != want:
             raise AssertionError(f'{where}: the {text} prints the checks '
                                  f'{got!r}, {path} holds {want!r}')
+
+
+# The rows of the characters file on upper(), lower() and ILIKE, and the
+# words the tests give each machine and an escape of a reason (the tests'
+# own, beside locale_order's).
+USE_ROW_FINDINGS = ('upper/lower/ILIKE error', 'upper/lower/ILIKE not checked',
+                    'upper/lower/ILIKE group', 'upper/lower back not checked',
+                    'upper/lower back group', 'upper/lower back error',
+                    'upper/lower back changed')
+USE_WHERE = {'both': 'on both machines', 'old': 'on the old machine',
+             'new': 'on the new machine'}
+USE_ESCAPES = {9: '\\t', 10: '\\n', 13: '\\r', 92: '\\\\'}
+
+
+def _use_measured(before, now):
+    if 'not measured' not in (before, now):
+        return USE_WHERE['both']
+    return USE_WHERE['old' if now == 'not measured' else 'new']
+
+
+def _use_spaced(h):
+    return ' '.join(f'{b:02X}' for b in bytes.fromhex(h))
+
+
+def _use_rows_said(u):
+    """{locales: [row]}: the rows parse_characters reads of upper(),
+    lower() and ILIKE, as step 11's data U say them."""
+    out = {}
+
+    def row(key, finding, **kw):
+        r = {'finding': finding, 'how': None, 'test': None, 'before': None,
+             'now': None, 'measured': None}
+        r.update(kw)
+        out.setdefault(key, []).append(r)
+    for x in u.get('rows', []):
+        if x['kind'] == 'not checked':
+            row((x['name'],), 'upper/lower/ILIKE not checked',
+                why=x['why'].translate(USE_ESCAPES))
+            continue
+        for r in x['rows']:
+            row((x['name'],), 'upper/lower/ILIKE error',
+                chars=[r['char']] if 'char' in r else [],
+                bytes=_use_spaced(r['bytes']), before=r['before'],
+                now=r['now'], measured=_use_measured(r['before'], r['now']))
+    for i, g in enumerate(u.get('groups', []), 1):
+        label = f'upper_lower_ILIKE_group_{i}'
+        row(tuple(g['names']), 'upper/lower/ILIKE group', label=label,
+            encoding=g['encoding'])
+        for h, b, n in sorted(((bytes.fromhex(h), s['before'], s['now'])
+                               for s in g['sequences'] for h in s['bytes'])):
+            row((label,), 'upper/lower/ILIKE error', chars=[],
+                bytes=_use_spaced(h.hex()), before=b, now=n,
+                measured=_use_measured(b, n))
+    for i, g in enumerate(u.get('back_groups', []), 1):
+        label = f'upper_lower_back_group_{i}'
+        row(tuple(g['names']), 'upper/lower back group', label=label,
+            encoding=g['encoding'])
+        for c in g['characters']:
+            how = '; '.join(
+                f"{t['fn']}(): U+{t['to']:04X}"
+                + (' (itself)' if t['to'] == c['char'] else '')
+                + f", which glibc's converter of {g['encoding']} does not "
+                  'turn back into bytes' for t in c['through'])
+            row((label,), 'upper/lower back error', chars=[c['char']],
+                how=how, before=c['before'], now=c['now'],
+                measured=_use_measured(c['before'], c['now']))
+
+    def side(x):
+        return (_use_spaced(x['bytes']) if x['state'] == 'bytes'
+                else x['state'])
+    for x in u.get('back_changed', []):
+        for c in x['characters']:
+            row((x['name'],), 'upper/lower back changed', chars=[c['char']],
+                how=f"bytes {side(c['old'])} -> {side(c['new'])}",
+                measured=USE_WHERE['both'])
+    for x in u.get('part_unknown', []):
+        row((x['name'],), 'upper/lower/ILIKE not checked',
+            why='whether part of the text gives an error: not known '
+                + USE_WHERE[x['side']])
+    for x in u.get('back_not_checked', []):
+        row((x['name'],), 'upper/lower back not checked',
+            why=('whether glibc reads all the text as it is, and '
+                 if x['utf8'] else '')
+            + 'whether the result converts back to bytes: not known '
+            + USE_WHERE[x['side']])
+    return out
+
+
+def step11_use_held(r, s, files, u, path, where):
+    """step 11's data on upper(), lower() and ILIKE (use_texts), as it
+    wrote them to PATH, against what check_kind reads of the line on what
+    converts and of the line on what converts back, in the report, the
+    summary and the characters file's notes, and against every row
+    parse_characters reads of them (S, FILES None where not written)."""
+    want = []
+    if u['state'] == 'checked':
+        d = {'converts': u['converts'], 'one byte': u['one_byte'],
+             'left out': {n: g['encoding'] for g in u['left_out']
+                          for n in g['names']}}
+        if u['elsewhere']:
+            d['elsewhere'] = u['elsewhere']
+        want.append(d)
+    if u['state'] != 'not checked' and u['back']:
+        want.append({'back': {n: g['encoding'] for g in u['back']
+                              for n in g['names']}})
+    want = sorted(json.dumps(x, sort_keys=True) for x in want)
+    for text, found in (('report', r['checks']),
+                        ('summary', s['checks'] if s is not None else None),
+                        ('characters file',
+                         files.checks if files is not None else None)):
+        if found is None:
+            continue
+        got = sorted(json.dumps(d, sort_keys=True) for k, d in found
+                     if k == 'use' and ('converts' in d or 'back' in d))
+        if got != want:
+            raise AssertionError(f'{where}: the {text} prints {got!r}, '
+                                 f'{path} holds {want!r}')
+    if files is not None:
+        got = {k: [x for x in rows if x['finding'] in USE_ROW_FINDINGS]
+               for k, rows in files.items()}
+        got = {k: v for k, v in got.items() if v}
+        said = _use_rows_said(u)
+        if got != said:
+            keys = sorted(set(got) | set(said))
+            bad = next(k for k in keys if got.get(k) != said.get(k))
+            raise AssertionError(f'{where}: the characters file prints the '
+                                 f'rows {got.get(bad)!r} under {bad!r}, '
+                                 f'{path} holds {said.get(bad)!r}')
+
 
 
 def _codeset_label(cs):

@@ -2987,7 +2987,8 @@ def parse_characters(text):
             out.setdefault((names,), []).append(row)
             continue
         if finding == 'upper/lower back changed':
-            side = rf'(?:{SPACED_BYTES[1:-1]}|refused|no bytes)'
+            # Never a refusal: that is a machine's error (back_side).
+            side = rf'(?:{SPACED_BYTES[1:-1]}|no bytes)'
             if (',' in names or not re.fullmatch(CODE, chars)
                     or not re.fullmatch(rf'bytes {side} -> {side}', how)
                     or (test, before, now, measured) != ('-', '-', '-',
@@ -14633,6 +14634,19 @@ class BackPrinted(ConverterCompared):
         self.assertEqual([(r['chars'], r['how']) for r in rows[('ja_JP',)]
                           if r['finding'] == 'upper/lower back changed'],
                          [([0x41], 'bytes 41 -> A3 C1')])
+
+    def test_turned_back_into_no_bytes(self):
+        """The new machine turns A back into no bytes at all: a CHANGE,
+        its row saying 'no bytes', held to step 11's data like any other
+        (no comparison of the suite printed one before, 24.2b-2)."""
+        report, summary, rows = self.outputs(*self.both8(
+            new_edits=[self.back('EUC-JP', **{'U+0041': b''})]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'back change': {'ja_JP': ('EUC-JP', 1),
+                                       'ja_JP.eucjp': ('EUC-JP', 1)}}, use)
+        self.assertEqual([(r['chars'], r['how']) for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower back changed'],
+                         [([0x41], 'bytes 41 -> no bytes')])
 
     def test_turned_back_otherwise_in_two_encodings(self):
         """Two encodings turned back otherwise, by another count each: two

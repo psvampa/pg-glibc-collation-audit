@@ -166,7 +166,14 @@ CHECKS = {'control': {s: {n: {'state': 'byte order'} for n in ('C', 'POSIX')}
                       for s in ('old', 'new')},
           'money': {'state': 'compared', 'compared': 2, 'changed': [],
                     'not_checked': []},
-          'postgres_libc': {'old': _LIBC, 'new': _LIBC, 'note': True}}
+          'postgres_libc': {'old': _LIBC, 'new': _LIBC, 'note': True},
+          'postgres_use': {'state': 'checked', 'rows': [],
+                           'lines': {'C': 'one byte', 'sv_SE': 'converts'},
+                           'added': {}, 'back': [],
+                           'groups': [], 'back_groups': [],
+                           'back_changed': [], 'part_unknown': [],
+                           'back_not_checked': [], 'converts': 1,
+                           'one_byte': 1, 'left_out': [], 'elsewhere': 0}}
 
 
 # One `!!` of each kind as a step writes it (kind, data), with the title
@@ -2012,6 +2019,357 @@ class TheReaderIsStrict(_Folder):
                         self.assertIsInstance(n.args[1], ast.Constant)
                         kinds.append(n.args[1].value)
         self.assertEqual(sorted(kinds), sorted(rd.CHECK_KINDS))
+
+    @staticmethod
+    def use_rich(r):
+        """step11_files' run made to name sv_SE in every row and line of
+        upper(), lower() and ILIKE, each with the `!!` that names it: an
+        error of the new machine with a reason not checked, sequences
+        refused, characters not turned back, one turned back otherwise, a
+        file that tried one character on the old machine and one before
+        the back part on the new: what _use ties, every part present."""
+        def bang(kind, data):
+            r['warnings']['step11']['items'].append(
+                {'kind': kind, 'class': rd.KINDS[kind][0],
+                 'title': rd.KINDS[kind][2](data), 'data': data,
+                 'text': f'!! {kind}'})
+
+        def utf8():
+            # A list of its own for each line, as each line writes it.
+            return [{'encoding': 'UTF-8', 'names': ['sv_SE']}]
+        r['step11']['checks']['postgres_use'] = {
+            'state': 'checked',
+            'rows': [{'name': 'sv_SE', 'kind': 'not checked', 'why': 'w'},
+                     {'name': 'sv_SE', 'kind': 'error', 'rows': [
+                         {'char': 0xE5, 'bytes': 'c3a5', 'before': 'converts',
+                          'now': 'error'}]}],
+            'lines': {'C': 'one byte', 'sv_SE': 'error'}, 'added': {},
+            'back': [],
+            'groups': [{'names': ['sv_SE'], 'encoding': 'UTF-8', 'sequences': [
+                {'before': 'error', 'now': 'error', 'bytes': ['c3a5']},
+                {'before': 'error', 'now': 'not measured', 'bytes': ['c3a6']}]}],
+            'back_groups': [{'names': ['sv_SE'], 'encoding': 'UTF-8',
+                             'characters': [
+                {'char': 0xC5, 'through': [{'fn': 'lower', 'to': 0xE5}],
+                 'before': 'not turned back', 'now': 'turned back'},
+                {'char': 0xE5, 'through': [{'fn': 'upper', 'to': 0xC5}],
+                 'before': 'not turned back', 'now': 'turned back'}]}],
+            'back_changed': [{'name': 'sv_SE', 'characters': [
+                {'char': 0x41, 'old': {'state': 'bytes', 'bytes': '41'},
+                 'new': {'state': 'no bytes'}}]}],
+            'part_unknown': [{'name': 'sv_SE', 'side': 'old'}],
+            'back_not_checked': [{'name': 'sv_SE', 'utf8': True,
+                                  'side': 'new'}],
+            'converts': 0, 'one_byte': 1, 'left_out': [], 'elsewhere': 0}
+        bang('use_error_new', {'groups': utf8()})
+        bang('use_error_partial', {'entries': [{
+            'parts': [{'encoding': 'UTF-8', 'alike': 'within',
+                       'sides': [{'side': 'old', 'count': 2},
+                                 {'side': 'new', 'count': 1}]}],
+            'unknown_on': [], 'names': ['sv_SE']}]})
+        bang('use_wrong_result', {'entries': [{
+            'parts': [{'encoding': 'UTF-8', 'alike': 'one side',
+                       'sides': [{'side': 'old', 'count': 2}]}],
+            'lower': [{'side': 'old', 'count': 1}], 'names': ['sv_SE']}]})
+        bang('use_back_changed', {'entries': [
+            {'encoding': 'UTF-8', 'count': 1, 'names': ['sv_SE']}]})
+        bang('use_partial_unknown', {'places': [{'side': 'old',
+                                                 'groups': utf8()}]})
+        bang('use_back_not_checked', {'side': 'new', 'utf8': 1, 'encodings': [
+            {'encoding': 'UTF-8', 'count': 1}]})
+        bang('use_not_checked', {'reasons': [{'why': 'w', 'groups': utf8()}]})
+
+    def test_use_that_does_not_hang_together(self):
+        """Step 11's data on upper(), lower() and ILIKE, each written
+        wrong alone over a run that names a locale in every row and line,
+        refused for the reason named: every key and state; the line of
+        each locale against the comparison's locales, and the counts of
+        the line on what converts against those lines; each row against
+        the `!!` that names it, the states of an error row as its line
+        gives them, each half of a check of two parts with its own case.
+        The run itself is read whole."""
+        def use(r):
+            return r['step11']['checks']['postgres_use']
+
+        def bang(r, kind):
+            return next(i['data'] for i in r['warnings']['step11']['items']
+                        if i['kind'] == kind)
+
+        def retitle(r):
+            for i in r['warnings']['step11']['items']:
+                if i['kind'].startswith('use_'):
+                    i['title'] = rd.KINDS[i['kind']][2](i['data'])
+
+        def error_row(r):
+            return use(r)['rows'][1]['rows'][0]
+
+        def as_kind(r, kind, data, row):
+            # sv_SE's error under another `!!` (or the line on what
+            # converts back), with the row given.
+            items = r['warnings']['step11']['items']
+            items[:] = [i for i in items if i['kind'] != 'use_error_new']
+            if kind == 'back':
+                use(r)['back'] = [{'encoding': 'UTF-8', 'names': ['sv_SE']}]
+            else:
+                data = dict(data, groups=[{'encoding': 'UTF-8',
+                                           'names': ['sv_SE']}])
+                items.append({'kind': kind, 'class': rd.KINDS[kind][0],
+                              'title': rd.KINDS[kind][2](data),
+                              'data': data, 'text': f'!! {kind}'})
+            use(r)['rows'][1]['rows'] = row
+
+        def r_(before, now, b='c3a5', **k):
+            return dict({'bytes': b, 'before': before, 'now': now}, **k)
+        keys, rows = 'has the keys', r'its line'
+        cases = [
+            # Every key and state.
+            (r'postgres_use\.state is', lambda r: use(r).update(state='same')),
+            (keys, lambda r: use(r).pop('lines')),
+            (keys, lambda r: use(r).update(earlier='old')),
+            (r'converts is -1', lambda r: use(r).update(converts=-1)),
+            (r'one_byte is True', lambda r: use(r).update(one_byte=True)),
+            ('not by encoding', lambda r: use(r).update(left_out=[
+                {'encoding': 'B', 'names': ['x']},
+                {'encoding': 'A', 'names': ['y']}])),
+            ('not by encoding', lambda r: use(r).update(back=[
+                {'encoding': 'A', 'names': ['y', 'x']}])),
+            (r'earlier is', lambda r: r['step11']['checks'].update(
+                postgres_use={**{k: v for k, v in use(r).items() if k not in (
+                    'converts', 'one_byte', 'left_out', 'elsewhere')},
+                    'state': 'partly', 'earlier': 'both'})),
+            (r'lines is', lambda r: use(r)['lines'].update(C='fine')),
+            (r'added is', lambda r: use(r).update(added=[])),
+            ('a line twice', lambda r: use(r)['added'].update(C='none')),
+            (r'kind is', lambda r: use(r)['rows'][0].update(kind='odd')),
+            (r'rows\[1\]\.rows is', lambda r: use(r)['rows'][1]['rows'].extend(
+                [r_('error', 'error'), r_('error', 'converts')])),
+            (r'rows\[1\]\.rows is', lambda r: error_row(r).update(
+                before='converts', now='converts')),
+            (r'rows\[1\]\.rows is', lambda r: error_row(r).update(
+                bytes='C3A5')),
+            (r'rows\[1\]\.rows is', lambda r: error_row(r).update(char=True)),
+            (r'rows\[1\]\.rows is', lambda r: error_row(r).update(odd=1)),
+            (r'rows\[0\]\.why is', lambda r: use(r)['rows'][0].update(why='')),
+            (keys, lambda r: use(r)['rows'][0].update(rows=[])),
+            ('again', lambda r: use(r)['rows'].append(
+                {'name': 'sv_SE', 'kind': 'not checked', 'why': 'v'})),
+            (r'groups\[0\] is', lambda r: use(r)['groups'][0]['sequences'][0]
+             .update(bytes=['c3a6', 'c3a5'])),
+            (r'groups\[0\] is', lambda r: use(r)['groups'][0]['sequences'][0]
+             .update(now='lost')),
+            ('not grouped by state', lambda r: use(r)['groups'][0].update(
+                sequences=use(r)['groups'][0]['sequences'][::-1])),
+            ('not grouped by state', lambda r: use(r)['groups'][0][
+                'sequences'][1].update(bytes=['c3a5'])),
+            ('not grouped by state', lambda r: use(r)['groups'][0][
+                'sequences'][0].update(before='converts', now='converts')),
+            (r'back_groups\[0\] is', lambda r: use(r)['back_groups'][0][
+                'characters'][0].update(before='turned back')),
+            (r'back_groups\[0\] is', lambda r: use(r)['back_groups'][0][
+                'characters'][0]['through'][0].update(fn='title')),
+            (r'back_changed is', lambda r: use(r)['back_changed'][0][
+                'characters'][0].update(new={'state': 'refused'})),
+            (r'back_changed is', lambda r: use(r)['back_changed'][0][
+                'characters'][0].update(new={'state': 'bytes',
+                                             'bytes': '41'})),
+            (r"part_unknown is \[\{'name'", lambda r: use(r)[
+                'part_unknown'][0].update(side='either')),
+            ('not by encoding', lambda r: use(r).update(left_out=[
+                {'encoding': 'A', 'names': ['x']},
+                {'encoding': 'B', 'names': ['x']}])),
+            (r'left_out is \[\{', lambda r: use(r).update(left_out=[
+                {'encoding': 'A', 'names': []}])),
+            (r'groups is \{\}', lambda r: use(r).update(groups={})),
+            (keys, lambda r: use(r)['rows'][1].update(why='w')),
+            ("names '' again", lambda r: use(r)['rows'][0].update(name='')),
+            (r'back_not_checked is', lambda r: use(r)['back_not_checked'][0]
+             .update(utf8=1)),
+            # The lines, against the comparison and the counts.
+            (r'locale\(s\) on both machines and', lambda r: use(r)[
+                'lines'].update(X='none')),
+            (r'locale\(s\) on both machines and', lambda r: use(r)[
+                'added'].update(X='none')),
+            (r'rows \(errors\) is .* the lines say', lambda r: use(r)[
+                'lines'].update(sv_SE='unknown')),
+            ('not checked, and the lines', lambda r: use(r)['lines'].update(
+                C='unknown', sv_SE='error')),
+            ('not checked, and the lines', lambda r: use(r)['rows'].append(
+                {'name': 'C', 'kind': 'not checked', 'why': 'w'})),
+            ('leaves out', lambda r: use(r)['lines'].update(
+                C='back unknown')),
+            ('a locale whose line is not an error', lambda r: use(r).update(
+                back=[{'encoding': 'UTF-8', 'names': ['C']}])),
+            (r'converts is 1, the lines', lambda r: use(r).update(converts=1)),
+            (r'one_byte is 0, the lines', lambda r: use(r).update(one_byte=0)),
+            (r'elsewhere is 1, the lines', lambda r: use(r).update(
+                elsewhere=1)),
+            (r'left_out is \[', lambda r: use(r).update(left_out=[
+                {'encoding': 'BIG5', 'names': ['C']}])),
+            # Each row against the `!!` that names it.
+            ('printed the earlier format', lambda r: (
+                r['warnings']['step11']['items'].append(
+                    {'kind': 'use_earlier_format', 'class': 'not checked',
+                     'title': rd.KINDS['use_earlier_format'][2](
+                         {'side': 'old'}),
+                     'data': {'side': 'old'}, 'text': '!! x'}))),
+            (r'rows \(errors\) is .* the `!!` say', lambda r: bang(
+                r, 'use_error_new')['groups'][0].update(names=['C'])),
+            (rows, lambda r: error_row(r).update(before='error')),
+            (rows, lambda r: as_kind(r, 'use_error_both', {},
+                                     [r_('converts', 'error')])),
+            (rows, lambda r: as_kind(r, 'back', {}, [r_('converts', 'error')])),
+            (rows, lambda r: as_kind(r, 'use_error_one_side',
+                                     {'side': 'new', 'reason': 'refused',
+                                      'why': []},
+                                     [r_('error', 'error')])),
+            (rows, lambda r: as_kind(r, 'use_error_one_side',
+                                     {'side': 'new', 'reason': 'refused',
+                                      'why': []},
+                                     [r_('error', 'not measured')])),
+            (rows, lambda r: as_kind(r, 'use_error_one_side',
+                                     {'side': 'old', 'reason': 'refused',
+                                      'why': []},
+                                     [r_('error', 'not measured'),
+                                      r_('error', 'not measured', 'c3a6')])),
+            (rows, lambda r: as_kind(r, 'use_error_one_side',
+                                     {'side': 'new', 'reason': 'refused',
+                                      'why': []},
+                                     [r_('converts', 'error')])),
+            (rows, lambda r: as_kind(r, 'use_error_one_side',
+                                     {'side': 'old', 'reason': 'refused',
+                                      'why': []},
+                                     [r_('error', 'converts')])),
+            (rows, lambda r: as_kind(r, 'use_error_one_side',
+                                     {'side': 'new', 'reason': 'absent',
+                                      'why': []},
+                                     [r_('converts', 'error')])),
+            (rows, lambda r: as_kind(r, 'use_error_any_db',
+                                     {'side': 'new', 'why': 'w'},
+                                     [r_('error', 'converts')])),
+            (rows, lambda r: as_kind(r, 'use_error_any_db',
+                                     {'side': 'new', 'why': 'w'},
+                                     [r_('not measured', 'error'),
+                                      r_('error', 'error', 'c3a6')])),
+            (rows, lambda r: as_kind(r, 'use_error_moved',
+                                     {'side': 'both', 'from': 'A', 'to': 'B',
+                                      'why': []},
+                                     [r_('not measured', 'error')])),
+            (r'rows \(not checked\)', lambda r: use(r)['rows'][0].update(
+                why='v')),
+            (r'groups \(names\)', lambda r: bang(r, 'use_error_partial')[
+                'entries'][0].update(names=['C'])),
+            ('do not give sv_SE', lambda r: use(r)['groups'][0].update(
+                encoding='EUC-JP')),
+            (r'groups\[0\] \(sv_SE\)', lambda r: bang(r, 'use_error_partial')[
+                'entries'][0]['parts'][0]['sides'][0].update(count=3)),
+            (r'groups\[0\] \(sv_SE\)', lambda r: use(r)['groups'][0].update(
+                sequences=[{'before': 'error', 'now': 'error',
+                            'bytes': ['c3a5', 'c3a6']}])),
+            ('refuse the same sequences', lambda r: (
+                use(r)['groups'][0].update(sequences=[
+                    {'before': 'converts', 'now': 'error', 'bytes': ['c3a6']},
+                    {'before': 'error', 'now': 'converts', 'bytes': ['c3a5']}]),
+                bang(r, 'use_error_partial')['entries'][0]['parts'][0].update(
+                    alike='same', sides=[{'side': 'old', 'count': 1},
+                                         {'side': 'new', 'count': 1}]))),
+            (r'back_groups \(names\)', lambda r: bang(r, 'use_wrong_result')[
+                'entries'][0].update(names=['C'])),
+            ('do not give sv_SE', lambda r: use(r)['back_groups'][0].update(
+                encoding='EUC-JP')),
+            (r'back_groups\[0\] \(sv_SE\)', lambda r: use(r)['back_groups'][0][
+                'characters'][0].update(before='turned back',
+                                        now='not turned back')),
+            (r'through lower\(\)', lambda r: use(r)['back_groups'][0][
+                'characters'][0]['through'][0].update(fn='upper')),
+            (r'through lower\(\)', lambda r: (
+                use(r)['back_groups'][0]['characters'][0].update(
+                    now='not turned back'),
+                use(r)['back_groups'][0]['characters'][1].update(
+                    now='not turned back'),
+                bang(r, 'use_wrong_result')['entries'][0].update(
+                    parts=[{'encoding': 'UTF-8', 'alike': 'same', 'sides': [
+                        {'side': 'old', 'count': 2},
+                        {'side': 'new', 'count': 2}]}],
+                    lower=[{'side': 'old', 'count': 1},
+                           {'side': 'new', 'count': 0}]))),
+            (r'back_changed is .* the `!!`', lambda r: bang(
+                r, 'use_back_changed')['entries'][0].update(count=2)),
+            (r'part_unknown is .* the `!!`', lambda r: use(r)['part_unknown'][0]
+             .update(side='new')),
+            (r'back_not_checked is .* the `!!`', lambda r: bang(
+                r, 'use_back_not_checked').update(utf8=0)),
+            (r'back_not_checked is .* the `!!`', lambda r: bang(
+                r, 'use_back_not_checked').update(side='both')),
+            (r'back_not_checked is .* the `!!`', lambda r: bang(
+                r, 'use_back_not_checked')['encodings'][0].update(count=2,
+                                                                 encoding='B')),
+        ]
+        good = copy.deepcopy(self.good)
+        self.use_rich(good)
+        p = os.path.join(self.d, 'rich.json')
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(good, f)
+        self.assertEqual(rd.load(p), good)
+        # C in the line on what converts, and in the line of a file that
+        # tried one character, which takes its place there: read whole,
+        # not counted as converting.
+        apart = copy.deepcopy(good)
+        use(apart)['lines']['C'] = 'converts'
+        use(apart).update(one_byte=0)
+        use(apart)['part_unknown'].append({'name': 'C', 'side': 'old'})
+        bang(apart, 'use_partial_unknown')['places'][0]['groups'][0][
+            'names'].insert(0, 'C')
+        retitle(apart)
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(apart, f)
+        self.assertEqual(rd.load(p), apart)
+        # sv_SE's error on the new machine alone, where what the old one
+        # does is not known because its file tried one character: the old
+        # machine's column converts (UNSAID), read whole.
+        unsaid = copy.deepcopy(good)
+        as_kind(unsaid, 'use_error_one_side',
+                {'side': 'new', 'reason': 'unknown', 'why': ['w']},
+                [r_('converts', 'error')])
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(unsaid, f)
+        self.assertEqual(rd.load(p), unsaid)
+        for why, change in cases:
+            with self.subTest(why=why, line=change.__code__.co_firstlineno):
+                r = copy.deepcopy(good)
+                change(r)
+                retitle(r)
+                p = os.path.join(self.d, 'changed.json')
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(r, f)
+                with self.assertRaisesRegex(rd.ReportError, why):
+                    rd.load(p)
+
+    def test_the_use_constants_are_locale_orders(self):
+        """The states, kinds and lines the reader allows for upper(),
+        lower() and ILIKE are those locale_order writes, and the `!!` whose
+        locales get an error row each are every such kind use_texts
+        prints: one it added and the reader did not would refuse a real
+        run, or leave its rows untied."""
+        import ast
+        import locale_order as lo
+        for name in ('USE_STATES', 'USE_LOCALE_KINDS', 'USE_LINES',
+                     'SEQUENCE_STATES', 'BACK_STATES'):
+            with self.subTest(name=name):
+                self.assertEqual(getattr(rd, name), getattr(lo, name))
+        src = os.path.join(os.path.dirname(rd.__file__), 'locale_order.py')
+        with open(src, encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        kinds = []
+        for fn in tree.body:
+            if isinstance(fn, ast.FunctionDef) and fn.name == 'use_texts':
+                for n in ast.walk(fn):
+                    if (isinstance(n, ast.Call)
+                            and getattr(n.func, 'id', None) == 'Bang'):
+                        self.assertIsInstance(n.args[1], ast.Constant)
+                        kinds.append(n.args[1].value)
+        self.assertEqual(sorted(k for k in kinds if k.startswith('use_error_')
+                                and k != 'use_error_partial'),
+                         sorted(rd.USE_ERROR_KINDS))
 
     def test_a_value_outside_its_list(self):
         self.refuses(lambda r: r['run'].update(order='reversed'))
