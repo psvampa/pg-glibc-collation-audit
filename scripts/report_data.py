@@ -17,7 +17,8 @@ there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
 gives each kind its list and its short title. Step 11's counts are
 data too, and so is each group of locales it found changed, with what
 moved in it, and each check beside the order (the control, the decimals
-of money, the PostgreSQL processes): step11.<pair>.data.json.
+of money, the PostgreSQL processes, upper(), lower() and ILIKE):
+step11.<pair>.data.json.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -434,8 +435,8 @@ def step11_findings(path):
 
 def step11_checks(path):
     """The checks step 11 wrote to PATH (locale_order.control_data,
-    money_data, libc_data), as a block of the report: load() checks every
-    one of them."""
+    money_data, libc_data, use_texts), as a block of the report: load()
+    checks every one of them."""
     return {'state': 'reported', **step11_data(path)['checks']}
 
 
@@ -519,8 +520,11 @@ def _checks(where, c, counts, warned):
     data decide them; and the `!!` of step 11's warnings of the three
     checks exactly those the data print (_check_bangs), where step 11
     reported its warnings, and the money compared only where it reported
-    its counts."""
-    _keys(where, c, ['state', 'control', 'money', 'postgres_libc'])
+    its counts; and upper(), lower() and ILIKE (use_texts), held by
+    _use."""
+    _keys(where, c, ['state', 'control', 'money', 'postgres_libc',
+                     'postgres_use'])
+    _use(f'{where}.postgres_use', c['postgres_use'], counts, warned)
     w = f'{where}.control'
     _keys(w, c['control'], ['old', 'new'])
     for side in ('old', 'new'):
@@ -621,6 +625,363 @@ def _checks(where, c, counts, warned):
         if got != want:
             raise ReportError(f'{where} print other `!!` than step 11 '
                               f'wrote: {want!r}, not {got!r}')
+
+
+# What step 11 could check of upper(), lower() and ILIKE, what a row of a
+# locale is, the line each locale goes to, and what each machine does with a
+# byte sequence and with a character on the way back
+# (locale_order.USE_STATES, USE_LOCALE_KINDS, USE_LINES, SEQUENCE_STATES,
+# BACK_STATES); the states of a sequence a row can print, one machine at
+# least refusing it (an error row in parse_characters).
+USE_STATES = ('checked', 'partly', 'not checked')
+USE_LOCALE_KINDS = ('error', 'not checked')
+USE_LINES = ('one byte', 'left out', 'error', 'unknown', 'elsewhere',
+             'converts', 'back unknown', 'none')
+SEQUENCE_STATES = ('converts', 'error', 'not measured')
+BACK_STATES = ('not turned back', 'turned back', 'not read', 'not measured')
+USE_PAIRS = (('converts', 'error'), ('error', 'converts'), ('error', 'error'),
+             ('not measured', 'error'), ('error', 'not measured'))
+# The `!!` of use_texts whose locales get an error row each; the row the
+# first two give (use_records' groups 'changed' and 'both') and the line on
+# what converts back ('back', which has no `!!`); and what the other
+# machine's column of a row of one machine's error holds, by the reason
+# of its line: a machine that refused the locale or does not have it
+# measured nothing; one whose result is not known measured nothing, or
+# converts where a file of an earlier format tried one character
+# (UNSAID), and the reader does not tell those two apart.
+USE_ERROR_KINDS = ('use_error_new', 'use_error_both', 'use_error_moved',
+                   'use_error_any_db', 'use_error_one_side')
+USE_ERROR_ROWS = {'use_error_new': ('converts', 'error'),
+                  'use_error_both': ('error', 'error'),
+                  'back': ('error', 'converts')}
+USE_ONE_SIDE_OTHER = {'refused': ('not measured',),
+                      'absent': ('not measured',),
+                      'unknown': ('not measured', 'converts')}
+USE_LISTS = ['rows', 'lines', 'added', 'back', 'groups', 'back_groups',
+             'back_changed', 'part_unknown', 'back_not_checked']
+
+
+def _hex(v):
+    return (isinstance(v, str) and v != '' and len(v) % 2 == 0
+            and all(c in '0123456789abcdef' for c in v))
+
+
+def _sorted_groups(where, v):
+    """by_codeset_data's groups, or none: each encoding once, in order,
+    its names sorted, each name once over all."""
+    if not _maybe(_GROUPS)(v):
+        raise ReportError(f'{where} is {v!r}')
+    encs = [g['encoding'] for g in v]
+    names = [x for g in v for x in g['names']]
+    if encs != sorted(set(encs)) or len(names) != len(set(names)) or any(
+            g['names'] != sorted(g['names']) for g in v):
+        raise ReportError(f'{where} is not by encoding: {v!r}')
+
+
+def _back_side_ok(x):
+    """What a machine gives back of a character both turn back otherwise
+    (locale_order.back_side): bytes, or none; never a refusal."""
+    return isinstance(x, dict) and (
+        x == {'state': 'no bytes'}
+        or (set(x) == {'state', 'bytes'} and x['state'] == 'bytes'
+            and _hex(x['bytes'])))
+
+
+def _use_shape(where, u):
+    """Every key and state of step 11's data on upper(), lower() and
+    ILIKE, as its state picks them."""
+    lists = {'checked': USE_LISTS + ['converts', 'one_byte', 'left_out',
+                                     'elsewhere'],
+             'partly': USE_LISTS + ['earlier'], 'not checked': []}
+    if not isinstance(u, dict):
+        raise ReportError(f'{where} is {u!r}')
+    _one_of(f'{where}.state', u.get('state'), USE_STATES)
+    _keys(where, u, ['state', *lists[u['state']]])
+    if u['state'] == 'not checked':
+        return
+    if u['state'] == 'checked':
+        for k in ('converts', 'one_byte', 'elsewhere'):
+            if not _is_count(u[k]):
+                raise ReportError(f'{where}.{k} is {u[k]!r}')
+        _sorted_groups(f'{where}.left_out', u['left_out'])
+    else:
+        _one_of(f'{where}.earlier', u['earlier'], ('old', 'new'))
+    _sorted_groups(f'{where}.back', u['back'])
+    for k in ('lines', 'added'):
+        if not (isinstance(u[k], dict) and all(
+                _is_str(n) and v in USE_LINES for n, v in u[k].items())):
+            raise ReportError(f'{where}.{k} is {u[k]!r}')
+    if set(u['lines']) & set(u['added']):
+        raise ReportError(f'{where} gives a locale a line twice')
+    for k in USE_LISTS:
+        if not isinstance(u[k], (dict if k in ('lines', 'added') else list)):
+            raise ReportError(f'{where}.{k} is {u[k]!r}')
+    seen = set()
+    for i, x in enumerate(u['rows']):
+        at = f'{where}.rows[{i}]'
+        if not isinstance(x, dict):
+            raise ReportError(f'{at} is {x!r}')
+        _one_of(f'{at}.kind', x.get('kind'), USE_LOCALE_KINDS)
+        if x['kind'] == 'error':
+            _keys(at, x, ['name', 'kind', 'rows'])
+            if not (isinstance(x['rows'], list) and 1 <= len(x['rows']) <= 2
+                    and all(isinstance(r, dict)
+                            and set(r) - {'char'} == {'bytes', 'before', 'now'}
+                            and _is_count(r.get('char', 0))
+                            and _hex(r['bytes'])
+                            and (r['before'], r['now']) in USE_PAIRS
+                            for r in x['rows'])):
+                raise ReportError(f'{at}.rows is {x["rows"]!r}')
+        else:
+            _keys(at, x, ['name', 'kind', 'why'])
+            if not _is_str(x['why']):
+                raise ReportError(f'{at}.why is {x["why"]!r}')
+        if not _is_str(x['name']) or (x['name'], x['kind']) in seen:
+            raise ReportError(f'{at} names {x.get("name")!r} again')
+        seen.add((x['name'], x['kind']))
+    seq = _objects(before=_one_of_f(*SEQUENCE_STATES),
+                   now=_one_of_f(*SEQUENCE_STATES),
+                   bytes=lambda v: isinstance(v, list) and bool(v)
+                   and all(map(_hex, v)) and v == sorted(set(v)))
+    for i, g in enumerate(u['groups']):
+        at = f'{where}.groups[{i}]'
+        _keys(at, g, ['names', 'encoding', 'sequences'])
+        if not (_is_strs(g['names']) and _is_str(g['encoding'])
+                and seq(g['sequences'])):
+            raise ReportError(f'{at} is {g!r}')
+        pairs = [(x['before'], x['now']) for x in g['sequences']]
+        every = [b for x in g['sequences'] for b in x['bytes']]
+        if (any(p not in USE_PAIRS for p in pairs)
+                or pairs != sorted(set(pairs)) or len(every) != len(set(every))):
+            raise ReportError(f'{at}.sequences is not grouped by state')
+    through = _objects(fn=_one_of_f('upper', 'lower'), to=_is_count)
+    for i, g in enumerate(u['back_groups']):
+        at = f'{where}.back_groups[{i}]'
+        _keys(at, g, ['names', 'encoding', 'characters'])
+        if not (_is_strs(g['names']) and _is_str(g['encoding'])
+                and _objects(char=_is_count, through=through,
+                             before=_one_of_f(*BACK_STATES),
+                             now=_one_of_f(*BACK_STATES))(g['characters'])
+                and all('not turned back' in (x['before'], x['now'])
+                        for x in g['characters'])):
+            raise ReportError(f'{at} is {g!r}')
+    if not _maybe(_objects(name=_is_str, characters=_objects(
+            char=_is_count, old=_back_side_ok, new=_back_side_ok)))(
+                u['back_changed']) or any(
+                    c['old'] == c['new'] for x in u['back_changed']
+                    for c in x['characters']):
+        raise ReportError(f'{where}.back_changed is {u["back_changed"]!r}')
+    if not _maybe(_objects(name=_is_str, side=_SIDES))(u['part_unknown']):
+        raise ReportError(f'{where}.part_unknown is {u["part_unknown"]!r}')
+    if not _maybe(_objects(name=_is_str, utf8=_is_bool, side=_SIDES))(
+            u['back_not_checked']):
+        raise ReportError(f'{where}.back_not_checked is '
+                          f'{u["back_not_checked"]!r}')
+
+
+def _use_lines(where, u, counts):
+    """The line each locale goes to, against the comparison and the rest
+    of the data: one line for each locale on both machines (the counts of
+    the same run), and no more only on the new one than it counts; the
+    counts of the line on what converts those of their lines, less, for
+    what converts, the locales another line names in its place; the
+    locales left out, with an error and not checked those of their lines;
+    each of a file before the back part named by that line."""
+    def tie(what, got, want):
+        if got != want:
+            raise ReportError(f'{where}.{what} is {got!r}, the lines say '
+                              f'{want!r}')
+    every = {**u['lines'], **u['added']}
+
+    def of(line):
+        return sorted(n for n, v in every.items() if v == line)
+    if counts['state'] == 'reported':
+        both = counts['machines']['old']['locales'] - counts['only_old']
+        if len(u['lines']) != both or len(u['added']) > counts['only_new']:
+            raise ReportError(
+                f'{where} gives {len(u["lines"])} locale(s) on both machines '
+                f'and {len(u["added"])} only on the new one a line, not the '
+                f'{both} and at most {counts["only_new"]} the counts give')
+    rows = [x['name'] for x in u['rows'] if x['kind'] == 'error']
+    tie('rows (errors)', sorted(rows), of('error'))
+    unread = {x['name'] for x in u['rows'] if x['kind'] == 'not checked'}
+    if not set(of('unknown')) <= unread or not unread - set(of('unknown')) \
+            <= set(rows):
+        raise ReportError(f'{where}.rows names {sorted(unread)} not checked, '
+                          f'and the lines {of("unknown")}')
+    if not set(of('back unknown')) <= {x['name'] for x in u['back_not_checked']}:
+        raise ReportError(f'{where}.back_not_checked leaves out '
+                          f'{of("back unknown")}')
+    if not {n for g in u['back'] for n in g['names']} <= set(of('error')):
+        raise ReportError(f'{where}.back names a locale whose line is not '
+                          'an error')
+    if u['state'] == 'checked':
+        apart = ({n for g in u['groups'] for n in g['names']}
+                 | {n for g in u['back_groups'] for n in g['names']}
+                 | {x['name'] for x in u['back_changed']}
+                 | {x['name'] for x in u['part_unknown']})
+        tie('converts', u['converts'],
+            len(set(of('converts')) - apart))
+        tie('one_byte', u['one_byte'], len(of('one byte')))
+        tie('elsewhere', u['elsewhere'], len(of('elsewhere')))
+        tie('left_out', sorted(n for g in u['left_out'] for n in g['names']),
+            of('left out'))
+
+
+def _use(where, u, counts, warned):
+    """step 11's data on upper(), lower() and ILIKE (locale_order.use_texts):
+    its state, the keys it picks, every row's states (_use_shape); the
+    line of each locale held to the comparison's locales and the counts
+    of the line on what converts to those lines (_use_lines); and, where
+    step 11 reported its warnings, each row tied to the `!!` printed from
+    the same run: the locales of an error row exactly those of the error
+    lines and of the line on what converts back, each row's states as
+    its line says what each machine does; the not-checked rows those of
+    the line on what is not checked, with its reasons; each group of
+    sequences the counts the line on part of the text gives each
+    machine, and each group of characters those of the line on a wrong
+    result, through lower() too; the characters that convert back
+    otherwise as many as that line counts; the rows of a file that tried
+    one character those of its line, side by side; and those of a file
+    before the back part as many as its line counts, of UTF-8 too, on its
+    machines."""
+    _use_shape(where, u)
+    if u['state'] != 'not checked':
+        _use_lines(where, u, counts)
+    if warned['state'] != 'reported':
+        return
+    bangs = {}
+    for i in warned['items']:
+        if i['kind'].startswith('use_'):
+            bangs.setdefault(i['kind'], []).append(i['data'])
+    early = [d['side'] for d in bangs.get('use_earlier_format', [])]
+    want = ([] if u['state'] == 'checked' else
+            ['both'] if u['state'] == 'not checked' else [u['earlier']])
+    if early != want:
+        raise ReportError(f'{where}.state is {u["state"]!r}, and step 11 '
+                          f'printed the earlier format for {early!r}')
+    if u['state'] == 'not checked':
+        return
+
+    def tie(what, got, want):
+        if got != want:
+            raise ReportError(f'{where}.{what} is {got!r}, the `!!` say '
+                              f'{want!r}')
+    # Each locale of an error row, with the `!!` (or the line on what
+    # converts back) it is in and the machines that line names.
+    line_of = {n: ('back', 'both', None) for g in u['back']
+               for n in g['names']}
+    for k in USE_ERROR_KINDS:
+        for d in bangs.get(k, []):
+            for n in _names(d):
+                line_of[n] = (k, d.get('side', 'both'), d.get('reason'))
+    rows = {x['name']: x['rows'] for x in u['rows'] if x['kind'] == 'error'}
+    tie('rows (errors)', sorted(rows),
+        sorted([n for k in USE_ERROR_KINDS for d in bangs.get(k, [])
+                for n in _names(d)] + [n for g in u['back'] for n in g['names']]))
+    col = {'old': 'before', 'new': 'now'}
+    for n, got in rows.items():
+        kind, side, reason = line_of[n]
+        states = [(r['before'], r['now']) for r in got]
+        if kind in USE_ERROR_ROWS:
+            ok = states == [USE_ERROR_ROWS[kind]]
+        elif kind == 'use_error_one_side':
+            # One machine's error; the other as the line's reason says
+            # (USE_ONE_SIDE_OTHER), never an error. A row of USE_PAIRS
+            # whose other machine has no error has it on the machine named.
+            ok = (len(got) == 1
+                  and got[0][col['old' if side == 'new' else 'new']]
+                  in USE_ONE_SIDE_OTHER[reason])
+        else:
+            # Two encodings, a row of each machine's error: each machine
+            # the line names has its row.
+            named = ['old', 'new'] if side == 'both' else [side]
+            ok = (len(got) <= len(named) and all(
+                any(r[col[s]] == 'error' for r in got) for s in named))
+        if not ok:
+            raise ReportError(f'{where}.rows: {n} has the rows {states}, '
+                              f'which its line {kind} on {side} does not '
+                              'give')
+    # The line on what is not checked is printed only where both files
+    # hold the part (an earlier one returns before it).
+    if u['state'] == 'checked':
+        tie('rows (not checked)',
+            sorted((x['name'], x['why']) for x in u['rows']
+                   if x['kind'] == 'not checked'),
+            sorted((n, r['why']) for d in bangs.get('use_not_checked', [])
+                   for r in d['reasons'] for g in r['groups']
+                   for n in g['names']))
+    entry = {n: e for d in bangs.get('use_error_partial', [])
+             for e in d['entries'] for n in e['names']}
+    tie('groups (names)', sorted(n for g in u['groups'] for n in g['names']),
+        sorted(entry))
+    for i, g in enumerate(u['groups']):
+        for n in g['names']:
+            part = [p for p in entry[n]['parts']
+                    if p['encoding'] == g['encoding']]
+            if len(part) != 1:
+                raise ReportError(f'{where}.groups[{i}] is of '
+                                  f'{g["encoding"]}, which the `!!` do '
+                                  f'not give {n}')
+            got = {x['side']: sum(len(s['bytes']) for s in g['sequences']
+                                  if s[col[x['side']]] == 'error')
+                   for x in part[0]['sides']}
+            tie(f'groups[{i}] ({n})', got,
+                {x['side']: x['count'] for x in part[0]['sides']})
+            if part[0]['alike'] == 'same' and any(
+                    (s['before'] == 'error') != (s['now'] == 'error')
+                    for s in g['sequences']):
+                raise ReportError(f'{where}.groups[{i}]: the `!!` say both '
+                                  'machines refuse the same sequences')
+    wrong = {n: e for d in bangs.get('use_wrong_result', [])
+             for e in d['entries'] for n in e['names']}
+    tie('back_groups (names)',
+        sorted(n for g in u['back_groups'] for n in g['names']), sorted(wrong))
+    lowered = {}
+    for i, g in enumerate(u['back_groups']):
+        for n in g['names']:
+            part = [p for p in wrong[n]['parts']
+                    if p['encoding'] == g['encoding']]
+            if len(part) != 1:
+                raise ReportError(f'{where}.back_groups[{i}] is of '
+                                  f'{g["encoding"]}, which the `!!` do '
+                                  f'not give {n}')
+            tie(f'back_groups[{i}] ({n})',
+                {x['side']: sum(c[col[x['side']]] == 'not turned back'
+                                for c in g['characters'])
+                 for x in part[0]['sides']},
+                {x['side']: x['count'] for x in part[0]['sides']})
+            for side in ('old', 'new'):
+                lowered.setdefault(n, {}).setdefault(side, set()).update(
+                    c['char'] for c in g['characters']
+                    if c[col[side]] == 'not turned back'
+                    and any(t['fn'] == 'lower' for t in c['through']))
+    for n, e in wrong.items():
+        sides = {x['side'] for p in e['parts'] for x in p['sides']}
+        if len(e['lower']) == 1:
+            tie(f'back_groups ({n}, through lower())',
+                {len(lowered[n][s]) for s in sides}, {e['lower'][0]['count']})
+        else:
+            tie(f'back_groups ({n}, through lower())',
+                {s: len(lowered[n][s]) for s in sides},
+                {x['side']: x['count'] for x in e['lower']})
+    tie('back_changed',
+        sorted((x['name'], len(x['characters'])) for x in u['back_changed']),
+        sorted((n, e['count']) for d in bangs.get('use_back_changed', [])
+               for e in d['entries'] for n in e['names']))
+    tie('part_unknown',
+        sorted((x['name'], x['side']) for x in u['part_unknown']),
+        sorted((n, p['side']) for d in bangs.get('use_partial_unknown', [])
+               for p in d['places'] for g in p['groups'] for n in g['names']))
+    b = u['back_not_checked']
+    got = ([] if not b else [{
+        'count': len(b), 'utf8': sum(x['utf8'] for x in b),
+        'side': 'both' if (len({x['side'] for x in b}) > 1
+                           or b[0]['side'] == 'both') else b[0]['side']}])
+    tie('back_not_checked', got,
+        [{'count': sum(x['count'] for x in d['encodings']),
+          'utf8': d['utf8'], 'side': d['side']}
+         for d in bangs.get('use_back_not_checked', [])])
 
 
 # ---------------------------------------------------------------- warnings
