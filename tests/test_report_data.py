@@ -88,7 +88,7 @@ def step11_files(d):
     write(d, f'measured_order_rules.{PAIR}.txt', '     Each locale...\n')
     write(d, f'step11.{PAIR}.data.json',
           json.dumps({'step': 11, 'counts': COUNTS,
-                      'findings': FINDINGS}) + '\n')
+                      'findings': FINDINGS, 'checks': CHECKS}) + '\n')
 
 
 # The findings of step11_files' changed locale, sv_SE, as
@@ -152,6 +152,21 @@ COUNTS = {'machines': {'old': {'label': 'glibc-2.28-251.el8', 'locales': 2},
                        'new': {'label': 'glibc-2.34-100.el9', 'locales': 2}},
           'changed': 1, 'unchanged': 1, 'unchanged_as_far_as_measured': 0,
           'not_measured': 0, 'refused': 0, 'only_old': 0, 'only_new': 0}
+
+
+# The checks of step11_files' two machines, as locale_order.write_counts
+# writes them: C and POSIX byte order on both, the decimals of money of both
+# locales the same, one PostgreSQL process on each running the C library
+# measured there.
+_LIBC = {'state': 'checked', 'replaced': False, 'stale': 0, 'other': 0,
+         'processes': 1, 'looked_for': ['postgres', 'postmaster'],
+         'not_checked': {'machine': [], 'named': [], 'unnamed': 0},
+         'result': 'clean'}
+CHECKS = {'control': {s: {n: {'state': 'byte order'} for n in ('C', 'POSIX')}
+                      for s in ('old', 'new')},
+          'money': {'state': 'compared', 'compared': 2, 'changed': [],
+                    'not_checked': []},
+          'postgres_libc': {'old': _LIBC, 'new': _LIBC, 'note': True}}
 
 
 # One `!!` of each kind as a step writes it (kind, data), with the title
@@ -1318,7 +1333,7 @@ class AFileNotWritten(_Folder):
                 ('measured_order_summary', '.txt', None),
                 ('measured_order_verdicts', '.json', None),
                 ('measured_order_characters', '.tsv', 'characters'),
-                ('step11', '.data.json', ('counts', 'findings'))):
+                ('step11', '.data.json', ('counts', 'findings', 'checks'))):
             with self.subTest(name=name):
                 step2_files(self.d, **MACHINES)
                 step11_files(self.d)
@@ -1800,19 +1815,203 @@ class TheReaderIsStrict(_Folder):
 
     def test_the_counts_file_is_read_whole(self):
         """A file step 11 did not write as it writes it: refused, never
-        read as counts or findings."""
-        whole = {'step': 11, 'counts': COUNTS, 'findings': FINDINGS}
+        read as counts, findings or checks."""
+        whole = {'step': 11, 'counts': COUNTS, 'findings': FINDINGS,
+                 'checks': CHECKS}
         for text in ('{"step": 11}\n', '{"step": 2, "counts": {}}\n',
                      '{"step": 11, "counts": {"state": "reported"}}\n',
                      '{"step": 11, "counts": []}\n', '{"step": 11, "co',
                      json.dumps({'step': 11, 'counts': COUNTS}),
                      json.dumps({**whole, 'findings': []}),
                      json.dumps({**whole, 'findings': rd.NOT_YET}),
+                     json.dumps({k: v for k, v in whole.items()
+                                 if k != 'checks'}),
+                     json.dumps({**whole, 'checks': []}),
+                     json.dumps({**whole, 'checks': {'state': 'reported',
+                                                     **CHECKS}}),
                      json.dumps({**whole, 'more': 1})):
             with self.subTest(text=text):
                 write(self.d, f'step11.{PAIR}.data.json', text)
                 with self.assertRaises(rd.ReportError):
                     rd.build(args(self.d, **ON_MACHINES))
+
+    def test_checks_that_do_not_hang_together(self):
+        """Step 11's checks beside the order, each written wrong alone,
+        refused for the reason named: every key, state and count of the
+        control, the decimals of money and the PostgreSQL processes, each
+        half of a check of two parts with its own case; the money compared
+        against the counts; each machine's keys as its result picks them;
+        a result or the note the data do not decide; and a `!!` of the
+        three checks the data do not print, or one they print that step
+        11 did not write."""
+        def ctl(r, side='old', name='C'):
+            return r['step11']['checks']['control'][side][name]
+
+        def money(r):
+            return r['step11']['checks']['money']
+
+        def libc(r, side='old'):
+            return r['step11']['checks']['postgres_libc'][side]
+
+        def named(**over):
+            return dict({'reason': 'could not be read', 'count': 1,
+                         'processes': 2, 'looked_for': ['postgres']}, **over)
+
+        def flagged(r, **over):
+            p = libc(r)
+            del p['processes'], p['looked_for']
+            p.update(result='flagged', **over)
+
+        keys, nc = 'has the keys', r'old\.not_checked is'
+        typed = r'postgres_libc\.old is \{'
+        cases = [
+            # The control.
+            (keys, lambda r: r['step11']['checks']['control'].pop('new')),
+            (keys, lambda r: r['step11']['checks']['control']['old'].update(
+                LANG={'state': 'byte order'})),
+            (r'C\.state is', lambda r: ctl(r).update(state='same')),
+            (keys, lambda r: ctl(r).update(state='not measured')),
+            (keys, lambda r: ctl(r).update(error='x')),
+            (r'C\.error is', lambda r: ctl(r).update(state='not measured',
+                                                     error='')),
+            (r"control\.old\.C is 'byte",
+             lambda r: r['step11']['checks']['control']['old'].update(
+                 C='byte order')),
+            # The decimals of money.
+            (r'compared is -1', lambda r: money(r).update(compared=-1)),
+            # True equals the 1 the counts give: the type alone refuses it.
+            (r'compared is True$', lambda r: money(r).update(
+                compared=True,
+                not_checked=[{'name': 'C', 'side': 'old', 'why': 'w'}])),
+            (r'locale\(s\) on both machines', lambda r: money(r).update(
+                compared=1)),
+            (r'locale\(s\) on both machines', lambda r: money(r).update(
+                not_checked=[{'name': 'C', 'side': 'old', 'why': 'w'}])),
+            (r'money\.changed is', lambda r: money(r).update(changed=[
+                {'name': 'C', 'old': 2, 'new': 2}])),
+            (r'money\.changed is', lambda r: money(r).update(changed=[
+                {'name': 'C', 'old': 2, 'new': 11}])),
+            (r'money\.changed is', lambda r: money(r).update(changed=[
+                {'name': 'C', 'old': 2}])),
+            ('twice', lambda r: money(r).update(changed=[
+                {'name': 'C', 'old': 2, 'new': 3},
+                {'name': 'C', 'old': 2, 'new': 3}])),
+            ('twice', lambda r: money(r).update(
+                compared=1, changed=[{'name': 'C', 'old': 2, 'new': 3}],
+                not_checked=[{'name': 'C', 'side': 'old', 'why': 'w'}])),
+            ('twice', lambda r: money(r).update(compared=1, not_checked=[
+                {'name': 'C', 'side': 'old', 'why': 'w'},
+                {'name': 'C', 'side': 'old', 'why': 'v'}])),
+            (r'money\.not_checked is', lambda r: money(r).update(
+                compared=1, not_checked=[{'name': 'C', 'side': 'both',
+                                          'why': 'w'}])),
+            (r'money\.not_checked is', lambda r: money(r).update(
+                compared=1, not_checked=[{'name': 'C', 'side': 'old',
+                                          'why': ''}])),
+            (r'money\.state is', lambda r: money(r).update(state='same')),
+            (r'money\.side is', lambda r: r['step11']['checks'].update(money={
+                'state': 'earlier format', 'side': 'either'})),
+            (keys, lambda r: r['step11']['checks'].update(money={
+                'state': 'earlier format', 'side': 'old', 'compared': 2})),
+            # The PostgreSQL processes.
+            (r'result is', lambda r: libc(r).update(result='fine')),
+            (keys, lambda r: libc(r).pop('processes')),
+            (keys, lambda r: libc(r).pop('looked_for')),
+            (keys, lambda r: libc(r).update(result='no process found')),
+            (keys, lambda r: libc(r).update(result='flagged', stale=1)),
+            (typed, lambda r: libc(r).update(processes=0)),
+            (typed, lambda r: libc(r).update(looked_for=[])),
+            (typed, lambda r: libc(r).update(replaced=1)),
+            (typed, lambda r: libc(r).update(stale=-1)),
+            (typed, lambda r: libc(r).update(other=True)),
+            (nc, lambda r: flagged(r, not_checked={
+                'machine': ['a', 'b'], 'named': [], 'unnamed': 0})),
+            (nc, lambda r: flagged(r, not_checked={
+                'machine': [''], 'named': [], 'unnamed': 0})),
+            (nc, lambda r: flagged(r, not_checked={
+                'machine': [], 'named': [named(reason='gone')],
+                'unnamed': 0})),
+            (nc, lambda r: flagged(r, not_checked={
+                'machine': [], 'named': [named(), named()], 'unnamed': 0})),
+            (nc, lambda r: flagged(r, not_checked={
+                'machine': [], 'named': [named(count=0)], 'unnamed': 0})),
+            (nc, lambda r: flagged(r, not_checked={
+                'machine': [], 'named': [], 'unnamed': -1})),
+            (keys, lambda r: flagged(r, not_checked={
+                'machine': [], 'named': []})),
+            ('two sets', lambda r: flagged(r, not_checked={
+                'machine': [], 'unnamed': 0, 'named': [
+                    named(), named(reason='show no C library',
+                                   processes=3)]})),
+            ('two sets', lambda r: flagged(r, not_checked={
+                'machine': [], 'unnamed': 0, 'named': [
+                    named(), named(reason='show no C library',
+                                   looked_for=['postmaster'])]})),
+            ('more processes', lambda r: flagged(r, stale=2, not_checked={
+                'machine': [], 'named': [named()], 'unnamed': 0})),
+            ('more processes', lambda r: flagged(r, other=2, not_checked={
+                'machine': [], 'named': [named()], 'unnamed': 0})),
+            ('flag nothing', lambda r: flagged(r)),
+            ('flag it', lambda r: libc(r).update(replaced=True)),
+            ('flag it', lambda r: libc(r).update(not_checked={
+                'machine': [], 'named': [], 'unnamed': 1})),
+            ('note is False',
+             lambda r: r['step11']['checks']['postgres_libc'].update(
+                 note=False)),
+            ('note is True',
+             lambda r: r['step11']['checks']['postgres_libc'].update(
+                 old={'state': 'earlier format'},
+                 new={'state': 'earlier format'})),
+            (keys, lambda r: r['step11']['checks']['postgres_libc'].update(
+                old={'state': 'earlier format', 'result': 'clean'})),
+            # The `!!` of the three checks, against the data.
+            ('other `!!`', lambda r: r['warnings']['step11']['items'].append(
+                {'kind': 'money_changed', 'class': 'change',
+                 'title': rd.KINDS['money_changed'][2](
+                     {'locales': [{'name': 'C', 'old': 2, 'new': 3}]}),
+                 'data': {'locales': [{'name': 'C', 'old': 2, 'new': 3}]},
+                 'text': '!! money'})),
+            ('other `!!`', lambda r: ctl(r).update(state='not byte order')),
+        ]
+        for why, change in cases:
+            with self.subTest(why=why, line=change.__code__.co_firstlineno):
+                r = copy.deepcopy(self.good)
+                change(r)
+                p = os.path.join(self.d, 'changed.json')
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(r, f)
+                with self.assertRaisesRegex(rd.ReportError, why):
+                    rd.load(p)
+
+    def test_the_checks_constants_are_locale_orders(self):
+        """The states, results and reasons the reader allows are those
+        locale_order writes: one it added and the reader did not would
+        refuse a real run."""
+        import locale_order as lo
+        self.assertEqual(rd.CONTROL_STATES, lo.CONTROL_STATES)
+        self.assertEqual(rd.LIBC_RESULTS, lo.LIBC_RESULTS)
+        self.assertEqual(rd.LIBC_NAMED_REASONS,
+                         tuple(reason for _, reason in lo.LIBC_NAMED))
+
+    def test_the_check_kinds_are_those_the_checks_print(self):
+        """CHECK_KINDS, the `!!` _checks holds to the data, are every kind
+        the three checks print (control_texts, money_texts, libc_texts),
+        each a literal: one they printed and CHECK_KINDS lacked would pass
+        the cross-check unseen on both sides."""
+        import ast
+        src = os.path.join(os.path.dirname(rd.__file__), 'locale_order.py')
+        with open(src, encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        kinds = []
+        for fn in tree.body:
+            if isinstance(fn, ast.FunctionDef) and fn.name in (
+                    'control_texts', 'money_texts', 'libc_texts'):
+                for n in ast.walk(fn):
+                    if (isinstance(n, ast.Call)
+                            and getattr(n.func, 'id', None) == 'Bang'):
+                        self.assertIsInstance(n.args[1], ast.Constant)
+                        kinds.append(n.args[1].value)
+        self.assertEqual(sorted(kinds), sorted(rd.CHECK_KINDS))
 
     def test_a_value_outside_its_list(self):
         self.refuses(lambda r: r['run'].update(order='reversed'))

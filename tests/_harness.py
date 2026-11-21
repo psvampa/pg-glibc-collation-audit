@@ -739,7 +739,7 @@ def check_report(returncode, out, out_dir):
     log against its warnings file, and that file against the report's
     warnings of step 11 (check_step11_warnings); step 11's log, summary
     and characters file against its data file, and that file against
-    the report's step11.counts and step11.findings
+    the report's step11.counts, step11.findings and step11.checks
     (check_step11_counts). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
@@ -1707,11 +1707,11 @@ def check_step11_warnings(r, out_dir, path):
 
 
 def check_step11_counts(r, out_dir, path):
-    """Step 11's counts and findings in the run of the report `r` read
-    from `path`: the data file step 11 wrote holds what its log and its
-    summary print (step11_counts_held), and the report's step11.counts
-    and step11.findings are that file's; no file where step 11 did not
-    run."""
+    """Step 11's counts, findings and checks in the run of the report
+    `r` read from `path`: the data file step 11 wrote holds what its log
+    and its summary print (step11_counts_held), and the report's
+    step11.counts, step11.findings and step11.checks are that file's; no
+    file where step 11 did not run."""
     import report_data as rd
     slug = os.path.basename(path)[len('report.'):-len('.json')]
     f = os.path.join(out_dir, f'step11.{slug}.data.json')
@@ -1734,7 +1734,8 @@ def check_step11_counts(r, out_dir, path):
     chars = os.path.join(out_dir, f'measured_order_characters.{slug}.tsv')
     with open(chars, encoding='utf-8') as fh:
         text = fh.read()
-    step11_counts_held(report, brief, f, log, characters=text)
+    step11_counts_held(report, brief, f, log, characters=text,
+                       warnings=r['warnings']['step11'])
     if s11['counts'] != rd.step11_counts(f):
         raise AssertionError(f'{path}: step 11 counts {s11["counts"]!r}, '
                              f'{f} holds {rd.step11_counts(f)!r}')
@@ -1742,10 +1743,13 @@ def check_step11_counts(r, out_dir, path):
         raise AssertionError(f'{path}: step 11 findings '
                              f'{s11["findings"]!r}, {f} holds '
                              f'{rd.step11_findings(f)!r}')
+    if s11['checks'] != rd.step11_checks(f):
+        raise AssertionError(f'{path}: step 11 checks {s11["checks"]!r}, '
+                             f'{f} holds {rd.step11_checks(f)!r}')
 
 
-def step11_counts_held(report, summary, path, where, *, unread=None,
-                       characters=None):
+def step11_counts_held(report, summary, path, where, *, warnings,
+                       unread=None, characters=None):
     """The counts step 11 wrote to `path` (locale_order.write_counts)
     against what test_locale_order's readers take from the text it
     printed: parse_report of its report (`report`), and parse_summary of
@@ -1753,7 +1757,9 @@ def step11_counts_held(report, summary, path, where, *, unread=None,
     machine's name and number of locales, and the line of totals of both;
     then the findings it wrote beside them (step11_groups_held), with
     the characters file's text (`characters`, None where none was
-    written).
+    written); and the checks beside the order (step11_checks_held), read
+    by report_data's reader too, against the run's `!!` (WARNINGS, as
+    report.json holds step 11's warnings).
     A file that is not there is right only where no report was printed
     (a comparison refused). UNREAD is why the readers cannot read this
     report (a test whose locale names they cannot split): then the file
@@ -1769,6 +1775,10 @@ def step11_counts_held(report, summary, path, where, *, unread=None,
     if not printed:
         raise AssertionError(f'{where} wrote {path} and printed no report')
     c = rd.step11_counts(path)
+    # report_data's reader of the checks, which audit.sh runs only on
+    # its own pairs: here on every comparison, the readers' or not.
+    rd._checks(f'{where}: step11.checks', rd.step11_checks(path), c,
+               warnings)
     if unread is not None:
         if not (isinstance(unread, str) and unread):
             raise AssertionError(f'no reason why {where} is not read')
@@ -1811,11 +1821,140 @@ def step11_counts_held(report, summary, path, where, *, unread=None,
         if got != want:
             raise AssertionError(f'the summary of {where} prints the counts '
                                  f'{got!r}, {path} holds {want!r}')
+    files = (t.parse_characters(characters) if characters is not None
+             else None)
     step11_groups_held(r, s if summary is not None else None,
-                       rd.step11_findings(path), path, where,
-                       t.parse_characters(characters)
-                       if characters is not None else None, characters)
+                       rd.step11_findings(path), path, where, files,
+                       characters)
+    step11_checks_held(r, s if summary is not None else None, files,
+                       rd.step11_data(path)['checks'], path, where)
     return c
+
+
+# The control's words for C or POSIX not checked on a side (control_texts),
+# and the words of why a machine's processes were not all checked
+# (libc_why), the tests' own.
+CONTROL_SAID = {'not in the file': '{name} is not in the {side} file',
+                'not measured': '{name} could not be measured on the {side} '
+                                'machine ({error})'}
+
+
+def _libc_why_said(n):
+    why = list(n['machine'])
+    why += [f'{x["count"]} of {x["processes"]} process(es) named '
+            f'{" or ".join(x["looked_for"])} {x["reason"]}'
+            for x in n['named']]
+    if n['unnamed']:
+        why.append(f'the name of {n["unnamed"]} other process(es) could not '
+                   'be read')
+    return '; '.join(why)
+
+
+def _checks_said(c, where):
+    """[(kind, data)]: what check_kind reads of the control's, the
+    decimals of money's and the PostgreSQL processes' lines, as the
+    checks C step 11 wrote say it, in no particular order."""
+    out = []
+    ctl = c['control']
+    for side in ('old', 'new'):
+        names = [n for n in ('C', 'POSIX')
+                 if ctl[side][n]['state'] == 'not byte order']
+        if names:
+            out.append(('control', {'failed': side.upper(), 'names': names}))
+    unknown = [CONTROL_SAID[x['state']].format(name=n, side=side.upper(),
+                                               error=x.get('error'))
+               for side in ('old', 'new') for n in ('C', 'POSIX')
+               for x in [ctl[side][n]] if x['state'] in CONTROL_SAID]
+    if unknown:
+        out.append(('control', {'unknown': '; '.join(unknown)}))
+    if all(x['state'] == 'byte order' for s in ctl.values()
+           for x in s.values()):
+        out.append(('control', {'held': True}))
+    m = c['money']
+    if m['state'] == 'earlier format':
+        out.append(('money', {'earlier': ['OLD', 'NEW'] if m['side'] == 'both'
+                              else [m['side'].upper()]}))
+    else:
+        if m['changed']:
+            out.append(('money', {'changed': {
+                x['name']: [x['old'], x['new']] for x in m['changed']}}))
+        if m['not_checked']:
+            unknown = {}
+            for x in m['not_checked']:
+                unknown.setdefault(x['name'], {})[x['side']] = x['why']
+            out.append(('money', {'unknown': unknown}))
+        if not m['changed']:
+            out.append(('money', {'same': m['compared']}))
+    lc = c['postgres_libc']
+    earlier = [s.upper() for s in ('old', 'new')
+               if lc[s]['state'] == 'earlier format']
+    if earlier:
+        out.append(('libc', {'earlier': earlier}))
+    for s in ('old', 'new'):
+        p = lc[s]
+        if p['state'] == 'earlier format':
+            continue
+        S = s.upper()
+        if p['replaced']:
+            out.append(('libc', {'side': S, 'replaced': True}))
+        if p['stale']:
+            out.append(('libc', {'side': S, 'stale': p['stale']}))
+        if p['other']:
+            out.append(('libc', {'side': S, 'other': p['other']}))
+        why = _libc_why_said(p['not_checked'])
+        if why:
+            out.append(('libc', {'side': S, 'why': why}))
+        if p['result'] in ('clean', 'no process found'):
+            # check_kind reads these two lines with the names step 11
+            # looks for written out.
+            if p['looked_for'] != ['postgres', 'postmaster']:
+                raise AssertionError(f'{where}: the {s} machine looked for '
+                                     f'{p["looked_for"]!r}')
+            out.append(('libc', {'side': S, 'clean': p['processes']}
+                        if p['result'] == 'clean' else
+                        {'side': S, 'none': True}))
+    if lc['note']:
+        out.append(('libc', {'note': True}))
+    return out
+
+
+def _checks_read(found):
+    """check_kind's (kind, data) of the three checks, as _checks_said
+    gives them: the control's reasons not checked joined again, each
+    money change a list."""
+    out = []
+    for kind, data in found:
+        if kind not in ('control', 'money', 'libc'):
+            continue
+        if kind == 'control' and 'unknown' in data:
+            data = {'unknown': '; '.join(data['unknown'])}
+        if kind == 'money' and 'changed' in data:
+            data = {'changed': {k: list(v)
+                                for k, v in data['changed'].items()}}
+        out.append((kind, data))
+    return out
+
+
+def step11_checks_held(r, s, files, checks, path, where):
+    """step 11's checks beside the order, as it wrote them to PATH
+    (control_data, money_data, libc_data), against what check_kind reads
+    of the report (parse_report), of the summary (parse_summary; S None
+    where none was written) and of the characters file's notes
+    (parse_characters; FILES None where none was written): the same
+    lines, each with the same states, counts, sides and reasons."""
+    want = sorted(json.dumps(x, sort_keys=True)
+                  for x in _checks_said(checks, where))
+    for text, found in (('report', r['checks']),
+                        ('summary', s['checks'] if s is not None else None),
+                        ('characters file',
+                         files.checks if files is not None else None)):
+        if found is None:
+            continue
+        got = sorted(json.dumps(x, sort_keys=True)
+                     for x in _checks_read(found))
+        if got != want:
+            raise AssertionError(f'{where}: the {text} prints the checks '
+                                 f'{got!r}, {path} holds {want!r}')
 
 
 def _codeset_label(cs):
@@ -2253,8 +2392,8 @@ def held_main(main, stdout):
     """main() of locale_order.py, run in process with its stdout sent to
     the StringIO `stdout`, under glibc_locale_data.WARNINGS_ENV and
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
-    `!!` agree (step11_written), and so do its counts and findings
-    (step11_counts_held, its summary and characters file read from the
+    `!!` agree (step11_written), and so do its counts, findings and
+    checks (step11_counts_held, its summary and characters file read from the
     --summary-to and --characters-to of sys.argv), on a refusal too.
     Returns what main() returns."""
     import tempfile
@@ -2272,10 +2411,12 @@ def held_main(main, stdout):
                 rc = main()
             finally:
                 out = stdout.getvalue()[start:]
-                step11_written(out, path, 'main()')
+                recs = step11_written(out, path, 'main()')
                 step11_counts_held(out, _summary_of(argv, out, 'main()'),
                                    data, 'main()',
-                                   characters=_characters_of(argv, out))
+                                   characters=_characters_of(argv, out),
+                                   warnings={'state': 'reported',
+                                             'items': recs})
     return rc
 
 
@@ -2283,8 +2424,8 @@ def held_compare(argv, *, counts_unread=None, **kw):
     """subprocess.run(argv, capture_output=True, **kw) of a
     `locale_order.py --compare`, under glibc_locale_data.WARNINGS_ENV and
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
-    `!!` agree (step11_written), and so do its counts and findings
-    (step11_counts_held, with the summary of its --summary-to and the
+    `!!` agree (step11_written), and so do its counts, findings and
+    checks (step11_counts_held, with the summary of its --summary-to and the
     characters file of its --characters-to), on a refusal too.
     COUNTS_UNREAD is why the readers cannot read its report
     (step11_counts_held's unread). Returns the CompletedProcess."""
@@ -2302,10 +2443,11 @@ def held_compare(argv, *, counts_unread=None, **kw):
         if isinstance(out, bytes):
             out = out.decode('utf-8')
         where = ' '.join(map(str, argv))
-        step11_written(out, path, where)
+        recs = step11_written(out, path, where)
         step11_counts_held(out, _summary_of(argv, out, where), data, where,
                            unread=counts_unread,
-                           characters=_characters_of(argv, out))
+                           characters=_characters_of(argv, out),
+                           warnings={'state': 'reported', 'items': recs})
     return p
 
 

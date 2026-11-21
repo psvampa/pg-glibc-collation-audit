@@ -16,7 +16,8 @@ are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
 gives each kind its list and its short title. Step 11's counts are
 data too, and so is each group of locales it found changed, with what
-moved in it: step11.<pair>.data.json.
+moved in it, and each check beside the order (the control, the decimals
+of money, the PostgreSQL processes): step11.<pair>.data.json.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -336,6 +337,8 @@ def step11_section(a, by_name):
               else not_reported(dpath))
     findings = (step11_findings(dpath) if os.path.isfile(dpath)
                 else not_reported(dpath))
+    checks = (step11_checks(dpath) if os.path.isfile(dpath)
+              else not_reported(dpath))
     cpath = _file(d, f'measured_order_characters.{a.pair}.tsv')
     if os.path.isfile(cpath):
         head, rows, tail = tsv_rows(cpath, CHARACTER_COLUMNS)
@@ -389,6 +392,7 @@ def step11_section(a, by_name):
         'rules_beside': beside,
         'counts': counts,
         'findings': findings,
+        'checks': checks,
     }
 
 
@@ -399,17 +403,19 @@ COUNT_KEYS = ['changed', 'unchanged', 'unchanged_as_far_as_measured',
 
 def step11_data(path):
     """The file step 11 wrote to PATH (locale_order.write_counts): its
-    counts and its findings."""
+    counts, its findings and its checks."""
     try:
         got = json.loads(_read(path))
     except ValueError as e:
         raise ReportError(f'{path} is not what step 11 writes: {e}')
     if not (isinstance(got, dict)
-            and set(got) == {'step', 'counts', 'findings'}
+            and set(got) == {'step', 'counts', 'findings', 'checks'}
             and got['step'] == 11 and isinstance(got['counts'], dict)
             and 'state' not in got['counts']
             and isinstance(got['findings'], dict)
-            and got['findings'].get('state') == 'reported'):
+            and got['findings'].get('state') == 'reported'
+            and isinstance(got['checks'], dict)
+            and 'state' not in got['checks']):
         raise ReportError(f'{path} is not what step 11 writes')
     return got
 
@@ -424,6 +430,197 @@ def step11_findings(path):
     """The findings step 11 wrote to PATH (locale_order.change_groups), as
     a block of the report: load() checks every one of them."""
     return step11_data(path)['findings']
+
+
+def step11_checks(path):
+    """The checks step 11 wrote to PATH (locale_order.control_data,
+    money_data, libc_data), as a block of the report: load() checks every
+    one of them."""
+    return {'state': 'reported', **step11_data(path)['checks']}
+
+
+# What C or POSIX measured on a machine (locale_order.CONTROL_STATES) and
+# what a machine's PostgreSQL processes come to (locale_order.LIBC_RESULTS).
+CONTROL_STATES = ('byte order', 'not byte order', 'not in the file',
+                  'not measured')
+LIBC_RESULTS = ('clean', 'no process found', 'flagged')
+# What each result's line says beside it (locale_order.libc_data), and
+# the reasons a process found by its name was not checked
+# (locale_order.LIBC_NAMED).
+LIBC_BESIDE = {'clean': ('processes', 'looked_for'),
+               'no process found': ('looked_for',), 'flagged': ()}
+LIBC_NAMED_REASONS = ('could not be read', 'show no C library')
+# The kinds of `!!` the three checks print (locale_order.control_texts,
+# money_texts, libc_texts), which _checks holds to them.
+CHECK_KINDS = ('control_failed', 'control_not_checked', 'money_earlier_format',
+               'money_changed', 'money_not_checked', 'libc_earlier_format',
+               'glibc_replaced', 'libc_stale', 'libc_other',
+               'libc_not_checked', 'libc_no_process')
+
+
+def _check_bangs(c):
+    """[(kind, data)]: the `!!` the checks C print, as their text prints
+    them from the same data, in no particular order."""
+    out = []
+    ctl = c['control']
+    for side in ('old', 'new'):
+        names = [n for n in ('C', 'POSIX')
+                 if ctl[side][n]['state'] == 'not byte order']
+        if names:
+            out.append(('control_failed', {'side': side, 'names': names}))
+    absent = [{'name': n, 'side': s} for s in ('old', 'new')
+              for n in ('C', 'POSIX')
+              if ctl[s][n]['state'] == 'not in the file']
+    unmeasured = [{'name': n, 'side': s, 'error': ctl[s][n]['error']}
+                  for s in ('old', 'new') for n in ('C', 'POSIX')
+                  if ctl[s][n]['state'] == 'not measured']
+    if absent or unmeasured:
+        out.append(('control_not_checked',
+                    {'absent': absent, 'unmeasured': unmeasured}))
+    m = c['money']
+    if m['state'] == 'earlier format':
+        out.append(('money_earlier_format', {'side': m['side']}))
+    else:
+        if m['changed']:
+            out.append(('money_changed', {'locales': m['changed']}))
+        if m['not_checked']:
+            out.append(('money_not_checked', {'locales': m['not_checked']}))
+    lc = c['postgres_libc']
+    earlier = [s for s in ('old', 'new') if lc[s]['state'] == 'earlier format']
+    if earlier:
+        out.append(('libc_earlier_format',
+                    {'side': 'both' if len(earlier) == 2 else earlier[0]}))
+    for s in ('old', 'new'):
+        p = lc[s]
+        if p['state'] == 'earlier format':
+            continue
+        if p['replaced']:
+            out.append(('glibc_replaced', {'side': s}))
+        if p['stale']:
+            out.append(('libc_stale', {'side': s, 'processes': p['stale']}))
+        if p['other']:
+            out.append(('libc_other', {'side': s, 'processes': p['other']}))
+        w = p['not_checked']
+        if w['machine'] or w['named'] or w['unnamed']:
+            out.append(('libc_not_checked', dict(w, side=s)))
+        if p['result'] == 'no process found':
+            out.append(('libc_no_process',
+                        {'side': s, 'looked_for': p['looked_for']}))
+    return out
+
+
+def _checks(where, c, counts, warned):
+    """step 11's checks beside the order (locale_order.control_data,
+    money_data, libc_data): every key and state; the decimals of money
+    compared, the locales on both machines less those not checked, as
+    the counts of the same run count them; each machine's keys as its
+    result picks them (LIBC_BESIDE), the processes found no fewer than
+    those its reasons and its lines name; each result and the note as the
+    data decide them; and the `!!` of step 11's warnings of the three
+    checks exactly those the data print (_check_bangs), where step 11
+    reported its warnings, and the money compared only where it reported
+    its counts."""
+    _keys(where, c, ['state', 'control', 'money', 'postgres_libc'])
+    w = f'{where}.control'
+    _keys(w, c['control'], ['old', 'new'])
+    for side in ('old', 'new'):
+        _keys(f'{w}.{side}', c['control'][side], ['C', 'POSIX'])
+        for name in ('C', 'POSIX'):
+            x = c['control'][side][name]
+            at = f'{w}.{side}.{name}'
+            if not isinstance(x, dict):
+                raise ReportError(f'{at} is {x!r}')
+            _one_of(f'{at}.state', x.get('state'), CONTROL_STATES)
+            if x['state'] == 'not measured':
+                _keys(at, x, ['state', 'error'])
+                if not _is_str(x['error']):
+                    raise ReportError(f'{at}.error is {x["error"]!r}')
+            else:
+                _keys(at, x, ['state'])
+
+    def money(w, m):
+        _keys(w, m, ['state', 'compared', 'changed', 'not_checked'])
+        if not _is_count(m['compared']):
+            raise ReportError(f'{w}.compared is {m["compared"]!r}')
+        if not _maybe(_objects(name=_is_str, old=_SCALE, new=_SCALE))(
+                m['changed']) or any(x['old'] == x['new']
+                                     for x in m['changed']):
+            raise ReportError(f'{w}.changed is {m["changed"]!r}')
+        if not _maybe(_objects(name=_is_str, side=_SIDE, why=_is_str))(
+                m['not_checked']):
+            raise ReportError(f'{w}.not_checked is {m["not_checked"]!r}')
+        names = [x['name'] for x in m['changed']]
+        pairs = [(x['name'], x['side']) for x in m['not_checked']]
+        unread = {x['name'] for x in m['not_checked']}
+        if len(set(names)) != len(names) or len(set(pairs)) != len(pairs) \
+                or unread & set(names):
+            raise ReportError(f'{w} names a locale twice')
+        if counts['state'] == 'reported':
+            both = (counts['machines']['old']['locales']
+                    - counts['only_old'])
+            if m['compared'] != both - len(unread):
+                raise ReportError(
+                    f'{w}.compared is {m["compared"]}, not the {both} '
+                    f'locale(s) on both machines less the {len(unread)} not '
+                    'checked')
+    _stated(f'{where}.money', c['money'], ('compared', 'earlier format'),
+            {'compared': money,
+             'earlier format': lambda w, m: (
+                 _keys(w, m, ['state', 'side']),
+                 _one_of(f'{w}.side', m['side'], SIDES))})
+    w = f'{where}.postgres_libc'
+    lc = c['postgres_libc']
+    _keys(w, lc, ['old', 'new', 'note'])
+    named = _maybe(_objects(
+        reason=_one_of_f(*LIBC_NAMED_REASONS),
+        count=_is_positive, processes=_is_positive, looked_for=_is_strs))
+
+    def libc(at, p):
+        if not isinstance(p, dict):
+            raise ReportError(f'{at} is {p!r}')
+        _one_of(f'{at}.result', p.get('result'), LIBC_RESULTS)
+        _keys(at, p, ['state', 'replaced', 'stale', 'other', 'not_checked',
+                      'result', *LIBC_BESIDE[p['result']]])
+        if not (_is_bool(p['replaced'])
+                and _is_count(p['stale']) and _is_count(p['other'])
+                and _is_positive(p.get('processes', 1))
+                and _is_strs(p.get('looked_for', ['-']))):
+            raise ReportError(f'{at} is {p!r}')
+        n = p['not_checked']
+        _keys(f'{at}.not_checked', n, ['machine', 'named', 'unnamed'])
+        if not ((n['machine'] == [] or (_is_strs(n['machine'])
+                                        and len(n['machine']) == 1))
+                and named(n['named']) and _is_count(n['unnamed'])
+                and len({x['reason'] for x in n['named']})
+                == len(n['named'])):
+            raise ReportError(f'{at}.not_checked is {n!r}')
+        if len({(x['processes'], tuple(x['looked_for']))
+                for x in n['named']}) > 1:
+            raise ReportError(f'{at}.not_checked counts two sets of '
+                              'processes')
+        if n['named'] and p['stale'] + p['other'] + sum(
+                x['count'] for x in n['named']) > n['named'][0]['processes']:
+            raise ReportError(f'{at} names more processes than the '
+                              f'{n["named"][0]["processes"]} it found')
+        flagged = bool(p['stale'] or p['other'] or p['replaced']
+                       or n['machine'] or n['named'] or n['unnamed'])
+        if flagged != (p['result'] == 'flagged'):
+            raise ReportError(f'{at}.result is {p["result"]!r}, and the data '
+                              f'{"flag" if flagged else "flag nothing in"} it')
+    for side in ('old', 'new'):
+        _stated(f'{w}.{side}', lc[side], ('checked', 'earlier format'),
+                {'checked': libc, 'earlier format': []})
+    if lc['note'] is not any(lc[s]['state'] == 'checked'
+                             for s in ('old', 'new')):
+        raise ReportError(f'{w}.note is {lc["note"]!r}')
+    if warned['state'] == 'reported':
+        got = sorted(json.dumps([i['kind'], i['data']], sort_keys=True)
+                     for i in warned['items'] if i['kind'] in CHECK_KINDS)
+        want = sorted(json.dumps(list(x), sort_keys=True)
+                      for x in _check_bangs(c))
+        if got != want:
+            raise ReportError(f'{where} print other `!!` than step 11 '
+                              f'wrote: {want!r}, not {got!r}')
 
 
 # ---------------------------------------------------------------- warnings
@@ -1935,7 +2132,8 @@ def load(path):
 
     def s11(where, o):
         _keys(where, o, ['state', 'measurements', 'verdicts', 'characters',
-                         'sql_files', 'rules_beside', 'counts', 'findings'])
+                         'sql_files', 'rules_beside', 'counts', 'findings',
+                         'checks'])
         _strs(f'{where}.measurements', o['measurements'])
         for name, x in o['verdicts'].items():
             _keys(f'{where}.verdicts[{name!r}]', x, ['verdict', 'words'])
@@ -2014,6 +2212,11 @@ def load(path):
         _stated(f'{where}.findings', o['findings'],
                 ('reported', 'not reported'),
                 {'reported': lambda w, f: _findings(w, f, o['verdicts']),
+                 **nr})
+        _stated(f'{where}.checks', o['checks'],
+                ('reported', 'not reported'),
+                {'reported': lambda w, c: _checks(
+                    w, c, o['counts'], r['warnings']['step11']),
                  **nr})
     _stated('step11', r['step11'], ('not run', 'reported', 'not reported'),
             {'not run': s11_not_run, 'reported': s11, **nr})
