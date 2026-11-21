@@ -5119,6 +5119,13 @@ class Naming:
         c = self.names.code_point(s)
         return (glyph(c) or f'U+{c:04X}') if c is not None else self.bytes_of(s)
 
+    def glyph_token(self, t):
+        """glyph_of of a string the data name ('U+0061' or 'bytes 80')."""
+        if t.startswith('U+'):
+            return glyph(int(t[2:], 16)) or t
+        self.others = True
+        return t
+
     def ordered(self, elements):
         """The strings, characters first by code point, then the others."""
         return sorted(elements, key=self.names.rank.__getitem__)
@@ -5187,20 +5194,49 @@ class Naming:
         return text
 
 
-def readable_probes(spec, naming):
-    """'61.62> 61.C3A1< 61.41>' as 'letters a/b, accent a/U+00E1 from the
-    end, case a/A' (with the character itself where it can be printed, and
-    a string that is not a character by its bytes)."""
-    words = []
-    for level, token in zip(('letters', 'accent', 'case'), spec.split(' ')):
+def probe_token(names, s):
+    """A probe's string as the data name it: 'U+0061', or 'bytes 80' where
+    this comparison cannot name it as a character of the locale's encoding
+    (Names.code_point; Naming.token_of's spelling, with nothing
+    recorded)."""
+    c = names.code_point(s)
+    return f'U+{c:04X}' if c is not None else 'bytes ' + spaced(s)
+
+
+def probe_data(spec, names):
+    """[{'level', 'state', ...}] of one machine's probe pairs, letters,
+    accents and case: 'pair' with the two strings and whether the level
+    is compared from the end, 'none' where the level does not exist,
+    'not measured' where no pair measured it."""
+    out = []
+    for level, token in zip(LEVEL_NAMES, spec.split(' ')):
         if token == '?':
-            words.append(f'{level} not measured')
+            out.append({'level': level, 'state': 'not measured'})
         elif token == 'none':
-            words.append(f'{level} none')
+            out.append({'level': level, 'state': 'none'})
         else:
-            pair = '/'.join(naming.glyph_of(bytes.fromhex(h))
-                            for h in token[:-1].split('.'))
-            words.append(f'{level} {pair}' + (' from the end' if token[-1] == '<' else ''))
+            lo, hi = (bytes.fromhex(h) for h in token[:-1].split('.'))
+            out.append({'level': level, 'state': 'pair',
+                        'pair': [probe_token(names, lo),
+                                 probe_token(names, hi)],
+                        'from_the_end': token[-1] == '<'})
+    return out
+
+
+def readable_probes(levels, naming):
+    """probe_data's levels as 'letters a/b, accent a/U+00E1 from the end,
+    case a/A' (with the character itself where it can be printed, and a
+    string that is not a character by its bytes)."""
+    words = []
+    for word, x in zip(('letters', 'accent', 'case'), levels):
+        if x['state'] == 'not measured':
+            words.append(f'{word} not measured')
+        elif x['state'] == 'none':
+            words.append(f'{word} none')
+        else:
+            pair = '/'.join(naming.glyph_token(t) for t in x['pair'])
+            words.append(f'{word} {pair}'
+                         + (' from the end' if x['from_the_end'] else ''))
     return ', '.join(words)
 
 
@@ -5255,34 +5291,54 @@ def report_lines(text, indent):
         break_on_hyphens=False, break_long_words=False)]
 
 
-def relation_words(rel, levels):
-    """How two strings are told apart, over the levels compared."""
+RELATION_WORDS = {
+    'not at all': 'not at all (the bytes decide)',
+    'told apart': 'told apart',
+    **{'less than ' + LEVEL_NAMES[k]: 'by less than '
+       + ('a letter', 'an accent', 'case')[k] for k in range(3)},
+    **{' or '.join(LEVEL_NAMES[a:b + 1]): ' or '.join(
+        ('as different letters', 'like an accent', 'by case')[a:b + 1])
+       for a in range(3) for b in range(a, 3)}}
+
+
+def relation_state(rel, levels):
+    """How two strings are told apart, over the levels compared, as one of
+    RELATION_WORDS: not at all; at a level, or somewhere between levels
+    where one between them is not compared; less than the weakest level
+    compared; or only told apart, where no level is compared."""
     if not rel & 1:
-        return 'not at all (the bytes decide)'
+        return 'not at all'
     stronger = -1       # the strongest level compared that does not tell them apart
     for k in range(3):
         if k in levels:
             if rel >> (1 + k) & 1:
                 # Somewhere between that level and this one; a level whose
                 # pair differs on the two machines cannot narrow it.
-                return ' or '.join(('as different letters', 'like an accent',
-                                    'by case')[stronger + 1:k + 1])
+                return ' or '.join(LEVEL_NAMES[stronger + 1:k + 1])
             stronger = k
-    return ('by less than ' + ('a letter', 'an accent', 'case')[stronger]
-            if levels else 'told apart')
+    return 'less than ' + LEVEL_NAMES[stronger] if levels else 'told apart'
+
+
+def relation_words(rel, levels):
+    """How two strings are told apart, over the levels compared."""
+    return RELATION_WORDS[relation_state(rel, levels)]
 
 
 def test_level(before, now, probes, levels):
-    """(lo, hi, prepend, level) of the first level compared whose answer
-    differs between before and now: the pair that measured it, whether it
-    goes before the strings (apart()), and the level; None when no level
-    compared shows the change. The one rule test_pair and test_bytes
-    share."""
+    """(lo, hi, prepend, level, sign before, sign now) of the first level
+    compared whose answer differs between before and now: the pair that
+    measured it, whether it goes before the strings (apart()), the level,
+    and how the test pair sorts on each machine ('<' where the two are
+    told apart at least as strongly as that level); None when no level
+    compared shows the change. The one rule test_pair, test_bytes and
+    change_data share."""
     for k in levels:
         if (before ^ now) >> (1 + k) & 1:
             token = probes.split(' ')[k]
             lo, hi = (bytes.fromhex(h) for h in token[:-1].split('.'))
-            return lo, hi, token[-1] == '<', k
+            return (lo, hi, token[-1] == '<', k,
+                    '<' if before >> (1 + k) & 1 else '>',
+                    '<' if now >> (1 + k) & 1 else '>')
     return None
 
 
@@ -5296,7 +5352,7 @@ def test_pair(x, y, before, now, probes, levels, naming):
     got = test_level(before, now, probes, levels)
     if got is None:
         return None
-    lo, hi, prepend, k = got
+    lo, hi, prepend, k, sign_before, sign_now = got
     lo_, hi_ = naming.token_of(lo), naming.token_of(hi)
     x_, y_ = naming.token(x), naming.token(y)
     sep = 'bytes ' + spaced(SEPARATOR)
@@ -5304,8 +5360,7 @@ def test_pair(x, y, before, now, probes, levels, naming):
         a, b = f'{hi_} + {sep} + {x_}', f'{lo_} + {sep} + {y_}'
     else:
         a, b = f'{x_} + {sep} + {hi_}', f'{y_} + {sep} + {lo_}'
-    return (a, b, '<' if before >> (1 + k) & 1 else '>',
-            '<' if now >> (1 + k) & 1 else '>')
+    return a, b, sign_before, sign_now
 
 
 def test_bytes(x, y, before, now, probes, levels, strings):
@@ -5316,14 +5371,13 @@ def test_bytes(x, y, before, now, probes, levels, strings):
     got = test_level(before, now, probes, levels)
     if got is None:
         return None
-    lo, hi, prepend, k = got
+    lo, hi, prepend, k, sign_before, sign_now = got
     xs, ys = strings[x], strings[y]
     if prepend:
         a, b = (hi, SEPARATOR, xs), (lo, SEPARATOR, ys)
     else:
         a, b = (xs, SEPARATOR, hi), (ys, SEPARATOR, lo)
-    return (a, b, '<' if before >> (1 + k) & 1 else '>',
-            '<' if now >> (1 + k) & 1 else '>')
+    return a, b, sign_before, sign_now
 
 
 MEASURED = {'both': 'on both machines',
@@ -5441,21 +5495,27 @@ def locale_findings(old, new, o, n, naming):
     return found
 
 
-# The kinds of locale_findings whose data change_data writes; the others
-# are written as not yet reported.
-DATA_KINDS = ('moved', 'reversed', 'did not move', 'undecided')
+# What a part of step 11's data that is not written yet holds (today
+# only a group's sort table, change_groups).
 NOT_YET = {'state': 'not yet reported',
            'why': 'today said only in the text of the run'}
 
 
-def change_data(found, naming):
-    """[{'kind', ...}]: the data of a locale's findings (locale_findings),
-    in their order, each added to its finding as 'data', from which its
-    lines and phrases print their counts. A kind of DATA_KINDS gets how
-    many strings it holds, of them characters and other strings
-    (Names.other), and its runs or pairs, each string as string_token
-    names it; moved and did not move say how the report lists them
-    (LIST_LIMIT); the other kinds are NOT_YET."""
+def change_data(found, naming, probes):
+    """[{'kind', ...}]: the data of a locale's findings (locale_findings), in
+    their order, each added to its finding as 'data', which its printers
+    read (the strings are named through NAMING). Moved, reversed and did
+    not move get how many strings each holds, of them characters and other
+    strings (Names.other), and their runs; undecided its pairs; each string
+    as string_token names it, and moved and did not move how the report
+    lists them (LIST_LIMIT). Probes changed gets each machine's probe pairs
+    (probe_data); left out the levels compared and those left out; told
+    apart how many pairs, the levels compared, the pairs where the report
+    lists them (LIST_LIMIT), and every chain of neighbours with how it was
+    told apart before and now (relation_state), the machine it was measured
+    on and its test pair (test_level, from PROBES, the old machine's: the
+    pairs it is taken from are written once, the old machine's probe_data),
+    or 'none' where no level compared shows the change."""
     names = naming.names
 
     def split(elements):
@@ -5485,8 +5545,37 @@ def change_data(found, naming):
         elif kind == 'undecided':
             x = {'kind': kind, 'count': len(d['pairs']),
                  'pairs': runs(d['pairs'])}
-        elif kind in LOCALE_KINDS:
-            x = {'kind': kind, **NOT_YET}
+        elif kind == 'probes changed':
+            x = {'kind': kind, 'before': probe_data(d['before'], names),
+                 'now': probe_data(d['now'], names)}
+        elif kind == 'left out':
+            x = {'kind': kind,
+                 'compared': [LEVEL_NAMES[k] for k in d['levels']],
+                 'left_out': [LEVEL_NAMES[k] for k in d['left_out']]}
+        elif kind == 'told apart':
+            lv = d['levels']
+            chains = []
+            for chain, before, now, t, tb, side in d['chains']:
+                got = test_level(before, now, probes, lv)
+                if got is None:
+                    test = {'state': 'none'}
+                else:
+                    test = {'state': 'pair', 'level': LEVEL_NAMES[got[3]],
+                            'before': got[4], 'now': got[5]}
+                chains.append({'runs': runs(chain),
+                               'before': relation_state(before, lv),
+                               'now': relation_state(now, lv),
+                               'measured': side, 'test': test})
+            x = {'kind': kind, 'count': d['count'],
+                 'compared': [LEVEL_NAMES[k] for k in lv],
+                 'probes': probe_data(probes, names),
+                 'listed': 'too many' if d['pairs'] is None else 'each',
+                 'pairs': [{'strings': [string_token(names, a),
+                                        string_token(names, b)],
+                            'before': relation_state(before, lv),
+                            'now': relation_state(now, lv)}
+                           for a, b, before, now in d['pairs'] or []],
+                 'chains': chains}
         else:
             raise LookupError(f'no data for a finding of kind {kind!r}')
         d['data'] = x
@@ -5622,10 +5711,11 @@ PROBES_CHANGED = ('the pairs that tell letters, accents and case apart here '
 
 
 def probes_lines(d):
+    x, nm = d['data'], d['naming']
     return (report_lines(PROBES_CHANGED + ':', '')
-            + report_lines(f'before: {readable_probes(d["before"], d["naming"])}',
+            + report_lines(f'before: {readable_probes(x["before"], nm)}',
                            '  ')
-            + report_lines(f'now:    {readable_probes(d["now"], d["naming"])}',
+            + report_lines(f'now:    {readable_probes(x["now"], nm)}',
                            '  '))
 
 
@@ -5634,9 +5724,10 @@ def probes_brief(d):
 
 
 def probes_rows(d):
+    x, nm = d['data'], d['naming']
     return [('pairs changed', '-',
-             (f'before: {readable_probes(d["before"], d["naming"])}; '
-              f'now: {readable_probes(d["now"], d["naming"])}')
+             (f'before: {readable_probes(x["before"], nm)}; '
+              f'now: {readable_probes(x["now"], nm)}')
              .translate(TEXT_ESCAPES), '-', '-', '-', '-')]
 
 
@@ -5646,28 +5737,27 @@ def probes_sql(d):
 
 
 def compared_by(d):
-    return ' and '.join(LEVEL_NAMES[k] for k in d['levels'])
+    return ' and '.join(d['data']['compared'])
 
 
 def left_out_lines(d):
-    named = compared_by(d)
+    named, x = compared_by(d), d['data']
     if d['probes_differ']:
         # Under the changed pairs, whose lines say why.
-        return [f'  so pairs are compared only by {named}' if d['levels']
+        return [f'  so pairs are compared only by {named}' if x['compared']
                 else '  so no pair can be compared']
-    return [(f'pairs are compared only by {named}' if d['levels']
+    return [(f'pairs are compared only by {named}' if x['compared']
              else 'no pair can be compared') + ': no pair measured '
-            + ' and '.join(LEVEL_NAMES[k] for k in d['left_out'])]
+            + ' and '.join(x['left_out'])]
 
 
 def left_out_brief(d):
-    return [f'pairs compared only by {compared_by(d)}' if d['levels']
+    return [f'pairs compared only by {compared_by(d)}' if d['data']['compared']
             else 'no pair compared']
 
 
 def left_out_rows(d):
-    return [('not compared', '-',
-             ' and '.join(LEVEL_NAMES[k] for k in d['left_out']),
+    return [('not compared', '-', ' and '.join(d['data']['left_out']),
              '-', '-', '-', '-')]
 
 
@@ -5677,38 +5767,48 @@ def left_out_sql(d):
 
 
 def told_apart_lines(d):
-    nm = d['naming']
-    if d['pairs'] is None:
-        return [f'{d["count"]:,} pairs told apart differently, too many to '
+    nm, x = d['naming'], d['data']
+    if x['listed'] == 'too many':
+        return [f'{x["count"]:,} pairs told apart differently, too many to '
                 'list here']
+    if len(d['pairs']) != len(x['pairs']):
+        raise LookupError('told apart lists its pairs otherwise than its '
+                          'data')
     # A string is never cut from its code point (NUL, as runs_text).
-    return ([f'{d["count"]} pair(s) told apart differently:']
-            + [line for x, y, before, now in d['pairs'] for line in report_lines(
-                f'{nm.short(x).replace(" ", chr(0))} and '
-                f'{nm.short(y).replace(" ", chr(0))}: before '
-                f'{relation_words(before, d["levels"])}, now '
-                f'{relation_words(now, d["levels"])}', '  ')])
+    return ([f'{x["count"]} pair(s) told apart differently:']
+            + [line for (a, b, b_, n_), p in zip(d['pairs'], x['pairs'])
+               for line in report_lines(
+                f'{nm.short(a).replace(" ", chr(0))} and '
+                f'{nm.short(b).replace(" ", chr(0))}: before '
+                f'{RELATION_WORDS[p["before"]]}, now '
+                f'{RELATION_WORDS[p["now"]]}', '  ')])
 
 
 def told_apart_brief(d):
-    nm = d['naming']
-    if d['pairs'] is None:
-        return [f'{d["count"]:,} pairs told apart differently']
-    return [f'{d["count"]} pair(s) told apart differently: '
-            + ', '.join(f'{nm.short(x)} and {nm.short(y)}'
-                        for x, y, b_, n_ in d['pairs'])]
+    nm, x = d['naming'], d['data']
+    if x['listed'] == 'too many':
+        return [f'{x["count"]:,} pairs told apart differently']
+    return [f'{x["count"]} pair(s) told apart differently: '
+            + ', '.join(f'{nm.short(a)} and {nm.short(b)}'
+                        for a, b, b_, n_ in d['pairs'])]
 
 
 def told_apart_rows(d):
     """A chain of neighbours told apart differently, with the test pair of
     its first two strings where a level compared shows the change."""
     rows, nm = [], d['naming']
-    for runs, before, now, t, tb, side in d['chains']:
+    if len(d['chains']) != len(d['data']['chains']):
+        raise LookupError('told apart has its chains otherwise than its '
+                          'data')
+    for (runs, b_, n_, t, tb, s_), c in zip(d['chains'], d['data']['chains']):
+        tested = c['test']['state'] == 'pair'
         rows.append(('told apart differently', nm.runs_text(runs),
-                     f'{relation_words(before, d["levels"])} -> '
-                     f'{relation_words(now, d["levels"])}',
-                     ' / '.join(t[:2]) if t else '-', t[2] if t else '-',
-                     t[3] if t else '-', MEASURED[side]))
+                     f'{RELATION_WORDS[c["before"]]} -> '
+                     f'{RELATION_WORDS[c["now"]]}',
+                     ' / '.join(t[:2]) if tested else '-',
+                     c['test']['before'] if tested else '-',
+                     c['test']['now'] if tested else '-',
+                     MEASURED[c['measured']]))
     return rows
 
 
@@ -5806,19 +5906,17 @@ def printer(table, kind, part):
 def describe_change(old, new, o, n, charmaps=None):
     """(lines, phrase, rows, others, sql, data): what changed between two
     measurements of a locale, drawn from its findings for the report, the
-    summary and the characters file, in which nothing is cut short;
-    whether any of the outputs names or counts a string that is not a
-    character (names_bytes); its test pairs in bytes and its changes
-    without one, for the SQL files (confirm_groups); and its findings as
-    data (change_data), from which the report's lines and the summary's
-    phrase of each kind of DATA_KINDS take their counts. The strings are
-    named under the old machine's encoding, the one a database made there
-    holds, with the old machine's charmaps (CHARMAPS, a MachineCharmaps,
-    or None)."""
+    summary and the characters file, in which nothing is cut short; whether
+    any of the outputs names or counts a string that is not a character
+    (names_bytes); its test pairs in bytes and its changes without one, for
+    the SQL files (confirm_groups); and its findings as data (change_data),
+    which the printers read. The strings are named under the old machine's
+    encoding, the one a database made there holds, with the old machine's
+    charmaps (CHARMAPS, a MachineCharmaps, or None)."""
     naming = Naming(names_for(strings_of(old, o['corpus'])[0], o['codeset'],
                               charmap_table(charmaps, o['codeset'])))
     found = locale_findings(old, new, o, n, naming)
-    data = change_data(found, naming)
+    data = change_data(found, naming, o['probes'])
     others = names_bytes(found, naming, o['probes'])
     lines, brief, rows, sql = [], [], [], []
     for kind, d in found:
