@@ -92,8 +92,8 @@ def step11_files(d):
 
 
 # The findings of step11_files' changed locale, sv_SE, as
-# locale_order.change_groups writes them: one of each kind written as
-# data, and a pair named by its bytes.
+# locale_order.change_groups writes them: one of each kind, and a pair
+# named by its bytes.
 FINDINGS = {'state': 'reported', 'groups': [{
     'locales': {'sv_SE': {
         'codeset': {'old': 'ISO-8859-1', 'new': 'ISO-8859-1'},
@@ -105,7 +105,40 @@ FINDINGS = {'state': 'reported', 'groups': [{
          'runs': [['U+00E5', 'U+00E5']], 'listed': 'each'},
         {'kind': 'reversed', 'count': 2, 'characters': 2,
          'other_strings': 0, 'all': False, 'runs': [['U+00E4', 'U+00E5']]},
-        {'kind': 'told apart', **rd.NOT_YET},
+        {'kind': 'probes changed',
+         'before': [{'level': 'letters', 'state': 'pair',
+                     'pair': ['U+0061', 'U+0062'], 'from_the_end': False},
+                    {'level': 'accents', 'state': 'pair',
+                     'pair': ['U+0061', 'U+00E1'], 'from_the_end': True},
+                    {'level': 'case', 'state': 'pair',
+                     'pair': ['U+0061', 'U+0041'], 'from_the_end': False}],
+         'now': [{'level': 'letters', 'state': 'pair',
+                  'pair': ['U+0061', 'U+0062'], 'from_the_end': False},
+                 {'level': 'accents', 'state': 'not measured'},
+                 {'level': 'case', 'state': 'pair',
+                  'pair': ['U+0061', 'U+0041'], 'from_the_end': False}]},
+        {'kind': 'left out', 'compared': ['letters', 'case'],
+         'left_out': ['accents']},
+        {'kind': 'told apart', 'count': 2, 'compared': ['letters', 'case'],
+         'probes': [{'level': 'letters', 'state': 'pair',
+                     'pair': ['U+0061', 'U+0062'], 'from_the_end': False},
+                    {'level': 'accents', 'state': 'pair',
+                     'pair': ['U+0061', 'U+00E1'], 'from_the_end': True},
+                    {'level': 'case', 'state': 'pair',
+                     'pair': ['U+0061', 'U+0041'], 'from_the_end': False}],
+         'listed': 'each',
+         'pairs': [{'strings': ['U+00E4', 'U+00E5'],
+                    'before': 'accents or case', 'now': 'letters'},
+                   {'strings': ['U+00E5', 'U+00E4'], 'before': 'not at all',
+                    'now': 'less than case'}],
+         'chains': [{'runs': [['U+00E4', 'U+00E5']],
+                     'before': 'accents or case', 'now': 'letters',
+                     'measured': 'both',
+                     'test': {'state': 'pair', 'level': 'letters',
+                              'before': '>', 'now': '<'}},
+                    {'runs': [['U+00E5', 'U+00E5'], ['U+00E4', 'U+00E4']],
+                     'before': 'not at all', 'now': 'less than case',
+                     'measured': 'new', 'test': {'state': 'none'}}]},
         {'kind': 'did not move', 'count': 1, 'characters': 1,
          'other_strings': 0, 'runs': [['U+00E4', 'U+00E4']],
          'listed': 'runs'},
@@ -1423,9 +1456,11 @@ class TheReaderIsStrict(_Folder):
         reason named: a count that is not its characters and other
         strings, or not what its runs or pairs hold; a run backwards, out
         of order or naming no string; a kind unknown, out of order, or
-        where what moved says it cannot be; a finding not yet reported
-        that says otherwise; a pair in bytes the group says it names
-        none of; a change its sort table alone found with findings; a
+        where what moved says it cannot be; a pair in bytes the group
+        says it names none of; probe pairs, levels left out and pairs told
+        apart differently written wrong, each check and each half of a check of
+        two parts with its own case; a change its sort table alone found
+        with findings; a
         locale in two groups or in none, groups out of order, a heading
         skipped; and a value outside its list."""
         def group(r):
@@ -1446,7 +1481,148 @@ class TheReaderIsStrict(_Folder):
             g = copy.deepcopy(group(r))
             g['locales']['zz'] = g['locales']['sv_SE']
             r['step11']['findings']['groups'].append(g)
+        def probe(r, side, i):
+            return found(r, 'probes changed')[side][i]
+
+        def probe_side(r, side):
+            return found(r, 'probes changed')[side]
+
+        def untested_bytes(r, k):
+            # No pairs changed, the accents with no pair, and a byte in
+            # the pair of level K of told apart (letters is tested).
+            drop(r, 'probes changed')
+            drop(r, 'left out')
+            p = found(r, 'told apart')['probes']
+            p[1] = {'level': 'accents', 'state': 'none'}
+            p[k]['pair'] = ['U+0061', 'bytes FF']
+
+        def chain(r, i):
+            return found(r, 'told apart')['chains'][i]
+
+        def no_bytes(r):
+            found(r, 'undecided')['pairs'] = [['U+0061', 'U+0062']]
+            group(r)['names_bytes'] = False
         cases = [
+            ('a level missing', lambda r: found(r, 'probes changed')[
+                'now'].pop(), 'is not three levels'),
+            ('a level misnamed', lambda r: probe(r, 'now', 2).update(
+                level='accents'), '.now[2].level is'),
+            ('a probe state', lambda r: probe(r, 'now', 1).update(
+                state='unknown'), '.now[1].state is'),
+            ('a pair of one', lambda r: probe(r, 'before', 0).update(
+                pair=['U+0061']), '.before[0].pair is'),
+            ('from the end', lambda r: probe(r, 'before', 1).update(
+                from_the_end='yes'), '.before[1].from_the_end is'),
+            ('a pair where none is', lambda r: probe(r, 'now', 1).update(
+                pair=['U+0061', 'U+0062']), 'has the keys'),
+            ('a level unknown', lambda r: found(r, 'left out').update(
+                left_out=['tone']), 'is not a list of levels'),
+            ('levels out of order', lambda r: found(r, 'left out').update(
+                compared=['case', 'letters']), 'is not a list of levels'),
+            ('a level twice', lambda r: found(r, 'left out').update(
+                compared=['letters', 'letters']), 'is not a list of levels'),
+            ('nothing left out', lambda r: found(r, 'left out').update(
+                left_out=[]), 'leaves out []'),
+            ('left out and compared', lambda r: found(r, 'left out').update(
+                left_out=['accents', 'case']),
+             "leaves out ['accents', 'case']"),
+            ('compared otherwise', lambda r: found(r, 'left out').update(
+                compared=['letters']), 'levels compared are not those'),
+            ('no pair told apart', lambda r: found(r, 'told apart').update(
+                count=0), '.count is 0'),
+            ('listed otherwise', lambda r: found(r, 'told apart').update(
+                listed='runs'), '.listed is'),
+            ('no chain', lambda r: found(r, 'told apart').update(chains=[]),
+             '.chains is []'),
+            ('a chain of one', lambda r: chain(r, 1).update(
+                runs=[['U+00E4', 'U+00E4']]), 'is not a chain'),
+            ('a state the levels cannot give', lambda r: chain(r, 0).update(
+                now='accents'), '.chains[0].now is'),
+            ('alike before and now', lambda r: chain(r, 1).update(
+                now='not at all'), 'alike before and now'),
+            ('a machine', lambda r: chain(r, 1).update(measured='either'),
+             '.chains[1].measured is'),
+            ('a test at a level not compared', lambda r: chain(r, 0)[
+                'test'].update(level='accents'),
+             '.chains[0].test.level is'),
+            ('a test answered alike', lambda r: chain(r, 0)['test'].update(
+                now='>'), 'answered alike'),
+            ('a test with a pair', lambda r: chain(r, 0)['test'].update(
+                pair=['U+0061', 'U+0062']), 'has the keys'),
+            ('told apart with no probe pairs', lambda r: found(
+                r, 'told apart').pop('probes'), 'has the keys'),
+            ('a level compared with no pair', lambda r: (
+                found(r, 'told apart')['probes'][2].update(state='none'),
+                found(r, 'told apart')['probes'][2].pop('pair'),
+                found(r, 'told apart')['probes'][2].pop('from_the_end')),
+             'a level with no probe pair'),
+            ('compared otherwise than the pairs', lambda r: (
+                drop(r, 'probes changed'), drop(r, 'left out')),
+             "its probe pairs ['letters', 'accents', 'case']"),
+            ('other probe pairs', lambda r: found(r, 'told apart')[
+                'probes'][0].update(pair=['U+0061', 'U+0063']),
+             'other probe pairs'),
+            ('pairs changed and nothing left out', lambda r: (
+                drop(r, 'left out'),
+                [(x[1].update(state='none'), x[1].pop('pair'),
+                  x[1].pop('from_the_end'))
+                 for x in (found(r, 'told apart')['probes'],
+                           found(r, 'probes changed')['before'])]),
+             'no level is left out'),
+            ('changed pairs compared', lambda r: (
+                probe(r, 'now', 0).update(pair=['U+0061', 'U+0063']),
+                found(r, 'left out').update(left_out=['accents']),
+                found(r, 'told apart')['probes'][0].update(
+                    pair=['U+0061', 'U+0062'])),
+             'letters is compared with pairs that changed'),
+            ('a level compared the pairs differ on', lambda r: (
+                probe(r, 'now', 2).update(from_the_end=True)),
+             'case is compared with pairs that changed'),
+            ('a level no machine measured, not left out', lambda r: (
+                drop(r, 'told apart'), drop(r, 'did not move'),
+                probe_side(r, 'before').__setitem__(
+                    1, {'level': 'accents', 'state': 'not measured'}),
+                found(r, 'left out').update(compared=['letters'],
+                                            left_out=['case'])),
+             'accents is compared with pairs that changed'),
+            ('a level compared with no pair on either machine',
+             lambda r: (drop(r, 'told apart'), drop(r, 'did not move'),
+                        [(x.update(state='none'), x.pop('pair'),
+                          x.pop('from_the_end'))
+                         for x in (probe(r, 'before', 2),
+                                   probe(r, 'now', 2))]),
+             'case is compared with no pair'),
+            ('listed each beyond the limit', lambda r: found(
+                r, 'told apart').update(count=rd.LIST_LIMIT + 1),
+             'is listed \'each\' with 21 pairs'),
+            ('too many within the limit', lambda r: found(
+                r, 'told apart').update(listed='too many', pairs=[]),
+             "is listed 'too many' with 2 pairs"),
+            ('a test state', lambda r: chain(r, 1)['test'].update(
+                state='maybe'), '.chains[1].test.state is'),
+            ('pairs miscounted by the chains', lambda r: found(
+                r, 'told apart').update(count=3), 'its chains hold 2'),
+            ('a pair listed otherwise', lambda r: found(r, 'told apart')[
+                'pairs'][1].update(now='letters'),
+             'lists its pairs otherwise'),
+            ('pairs not listed', lambda r: found(r, 'told apart').update(
+                pairs=[]), 'lists its pairs otherwise'),
+            ('did not move otherwise', lambda r: found(
+                r, 'did not move').update(runs=[['U+00E1', 'U+00E1']]),
+             'what did not move is not'),
+            ('did not move missing', lambda r: drop(r, 'did not move'),
+             'what did not move is not'),
+            ('a probe in bytes and no note', lambda r: (
+                no_bytes(r), probe(r, 'now', 1).update(
+                    state='pair', pair=['U+0061', 'bytes FF'],
+                    from_the_end=True)), 'says it names none'),
+            ('a test pair in bytes and no note', lambda r: (
+                no_bytes(r), untested_bytes(r, 0)), 'says it names none'),
+            ('a probe of told apart in bytes and no note', lambda r: (
+                no_bytes(r), [x[1].update(pair=['U+0061', 'bytes FF'])
+                              for x in (found(r, 'told apart')['probes'],
+                                        probe_side(r, 'before'))]),
+             'says it names none'),
             ('a count', lambda r: found(r, 'moved').update(count=2),
              'are not its characters and other strings'),
             ('runs short', lambda r: found(r, 'moved').update(
@@ -1477,8 +1653,6 @@ class TheReaderIsStrict(_Folder):
                 count=2), 'lists otherwise'),
             ('a pair of one', lambda r: found(r, 'undecided').update(
                 pairs=[['U+0061']]), 'pairs[0] is'),
-            ('not yet reported, otherwise', lambda r: found(
-                r, 'told apart').update(why='x'), 'told apart'),
             ('listed as none', lambda r: found(r, 'moved').update(
                 listed='none'), "is listed 'none' with 1 strings"),
             ('bytes and no note', lambda r: group(r).update(
@@ -1507,6 +1681,26 @@ class TheReaderIsStrict(_Folder):
             ('a key less', lambda r: group(r).pop('names_bytes'),
              'has the keys'),
         ]
+        # A byte in the pair of a level no chain is tested at, the pairs
+        # unchanged, is named nowhere (as th_TH's accents pair in TIS-620
+        # on RHEL 8 and 9, FF 5F): read.
+        r = copy.deepcopy(self.good)
+        no_bytes(r)
+        untested_bytes(r, 2)
+        p = os.path.join(self.d, 'untested.json')
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        self.assertEqual(rd.load(p), r)
+        # The string of bytes E5 moved, and U+00E5, the same number, did
+        # not: spans of strings of two kinds are kept apart.
+        r = copy.deepcopy(self.good)
+        found(r, 'moved').update(characters=0, other_strings=1,
+                                 runs=[['bytes E5', 'bytes E5']])
+        found(r, 'did not move').update(count=2, characters=2,
+                                        runs=[['U+00E4', 'U+00E5']])
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        self.assertEqual(rd.load(p), r)
         for name, change, msg in cases:
             with self.subTest(case=name):
                 r = copy.deepcopy(self.good)

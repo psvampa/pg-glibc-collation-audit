@@ -1858,6 +1858,151 @@ def _also_of(names, locales):
     return out if (aliases or spellings or len(out) > 2) else None
 
 
+# How the outputs say each relation step 11's data write
+# (locale_order.relation_state), and each side a chain is measured on: the
+# tests' own words, so that a state printed with another's words is seen.
+RELATION_SAID = {
+    'not at all': 'not at all (the bytes decide)', 'told apart': 'told apart',
+    'less than letters': 'by less than a letter',
+    'less than accents': 'by less than an accent',
+    'less than case': 'by less than case',
+    'letters': 'as different letters', 'accents': 'like an accent',
+    'case': 'by case',
+    'letters or accents': 'as different letters or like an accent',
+    'accents or case': 'like an accent or by case',
+    'letters or accents or case':
+        'as different letters or like an accent or by case'}
+SIDE_SAID = {'both': 'on both machines',
+             'old': 'on the old machine; the new one by the characters '
+                    'between',
+             'new': 'on the new machine; the old one by the characters '
+                    'between'}
+
+
+def _probes_said(levels, text, escapes=None):
+    """Whether TEXT is how the outputs print one machine's probe pairs
+    LEVELS (locale_order.probe_data): each level in its place, a pair's
+    strings each as the character itself or its code point, or its bytes;
+    the whole line, both ends anchored. ESCAPES, the characters file's."""
+    def one(t):
+        if t.startswith('U+'):
+            ch = chr(int(t[2:], 16))
+            if escapes:
+                ch = ch.translate(escapes)
+            return f'(?:{re.escape(ch)}|{re.escape(t)})'
+        return re.escape(t)
+    parts = []
+    for word, x in zip(('letters', 'accent', 'case'), levels):
+        if x['state'] == 'pair':
+            parts.append(re.escape(word + ' ') + one(x['pair'][0]) + '/'
+                         + one(x['pair'][1])
+                         + (re.escape(' from the end') if x['from_the_end']
+                            else ''))
+        else:
+            parts.append(re.escape(f'{word} {x["state"]}'))
+    return re.fullmatch(', '.join(parts), text) is not None
+
+
+def step11_levels_held(f, details, brief, rows, where):
+    """Step 11's probes changed, left out and told apart of one change
+    (F, {kind: data}) against what test_locale_order's readers take from
+    its text: DETAILS, parse_details of its lines in the report (or the
+    change parse_report gives), BRIEF, parse_brief of its phrase in the
+    summary, ROWS, its rows of parse_characters; BRIEF and ROWS None where
+    that output was not written. The probe pairs of each machine, each
+    line whole; the levels compared and those no pair measured; the pairs
+    told apart differently, counted, and each named with how it was told
+    apart before and now where the report lists them; and in the
+    characters file every chain of neighbours whole and in order, with
+    its test pair rebuilt from its level and the old machine's probe
+    pairs."""
+    import test_locale_order as t
+    import locale_order as lo
+    pc, left, ta = (f.get(k) for k in ('probes changed', 'left out',
+                                       'told apart'))
+    want = {'compared': None, 'not_measured': None, 'pairs': None,
+            'pairs_count': None}
+    if left:
+        want['compared'] = left['compared']
+        if not pc:
+            want['not_measured'] = left['left_out']
+    if ta:
+        # What told apart compares is printed only where a level is left
+        # out; else it is every level the old machine has a pair for.
+        compared = (left['compared'] if left else
+                    [e['level'] for e in ta['probes'] if e['state'] == 'pair'])
+        if ta['compared'] != compared:
+            raise AssertionError(f'{where}: told apart compares '
+                                 f'{ta["compared"]!r}, the text {compared!r}')
+        if pc and ta['probes'] != pc['before']:
+            raise AssertionError(f'{where}: told apart takes other probe '
+                                 'pairs than the old machine printed')
+        want['pairs_count'] = ta['count']
+        if ta['listed'] == 'each':
+            want['pairs'] = [(t.element(p['strings'][0]),
+                              t.element(p['strings'][1]),
+                              RELATION_SAID[p['before']],
+                              RELATION_SAID[p['now']])
+                             for p in ta['pairs']]
+    got = {k: details.get(k) for k in want}
+    if got != want:
+        raise AssertionError(f'{where}: the report prints the levels and '
+                             f'pairs as {got!r}, the data hold {want!r}')
+    said = details.get('probes')
+    if (said is not None) != bool(pc) or pc and not all(
+            _probes_said(pc[k], x) for k, x in zip(('before', 'now'), said)):
+        raise AssertionError(f'{where}: the report prints the probe pairs '
+                             f'as {said!r}, the data hold {pc!r}')
+    if brief is not None:
+        want_b = {'probes': bool(pc), 'compared': want['compared'],
+                  'pairs_count': want['pairs_count'],
+                  'pairs': ([p[:2] for p in want['pairs']]
+                            if want['pairs'] is not None else None)}
+        got = {k: brief.get(k) for k in want_b}
+        if got != want_b:
+            raise AssertionError(f'{where}: the summary prints the levels and '
+                                 f'pairs as {got!r}, the data hold {want_b!r}')
+    if rows is None:
+        return
+    said = [r['probes'] for r in rows if r['finding'] == 'pairs changed']
+    if len(said) != bool(pc) or pc and not all(
+            _probes_said(pc[k], x, lo.TEXT_ESCAPES)
+            for k, x in zip(('before', 'now'), said[0])):
+        raise AssertionError(f'{where}: the characters file prints the '
+                             f'probe pairs as {said!r}, the data hold {pc!r}')
+    said = [r['levels'] for r in rows if r['finding'] == 'not compared']
+    if said != ([left['left_out']] if left else []):
+        raise AssertionError(f'{where}: the characters file leaves out '
+                             f'{said!r}, the data {left!r}')
+
+    def chain_row(c):
+        s = [e for a, b in c['runs']
+             for e in t.run_elements(t.element(a), t.element(b))]
+        x = c['test']
+        if x['state'] == 'none':
+            test = before = now = None
+        else:
+            probe = ta['probes'][lo.LEVEL_NAMES.index(x['level'])]
+            if probe['state'] != 'pair':
+                raise AssertionError(f'{where}: a chain is tested at '
+                                     f'{x["level"]}, which has no pair')
+            low, high = (t.element(v) for v in probe['pair'])
+            test = (([high, s[0]], [low, s[1]]) if probe['from_the_end']
+                    else ([s[0], high], [s[1], low]))
+            before, now = x['before'], x['now']
+        return {'chars': s, 'how': (RELATION_SAID[c['before']],
+                                    RELATION_SAID[c['now']]),
+                'test': test, 'before': before, 'now': now,
+                'measured': SIDE_SAID[c['measured']]}
+    said = [{k: r[k] for k in ('chars', 'how', 'test', 'before', 'now',
+                               'measured')}
+            for r in rows if r['finding'] == 'told apart differently']
+    if said != ([chain_row(c) for c in ta['chains']] if ta else []):
+        raise AssertionError(f'{where}: the characters file prints the '
+                             'chains told apart differently otherwise than '
+                             'the data')
+
+
 # The rows of the characters file that step 11's findings of a change
 # write (locale_order.LOCALE_KINDS' rows), not those of its sort table.
 STEP11_ROWS = ('moved', 'sorts differently', 'pairs changed',
@@ -1880,9 +2025,12 @@ def step11_groups_held(r, s, findings, path, where, files=None,
     measurement decides, as its rows name them, what did not move, as the
     strings of its chains that no moved row names, and each group's
     names_bytes, as whether its rows of step 11 name a string by its
-    bytes. What did not move is counted, not named, where the report
-    lists too many; then only the characters file holds it. S is None
-    where no summary was written."""
+    bytes; and the probe pairs that changed, the levels left out and the
+    pairs told apart differently (step11_levels_held), in the report and
+    the characters file, and in the summary what its phrase says of them.
+    What did not move is counted, not named, where the report lists too
+    many; then only the characters file holds it. S is None where no
+    summary was written."""
     import test_locale_order as t
     import locale_order as lo
     by = t.by_name(r)
@@ -2052,6 +2200,11 @@ def step11_groups_held(r, s, findings, path, where, files=None,
                 raise AssertionError(f'{where}: the summary prints what '
                                      f'changed in {names} as {got!r}, {path} '
                                      f'holds {want!r}')
+        step11_levels_held(
+            f, ch, t.parse_brief(s['changes'][names[0]]['brief'])
+            if s is not None else None,
+            files.get(tuple(names), []) if files is not None else None,
+            f'{where}: {names} in {path}')
     if any(g['names_bytes'] for g in groups):
         for text, said in (('report', r.get('others_note')),
                            ('summary', s and s.get('others_note'))):
