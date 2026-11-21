@@ -6229,6 +6229,62 @@ class Pieces(unittest.TestCase):
                     self.assertIn(m.relation_words(self.rel(kind, levels), levels),
                                   TOLD_APART)
 
+    def test_every_relation_is_one_state_of_eleven(self):
+        """Every relation a record can give, over every set of levels
+        compared, is one state of RELATION_WORDS, whose words are what
+        relation_words prints; every one of the eleven is reached; and the
+        states of a set of levels are exactly those report_data's reader
+        allows for it (relations), so that the writer and the reader of the
+        data cannot drift apart."""
+        import report_data as rd
+        reached = set()
+        for levels in ((), (0,), (1,), (2,), (0, 1), (0, 2), (1, 2), self.ALL):
+            states = set()
+            for rel in range(16):
+                state = m.relation_state(rel, levels)
+                with self.subTest(rel=rel, levels=levels):
+                    self.assertIn(state, m.RELATION_WORDS)
+                    self.assertEqual(m.relation_words(rel, levels),
+                                     m.RELATION_WORDS[state])
+                states.add(state)
+            with self.subTest(levels=levels):
+                self.assertEqual(states, rd.relations(
+                    [m.LEVEL_NAMES[k] for k in levels]))
+            reached |= states
+        self.assertEqual(reached, set(m.RELATION_WORDS))
+        self.assertEqual(rd.LIST_LIMIT, m.LIST_LIMIT)
+        self.assertEqual(len(reached), 11)
+        self.assertEqual(set(m.RELATION_WORDS.values()), TOLD_APART)
+
+    def test_the_probe_pairs_as_data(self):
+        """A machine's probe pairs as data: a pair with its two strings, a
+        character by its code point and anything else by its bytes, and
+        whether it is compared from the end; 'none' where the level does
+        not exist; 'not measured' where no pair measured it. Printed as
+        the report prints them."""
+        strings = sorted(chr(c).encode('utf-8') for c in (0x61, 0x62, 0xE1))
+        naming = m.Naming(m.Names(strings, 'UTF-8'))
+        got = m.probe_data('61.62> 61.C3A1< ?', naming.names)
+        self.assertEqual(got, [
+            {'level': 'letters', 'state': 'pair', 'pair': ['U+0061', 'U+0062'],
+             'from_the_end': False},
+            {'level': 'accents', 'state': 'pair', 'pair': ['U+0061', 'U+00E1'],
+             'from_the_end': True},
+            {'level': 'case', 'state': 'not measured'}])
+        self.assertEqual(m.readable_probes(got, naming),
+                         'letters a/b, accent a/\u00e1 from the end, case not '
+                         'measured')
+        self.assertFalse(naming.others)
+        got = m.probe_data('61.FF> none none', naming.names)
+        self.assertEqual(got, [
+            {'level': 'letters', 'state': 'pair',
+             'pair': ['U+0061', 'bytes FF'], 'from_the_end': False},
+            {'level': 'accents', 'state': 'none'},
+            {'level': 'case', 'state': 'none'}])
+        self.assertEqual(m.readable_probes(got, naming),
+                         'letters a/bytes FF, accent none, case none')
+        self.assertTrue(naming.others)
+
     def test_the_test_pair_of_a_level_change(self):
         """The Oriya digit zero: "0A" against U+0B66 "a", with the probes
         or_IN measured on both machines (letters a/b, case a/A). The
@@ -6491,6 +6547,24 @@ class FindingKinds(unittest.TestCase):
             told[i] = self.REC[special.get((seq[i], seq[i + 1]), 'letters')]
         return bytes(told)
 
+    # Made-up changes where nothing moves and the pair 0, 1 is told apart
+    # otherwise: (probes before, probes now, record before, record now).
+    # With the changes above they reach every relation (a level, levels
+    # between, less than a level, told apart with no level compared), a
+    # test pair compared from the end, and a level one machine measured no
+    # pair for, which no comparison of the suite's files reaches.
+    LEVELS = {
+        'case': ('61.62> 61.C3A1> 61.41>',) * 2 + ('letters', 'case'),
+        'letters or accents': ('? 61.C3A1> 61.41>',) * 2 + ('letters', 'less'),
+        'letters or accents or case': ('? ? 61.41>',) * 2 + ('letters', 'tie'),
+        'less than letters': ('61.62> ? ?',) * 2 + ('accent', 'letters'),
+        'less than accents': ('61.62> 61.C3A1> ?',) * 2 + ('case', 'letters'),
+        'told apart': ('? ? ?',) * 2 + ('letters', 'tie'),
+        'from the end': ('61.62> 61.C3A1< 61.41>',) * 2 + ('case', 'accent'),
+        'not measured': ('61.62> ? 61.41>', '61.62> 61.C3A1> 61.41>',
+                         'accent', 'letters'),
+    }
+
     def changes(self):
         """{name: (old, new, o, n)}: the Oriya case (a character moved
         between 0 and 1, told apart like an accent before and by less than
@@ -6554,6 +6628,10 @@ class FindingKinds(unittest.TestCase):
                         assert_named_alike(self, parse_details(lines),
                                            parse_brief(brief),
                                            files.get(('x',), []))
+                    with self.subTest(change=name, limit=limit, kind='data'):
+                        _harness.step11_levels_held(
+                            {x['kind']: x for x in data}, parse_details(lines),
+                            parse_brief(brief), files.get(('x',), []), name)
                     with self.subTest(change=name, limit=limit, kind='sql'):
                         # What the SQL files get: a test for each row of the
                         # file with a test pair, in its order, with its signs
@@ -6580,6 +6658,63 @@ class FindingKinds(unittest.TestCase):
         for kind in LOCALE_KINDS:
             with self.subTest(kind=kind):
                 self.assertEqual(seen[kind], {m.LIST_LIMIT, 0})
+
+    def test_every_relation_is_held_to_the_text(self):
+        """LEVELS, and the changes above, each from describe_change itself,
+        its data held to the report's lines, the summary's phrase and the
+        rows of the file (_harness.step11_levels_held), the pairs named
+        and counted as too many: between them every relation, a test pair
+        compared from the end and one not, a chain no level shows, a level
+        one machine measured no pair for, and two chains, each pair
+        listed."""
+        changes = self.changes()
+        for name, (before, now, was, became) in self.LEVELS.items():
+            (old, o), (nw, n) = (
+                self.measurement(self.BASE, self.records(
+                    self.BASE, {(0x30, 0x31): was}), before),
+                self.measurement(self.BASE, self.records(
+                    self.BASE, {(0x30, 0x31): became}), now))
+            changes[name] = (old, nw, o, n)
+        # Two pairs apart, two chains, each changed otherwise.
+        (old, o), (nw, n) = (
+            self.measurement(self.BASE, self.records(
+                self.BASE, {(0x30, 0x31): 'letters', (0x40, 0x41): 'accent'}),
+                self.LEVELS['case'][0]),
+            self.measurement(self.BASE, self.records(
+                self.BASE, {(0x30, 0x31): 'case', (0x40, 0x41): 'letters'}),
+                self.LEVELS['case'][0]))
+        changes['two chains'] = (old, nw, o, n)
+        states, tested, probes = set(), set(), set()
+        chains = 0
+        for limit in (m.LIST_LIMIT, 0):
+            with unittest.mock.patch.object(m, 'LIST_LIMIT', limit):
+                for name, args in changes.items():
+                    lines, brief, rows, others, sql, data = \
+                        m.describe_change(*args)
+                    f = {x['kind']: x for x in data}
+                    with self.subTest(change=name, limit=limit):
+                        _harness.step11_levels_held(
+                            f, parse_details(lines), parse_brief(brief),
+                            parse_characters(file_of(rows)).get(('x',), []),
+                            name)
+                    ta = f.get('told apart')
+                    if ta and ta['listed'] == 'each':
+                        chains = max(chains, len(ta['chains']))
+                    for c in ta['chains'] if ta else []:
+                        states.update((c['before'], c['now']))
+                        t = c['test']
+                        tested.add((t['state'], t.get('level'), ta['probes'][
+                            m.LEVEL_NAMES.index(t['level'])]['from_the_end']
+                            if t['state'] == 'pair' else None))
+                    for side in ('before', 'now'):
+                        probes.update(e['state'] for e in f.get(
+                            'probes changed', {}).get(side, []))
+        self.assertEqual(states, set(m.RELATION_WORDS))
+        self.assertIn(('pair', 'accents', True), tested)
+        self.assertIn(('pair', 'letters', False), tested)
+        self.assertIn(('none', None, None), tested)
+        self.assertIn('not measured', probes)
+        self.assertGreater(chains, 1)
 
 
 def pair_by_pair(old_seq, old_told, new_seq, new_told, levels):
@@ -17514,7 +17649,11 @@ class WrapsByColumns(unittest.TestCase):
 
         lines = m.told_apart_lines({'naming': Naming(), 'count': 1,
                                     'levels': (0, 1, 2),
-                                    'pairs': [(0, 1, 0b0001, 0b0011)]})
+                                    'pairs': [(0, 1, 0b0001, 0b0011)],
+                                    'data': {
+                                        'count': 1, 'listed': 'each',
+                                        'pairs': [{'before': 'less than case',
+                                                   'now': 'case'}]}})
         self.assertEqual(_harness.wide_lines(
             '\n'.join('    ' + x for x in lines)), [])
         self.assertGreater(len(lines), 2, lines)

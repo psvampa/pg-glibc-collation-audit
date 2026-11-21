@@ -7,9 +7,8 @@ Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
 only inside a sentence (step 2's totals and character sets, the
-provenance of each side, and of step 11's findings each sort table,
-the probe pairs that changed, the levels left out and the pairs told
-apart differently) is 'not yet reported': a
+provenance of each side, and each sort table of step 11's findings)
+is 'not yet reported': a
 later step of the work turns each one into data (branch 24 of the
 plan).
 The `!!` notices of steps 0, 1, 2 and 11
@@ -1356,11 +1355,179 @@ def _not_yet(where, obj):
 
 
 # What step 11 finds in a changed locale, in the order it finds it
-# (locale_order.LOCALE_KINDS); FINDING_DATA are those written as data,
-# the others not yet reported.
+# (locale_order.LOCALE_KINDS), each written as data; the levels a pair is
+# told apart at (locale_order.LEVEL_NAMES); the machine a chain of
+# neighbours is measured on (locale_order.MEASURED).
 FINDING_KINDS = ('moved', 'reversed', 'probes changed', 'left out',
                  'told apart', 'did not move', 'undecided')
-FINDING_DATA = ('moved', 'reversed', 'did not move', 'undecided')
+LEVELS = ('letters', 'accents', 'case')
+SIDES = ('both', 'old', 'new')
+# How many pairs told apart differently the report lists one by one
+# (locale_order.LIST_LIMIT).
+LIST_LIMIT = 20
+
+
+def relations(compared):
+    """The states a relation can be in over the levels COMPARED
+    (locale_order.relation_state): not at all; at the first compared level
+    that tells the two apart, reached from just after the compared level
+    before it; less than the weakest compared level; told apart where
+    none is compared."""
+    ks = [LEVELS.index(x) for x in compared]
+    out, before = {'not at all'}, -1
+    for k in ks:
+        out.add(' or '.join(LEVELS[before + 1:k + 1]))
+        before = k
+    out.add(f'less than {LEVELS[ks[-1]]}' if ks else 'told apart')
+    return out
+
+
+def _levels(where, x):
+    """A list of level names, in LEVELS's order, each once."""
+    if not (isinstance(x, list) and all(v in LEVELS for v in x)
+            and x == sorted(set(x), key=LEVELS.index)):
+        raise ReportError(f'{where} is not a list of levels: {x!r}')
+    return x
+
+
+def _probes(where, side):
+    """One machine's probe pairs (locale_order.probe_data)."""
+    if not (isinstance(side, list) and len(side) == 3):
+        raise ReportError(f'{where} is not three levels: {side!r}')
+    for i, e in enumerate(side):
+        w = f'{where}[{i}]'
+        if not isinstance(e, dict):
+            raise ReportError(f'{w} is {e!r}')
+        _one_of(f'{w}.state', e.get('state'), ('pair', 'none', 'not measured'))
+        if e['state'] == 'pair':
+            _keys(w, e, ['level', 'state', 'pair', 'from_the_end'])
+            if not (isinstance(e['pair'], list) and len(e['pair']) == 2):
+                raise ReportError(f'{w}.pair is {e["pair"]!r}')
+            for t in e['pair']:
+                _string(f'{w}.pair', t)
+            if not _is_bool(e['from_the_end']):
+                raise ReportError(f'{w}.from_the_end is {e["from_the_end"]!r}')
+        else:
+            _keys(w, e, ['level', 'state'])
+        if e['level'] != LEVELS[i]:
+            raise ReportError(f'{w}.level is {e["level"]!r}')
+
+
+def _expand(where, runs):
+    """The strings of RUNS, in their order, as _string gives them."""
+    out = []
+    for i, run in enumerate(runs):
+        n = _run_size(f'{where}[{i}]', run)
+        a = _string(where, run[0])
+        out += [a[:-1] + (a[-1] + j,) for j in range(n)]
+    return out
+
+
+def _spans(where, runs):
+    """The strings of RUNS as spans (kind, first, last) of _string's
+    numbers, in order, each span as long as it can be: two sets of strings
+    are equal exactly when their spans are."""
+    got = []
+    for i, run in enumerate(runs):
+        n = _run_size(f'{where}[{i}]', run)
+        a = _string(where, run[0])
+        got.append((a[:-1], a[-1], a[-1] + n - 1))
+    out = []
+    for kind, lo, hi in sorted(got):
+        if out and out[-1][0] == kind and lo <= out[-1][2] + 1:
+            out[-1] = (kind, out[-1][1], max(out[-1][2], hi))
+        else:
+            out.append((kind, lo, hi))
+    return out
+
+
+def _minus(a, b):
+    """The spans of A's strings that are not B's (both from _spans)."""
+    out, j = [], 0
+    for kind, lo, hi in a:
+        while j < len(b) and (b[j][0], b[j][2]) < (kind, lo):
+            j += 1
+        k, at = j, lo
+        while k < len(b) and b[k][0] == kind and b[k][1] <= hi:
+            if b[k][1] > at:
+                out.append((kind, at, b[k][1] - 1))
+            at = max(at, b[k][2] + 1)
+            k += 1
+        if at <= hi:
+            out.append((kind, at, hi))
+    return out
+
+
+def _told_apart(where, x):
+    _keys(where, x, ['kind', 'count', 'compared', 'probes', 'listed',
+                     'pairs', 'chains'])
+    compared = _levels(f'{where}.compared', x['compared'])
+    _probes(f'{where}.probes', x['probes'])
+    paired = [e['level'] for e in x['probes'] if e['state'] == 'pair']
+    if not set(compared) <= set(paired):
+        raise ReportError(f'{where} compares {compared!r}, a level with no '
+                          'probe pair')
+    allowed = relations(compared)
+    if not _is_positive(x['count']):
+        raise ReportError(f'{where}.count is {x["count"]!r}')
+    _one_of(f'{where}.listed', x['listed'], ('each', 'too many'))
+    if (x['listed'] == 'each') != (x['count'] <= LIST_LIMIT):
+        raise ReportError(f'{where} is listed {x["listed"]!r} with '
+                          f'{x["count"]} pairs')
+    if not (isinstance(x['chains'], list) and x['chains']):
+        raise ReportError(f'{where}.chains is {x["chains"]!r}')
+    held, chained = 0, []
+    for i, c in enumerate(x['chains']):
+        w = f'{where}.chains[{i}]'
+        _keys(w, c, ['runs', 'before', 'now', 'measured', 'test'])
+        if not (isinstance(c['runs'], list) and c['runs']):
+            raise ReportError(f'{w}.runs is {c["runs"]!r}')
+        # Counted by its runs, every one checked; named string by string
+        # only where the report lists the pairs (at most LIST_LIMIT).
+        size = sum(_run_size(f'{w}.runs[{i}]', run)
+                   for i, run in enumerate(c['runs']))
+        if size < 2:
+            raise ReportError(f'{w} is not a chain: {c["runs"]!r}')
+        held += size - 1
+        _one_of(f'{w}.before', c['before'], sorted(allowed))
+        _one_of(f'{w}.now', c['now'], sorted(allowed))
+        if c['before'] == c['now']:
+            raise ReportError(f'{w} is told apart alike before and now')
+        _one_of(f'{w}.measured', c['measured'], SIDES)
+        t = c['test']
+        if not isinstance(t, dict):
+            raise ReportError(f'{w}.test is {t!r}')
+        _one_of(f'{w}.test.state', t.get('state'), ('pair', 'none'))
+        if t['state'] == 'pair':
+            _keys(f'{w}.test', t, ['state', 'level', 'before', 'now'])
+            _one_of(f'{w}.test.level', t['level'], compared)
+            _one_of(f'{w}.test.before', t['before'], ('<', '>'))
+            _one_of(f'{w}.test.now', t['now'], ('<', '>'))
+            if t['before'] == t['now']:
+                raise ReportError(f'{w}.test is answered alike before and '
+                                  'now')
+        else:
+            _keys(f'{w}.test', t, ['state'])
+        if x['listed'] == 'each' and held <= LIST_LIMIT:
+            strings = _expand(f'{w}.runs', c['runs'])
+            chained += [[a, b, c['before'], c['now']]
+                        for a, b in zip(strings, strings[1:])]
+    if held != x['count']:
+        raise ReportError(f'{where} counts {x["count"]} pairs and its chains '
+                          f'hold {held}')
+    if not isinstance(x['pairs'], list):
+        raise ReportError(f'{where}.pairs is {x["pairs"]!r}')
+    listed = []
+    for i, p in enumerate(x['pairs']):
+        w = f'{where}.pairs[{i}]'
+        _keys(w, p, ['strings', 'before', 'now'])
+        if not (isinstance(p['strings'], list) and len(p['strings']) == 2):
+            raise ReportError(f'{w}.strings is {p["strings"]!r}')
+        listed.append([_string(w, s) for s in p['strings']]
+                      + [p['before'], p['now']])
+    if listed != (chained if x['listed'] == 'each' else []):
+        raise ReportError(f'{where} lists its pairs otherwise than its '
+                          'chains')
 FOUND_BY = ('step 11', 'its sort table alone')
 REACHES = ('imported', 'anywhere', 'superuser')
 STRING = re.compile(r'U\+([0-9A-F]{4,6})|bytes ([0-9A-F]{2}(?: [0-9A-F]{2})*)')
@@ -1395,10 +1562,20 @@ def _finding(where, x):
         raise ReportError(f'{where} is not an object: {x!r}')
     _one_of(f'{where}.kind', x.get('kind'), FINDING_KINDS)
     kind = x['kind']
-    if kind not in FINDING_DATA:
-        _keys(where, x, ['kind', 'state', 'why'])
-        _not_yet(f'{where} ({kind})', {'state': x['state'],
-                                      'why': x['why']})
+    if kind == 'probes changed':
+        _keys(where, x, ['kind', 'before', 'now'])
+        _probes(f'{where}.before', x['before'])
+        _probes(f'{where}.now', x['now'])
+        return
+    if kind == 'left out':
+        _keys(where, x, ['kind', 'compared', 'left_out'])
+        a = _levels(f'{where}.compared', x['compared'])
+        b = _levels(f'{where}.left_out', x['left_out'])
+        if not b or set(a) & set(b):
+            raise ReportError(f'{where} leaves out {b!r} and compares {a!r}')
+        return
+    if kind == 'told apart':
+        _told_apart(where, x)
         return
     if kind == 'undecided':
         _keys(where, x, ['kind', 'count', 'pairs'])
@@ -1509,17 +1686,98 @@ def _findings(where, f, verdicts):
                     moved and 'told apart' in kinds)):
             raise ReportError(f'{w}.findings are {kinds!r} with '
                               f'{moved} strings moved')
-        if any(x.get('other_strings') or x['kind'] == 'undecided'
-               and any(t.startswith('bytes ') for p in x['pairs'] for t in p)
-               for x in found) and not g['names_bytes']:
-            raise ReportError(f'{w} counts a string by its bytes and says '
-                              'it names none')
+        fk = {x['kind']: x for x in found}
+        _levels_held(w, fk)
+        if any(x.get('other_strings') for x in found) or any(
+                t.startswith('bytes ')
+                for t in _tokens(_named_strings(found))):
+            if not g['names_bytes']:
+                raise ReportError(f'{w} counts a string by its bytes and '
+                                  'says it names none')
+        if 'told apart' in fk and moved:
+            chain = _spans(w, [r for c in fk['told apart']['chains']
+                               for r in c['runs']])
+            dn = fk.get('did not move')
+            if _minus(chain, _spans(w, found[0]['runs'])) != \
+                    _spans(w, dn['runs'] if dn else []):
+                raise ReportError(f'{w}: what did not move is not the strings '
+                                  'of the chains that did not move')
     changed = {n for n, v in verdicts.items() if v['verdict'] == 'changed'}
     if seen != changed:
         raise ReportError(f'{where} groups {sorted(seen ^ changed)[:5]} '
                           'otherwise than the verdicts')
     if printed != set(range(len(printed))):
         raise ReportError(f'{where}: the headings are {sorted(printed)}')
+
+
+def _levels_held(w, fk):
+    """The levels a group's findings compare and leave out, against its
+    probe pairs: told apart compares the levels its pairs (the old
+    machine's) measure but those left out, and takes those pairs from the
+    probes changed's 'before'; where the pairs changed and a level is
+    left out, a level whose pairs differ or that one machine did not
+    measure is among those left out, and a level compared has a pair (the
+    pairs changed without a level left out only where nothing told apart
+    was looked at: locale_findings). Only what bytes decide is asked: two
+    byte strings that one charmap names alike leave a level whose names
+    read alike left out, which nothing here refuses."""
+    pc, lo, ta = (fk.get(k) for k in ('probes changed', 'left out',
+                                      'told apart'))
+    out = lo['left_out'] if lo else []
+    if ta:
+        want = [e['level'] for e in ta['probes']
+                if e['state'] == 'pair' and e['level'] not in out]
+        if ta['compared'] != want:
+            raise ReportError(f'{w}: told apart compares {ta["compared"]!r}, '
+                              f'its probe pairs {want!r}')
+        if lo and lo['compared'] != ta['compared']:
+            raise ReportError(f'{w}: the levels compared are not those '
+                              'told apart says')
+        if pc and ta['probes'] != pc['before']:
+            raise ReportError(f'{w}: told apart takes other probe pairs '
+                              'than the old machine measured')
+        if pc and not lo:
+            raise ReportError(f'{w}: the probe pairs changed and no level '
+                              'is left out')
+    if pc and lo:
+        for a, b in zip(pc['before'], pc['now']):
+            k = a['level']
+            if (a != b or 'not measured' in (a['state'], b['state'])) and \
+                    k not in out:
+                raise ReportError(f'{w}: {k} is compared with pairs that '
+                                  'changed')
+            # A level compared whose pairs differ is refused above.
+            if k in lo['compared'] and a['state'] != 'pair':
+                raise ReportError(f'{w}: {k} is compared with no pair')
+
+
+def _named_strings(found):
+    """FOUND as the outputs name its strings: told apart's probe pairs
+    only at the levels a chain is tested at, the only ones told apart's
+    outputs name (locale_order.names_bytes). A pair of another level, such
+    as th_TH's accents pair in TIS-620 on RHEL 8 and 9 (FF 5F), is named
+    by told apart nowhere; probes changed, kept whole, names it where the
+    pairs changed."""
+    out = []
+    for x in found:
+        if x['kind'] == 'told apart':
+            tested = {c['test'].get('level') for c in x['chains']}
+            x = dict(x, probes=[e for e in x['probes']
+                                if e['level'] in tested])
+        out.append(x)
+    return out
+
+
+def _tokens(x):
+    """Every string value under X."""
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, list):
+        for v in x:
+            yield from _tokens(v)
+    elif isinstance(x, dict):
+        for v in x.values():
+            yield from _tokens(v)
 
 
 def load(path):
