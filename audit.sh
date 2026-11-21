@@ -515,7 +515,7 @@ ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
 # so that one that printed none is told apart from one that never ran; an
 # earlier run's is removed with the steps' warnings files, above.
 STEP11_WARNINGS="$OUT_DIR/step11.$PAIR.warnings.jsonl"
-# Its counts and findings as data (locale_order.STEP11_DATA_ENV),
+# Its data (locale_order.STEP11_DATA_ENV),
 # written once its report is printed; removed below, so that one an
 # earlier run left is never this run's.
 STEP11_DATA="$OUT_DIR/step11.$PAIR.data.json"

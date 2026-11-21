@@ -4298,7 +4298,7 @@ class TagsOfTheAuditedPair(SmallFiles, Variants):
 
 
 class TheCountsFile(SmallFiles, Variants):
-    """The file compare writes its counts to (STEP11_DATA_ENV,
+    """The file compare writes its data to (STEP11_DATA_ENV,
     write_counts), which every comparison of the suite holds to what it
     printed (_harness.step11_counts_held): one an earlier run left is gone
     when this run is refused; one that cannot be written ends the run with
@@ -9257,6 +9257,18 @@ class DecimalsOfMoney(Checks):
                           names[1]: {'new': 'cannot be selected: y'}}},
              {'same': len(self.common(RHEL9, RHEL10)) - 2}])
 
+    def test_one_locale_not_read_on_either_machine(self):
+        """Named once, and counted once out of those read on both: the
+        data hold it once a machine (report_data's reader counts it once
+        against the counts)."""
+        name = sorted(self.common(RHEL9, RHEL10))[0]
+        self.assertEqual(
+            self.money(*self.pair({name: 'cannot be selected: x'},
+                                  {name: 'cannot be selected: y'})),
+            [{'unknown': {name: {'old': 'cannot be selected: x',
+                                 'new': 'cannot be selected: y'}}},
+             {'same': len(self.common(RHEL9, RHEL10)) - 1}])
+
     def test_the_scale_cash_c_keeps(self):
         self.assertEqual([m.money_scale(v) for v in (-128, -1, 0, 1, 10, 11, 127)],
                          [2, 2, 0, 1, 10, 2, 2])
@@ -9381,6 +9393,41 @@ class PostgresProcessesCompared(Checks):
             {'side': 'OLD', 'clean': 2},
             {'side': 'NEW', 'why': '1 of 2 process(es) named postgres or '
                                    'postmaster show no C library'},
+            {'note': True}])
+
+    # The cases no other run of the suite reaches, each held to its data
+    # (_harness.step11_checks_held) and read by report_data's reader on
+    # the way.
+
+    def test_the_old_machine_not_checked_as_a_whole(self):
+        why = '/proc could not be read (Permission denied)'
+        self.assertEqual(self.libc(old={'not_checked': why}), [
+            {'side': 'OLD', 'why': why}, {'side': 'NEW', 'clean': 2},
+            {'note': True}])
+
+    def test_replaced_on_the_old_machine(self):
+        self.assertEqual(self.libc(old={'replaced': True}), [
+            {'side': 'OLD', 'replaced': True}, {'side': 'NEW', 'clean': 2},
+            {'note': True}])
+
+    def test_none_found_on_the_new_machine(self):
+        self.assertEqual(self.libc(new={'processes': 0}), [
+            {'side': 'OLD', 'clean': 2}, {'side': 'NEW', 'none': True},
+            {'note': True}])
+
+    def test_names_unread_on_the_old_machine(self):
+        self.assertEqual(self.libc(old={'unnamed': 2}), [
+            {'side': 'OLD', 'why': 'the name of 2 other process(es) could '
+                                   'not be read'},
+            {'side': 'NEW', 'clean': 2}, {'note': True}])
+
+    def test_both_reasons_of_the_processes_named(self):
+        self.assertEqual(self.libc(new={'unreadable': 1, 'no_libc': 1}), [
+            {'side': 'OLD', 'clean': 2},
+            {'side': 'NEW', 'why': '1 of 2 process(es) named postgres or '
+                                   'postmaster could not be read; 1 of 2 '
+                                   'process(es) named postgres or postmaster '
+                                   'show no C library'},
             {'note': True}])
 
 

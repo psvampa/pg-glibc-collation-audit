@@ -3431,7 +3431,12 @@ def machine_libc_lines(p):
 def libc_why(p):
     """Why the PostgreSQL processes of a machine were not all checked, or
     None when every one was: what libc_why_data holds, as words."""
-    d = libc_why_data(p)
+    return libc_why_said(libc_why_data(p))
+
+
+def libc_why_said(d):
+    """libc_why's words, of libc_why_data's D; None where it holds no
+    reason."""
     why = list(d['machine'])
     why += [f'{x["count"]} of {x["processes"]} process(es) named '
             f'{" or ".join(x["looked_for"])} {x["reason"]}'
@@ -5986,108 +5991,202 @@ def side_of(sides):
     return 'both' if len(sides) == 2 else sides[0].lower()
 
 
-def control_texts(old, new):
-    """[(text, is a warning)]: C and POSIX on each machine against
-    control_fingerprint(). A file of any format holds them, so this needs
-    nothing a file of an earlier format lacks. A `!!` is a Bang with its
-    kind and data (report_warnings)."""
+# What C or POSIX measured on one machine against control_fingerprint():
+# byte order, something else, not in its file, or not measured there (with
+# the error the machine recorded).
+CONTROL_STATES = ('byte order', 'not byte order', 'not in the file',
+                  'not measured')
+
+
+def control_data(old, new):
+    """{side: {name: {'state'[, 'error']}}}: C and POSIX on each machine
+    against control_fingerprint(), one of CONTROL_STATES, with the error
+    the machine recorded where it could not measure one. A file of any
+    format holds them, so this needs nothing a file of an earlier format
+    lacks. control_texts prints from it."""
     order, pairs, probes = control_fingerprint()
-    held, broken, unknown = [], [], []
-    absent, unmeasured = [], []
-    for side, data in zip(('OLD', 'NEW'), (old, new)):
+    out = {}
+    for side, data in (('old', old), ('new', new)):
+        out[side] = {}
         for name in ('C', 'POSIX'):
             r = data['locales'].get(name)
             if r is None:
-                unknown.append(f'{name} is not in the {side} file')
-                absent.append({'name': name, 'side': side.lower()})
+                got = {'state': 'not in the file'}
             elif 'error' in r:
-                unknown.append(f'{name} could not be measured on the {side} '
-                               f'machine ({r["error"]})')
-                unmeasured.append({'name': name, 'side': side.lower(),
-                                   'error': r['error']})
+                got = {'state': 'not measured', 'error': r['error']}
             elif (r['order'], r['pairs'], r['probes'], r['chars'],
                   r['partly']) != (order, pairs, probes,
                                    len(ONE_BYTE_STRINGS), 0):
-                broken.append((side, name))
+                got = {'state': 'not byte order'}
             else:
-                held.append(side)
+                got = {'state': 'byte order'}
+            if got['state'] not in CONTROL_STATES:
+                raise ValueError(f'a control state not in CONTROL_STATES: '
+                                 f'{got!r}')
+            out[side][name] = got
+    return out
+
+
+def control_texts(c):
+    """[(text, is a warning)]: the control's lines, printed from
+    control_data's C. A `!!` is a Bang with its kind and data
+    (report_warnings)."""
+    unknown, absent, unmeasured = [], [], []
+    for side in ('old', 'new'):
+        for name in ('C', 'POSIX'):
+            x = c[side][name]
+            if x['state'] == 'not in the file':
+                unknown.append(f'{name} is not in the {side.upper()} file')
+                absent.append({'name': name, 'side': side})
+            elif x['state'] == 'not measured':
+                unknown.append(f'{name} could not be measured on the '
+                               f'{side.upper()} machine ({x["error"]})')
+                unmeasured.append({'name': name, 'side': side,
+                                   'error': x['error']})
     out = []
-    for side in ('OLD', 'NEW'):
-        names = [name for s, name in broken if s == side]
+    for side in ('old', 'new'):
+        names = [name for name in ('C', 'POSIX')
+                 if c[side][name]['state'] == 'not byte order']
         if names:
-            out.append((Bang(f'!! Control FAILED on the {side} machine: '
-                             f'{" and ".join(names)} did not measure as byte '
-                             'order, which is how glibc sorts C and POSIX in '
-                             'every version. This script did not measure '
-                             'there what it means to, and nothing it measured '
-                             'on that machine can be trusted; measure it '
-                             'again with this checkout\'s '
-                             'scripts/locale_order.py.', 'control_failed',
-                             {'side': side.lower(), 'names': names}), True))
+            out.append((Bang(f'!! Control FAILED on the {side.upper()} '
+                             f'machine: {" and ".join(names)} did not '
+                             'measure as byte order, which is how glibc '
+                             'sorts C and POSIX in every version. This '
+                             'script did not measure there what it means '
+                             'to, and nothing it measured on that machine '
+                             'can be trusted; measure it again with this '
+                             'checkout\'s scripts/locale_order.py.',
+                             'control_failed',
+                             {'side': side, 'names': names}), True))
     if unknown:
         out.append((Bang('!! Control NOT checked: ' + '; '.join(unknown) + '.',
                          'control_not_checked',
                          {'absent': absent, 'unmeasured': unmeasured}), True))
-    if not broken and not unknown:
+    if all(x['state'] == 'byte order' for s in c.values() for x in s.values()):
         out.append(('Control: C and POSIX measured as byte order on both '
                     'machines, which is how glibc sorts them in every version.',
                     False))
     return out
 
 
-def money_texts(old, new, both):
-    """[(text, is a warning)]: the decimals of money of each locale on both
-    machines, as cash.c keeps them. A `!!` is a Bang with its kind and
-    data (report_warnings)."""
+def earlier_files(side):
+    """The sides of side_of's SIDE, as which_machines names them, and the
+    words on their files."""
+    sides = ['OLD', 'NEW'] if side == 'both' else [side.upper()]
+    return sides, ('the OLD and NEW files were' if len(sides) == 2
+                   else f'the {sides[0]} file was')
+
+
+def money_data(old, new, both):
+    """The decimals of money of each locale on both machines, as cash.c
+    keeps them: {'state': 'earlier format', 'side'} where a file holds no
+    money part (side_of), else {'state': 'compared', 'compared': how many
+    locales of BOTH were read on both machines, 'changed': [{'name', 'old',
+    'new'}], 'not_checked': [{'name', 'side', 'why'}]}, each list in the
+    order of BOTH. money_texts prints from it."""
     earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
                if 'money' not in data['held']]
     if earlier:
-        files = ('the OLD and NEW files were' if len(earlier) == 2
-                 else f'the {earlier[0]} file was')
-        return [(Bang(f'!! Decimals of money NOT checked: {files} '
-                      + EARLIER.format(which_machines(earlier)) + '.',
-                      'money_earlier_format', {'side': side_of(earlier)}),
-                 True)]
-    changed, unknown = [], []
-    changed_data, unknown_data = [], []
+        return {'state': 'earlier format', 'side': side_of(earlier)}
+    changed, not_checked = [], []
     for name in both:
         a, b = old['money'][name], new['money'][name]
         if isinstance(a, str) or isinstance(b, str):
-            sides = [(side, v) for side, v in (('old', a), ('new', b))
-                     if isinstance(v, str)]
-            unknown.append('; '.join(f'{shown(name)} ({side} machine): {v}'
-                                     for side, v in sides))
-            unknown_data += [{'name': name, 'side': side, 'why': v}
-                             for side, v in sides]
+            not_checked += [{'name': name, 'side': side, 'why': v}
+                            for side, v in (('old', a), ('new', b))
+                            if isinstance(v, str)]
         elif money_scale(a) != money_scale(b):
-            changed.append(f'{shown(name)} ({money_scale(a)} -> '
-                           f'{money_scale(b)})')
-            changed_data.append({'name': name, 'old': money_scale(a),
-                                 'new': money_scale(b)})
+            changed.append({'name': name, 'old': money_scale(a),
+                            'new': money_scale(b)})
+    return {'state': 'compared',
+            'compared': len(both) - len({x['name'] for x in not_checked}),
+            'changed': changed, 'not_checked': not_checked}
+
+
+def money_texts(m):
+    """[(text, is a warning)]: the decimals of money's lines, printed from
+    money_data's M. A `!!` is a Bang with its kind and data
+    (report_warnings)."""
+    if m['state'] == 'earlier format':
+        sides, files = earlier_files(m['side'])
+        return [(Bang(f'!! Decimals of money NOT checked: {files} '
+                      + EARLIER.format(which_machines(sides)) + '.',
+                      'money_earlier_format', {'side': m['side']}), True)]
     out = []
-    if changed:
-        out.append((Bang(f'!! Decimals of money CHANGE in {len(changed)} '
+    if m['changed']:
+        out.append((Bang(f'!! Decimals of money CHANGE in {len(m["changed"])} '
                          'locale(s): a money value stored with lc_monetary '
                          'set to one of them reads with another number of '
                          'decimals on the new machine, as a number 10 or '
                          'more times larger or smaller: '
-                         + ', '.join(changed) + '.', 'money_changed',
-                         {'locales': changed_data}), True))
-    if unknown:
-        out.append((Bang(f'!! Decimals of money NOT checked in {len(unknown)} '
-                         'locale(s): ' + '; '.join(unknown) + '.',
-                         'money_not_checked', {'locales': unknown_data}),
+                         + ', '.join(f'{shown(x["name"])} ({x["old"]} -> '
+                                     f'{x["new"]})' for x in m['changed'])
+                         + '.', 'money_changed', {'locales': m['changed']}),
                     True))
-    compared = len(both) - len(unknown)
-    if not changed:
-        out.append((f'Decimals of money: the same in the {compared} locale(s) '
-                    'measured on both machines.', False))
+    if m['not_checked']:
+        by = {}
+        for x in m['not_checked']:
+            by.setdefault(x['name'], []).append(x)
+        out.append((Bang(f'!! Decimals of money NOT checked in {len(by)} '
+                         'locale(s): ' + '; '.join(
+                             '; '.join(f'{shown(name)} ({x["side"]} machine): '
+                                       f'{x["why"]}' for x in xs)
+                             for name, xs in by.items()) + '.',
+                         'money_not_checked', {'locales': m['not_checked']}),
+                    True))
+    if not m['changed']:
+        out.append((f'Decimals of money: the same in the {m["compared"]} '
+                    'locale(s) measured on both machines.', False))
     return out
 
 
-def libc_texts(old, new):
+# What a machine's PostgreSQL processes come to (libc_data): all of them
+# run the C library measured there, none was found, or a `!!` says what
+# is wrong (the glibc replaced, a process on the replaced or another C
+# library, or a process or the machine not checked).
+LIBC_RESULTS = ('clean', 'no process found', 'flagged')
+
+
+def libc_data(old, new):
+    """{'old': ..., 'new': ..., 'note': bool}: each machine's PostgreSQL
+    processes against the C library measured there, {'state': 'earlier
+    format'} where its file holds no such part, else {'state': 'checked',
+    'replaced' (whether its glibc was replaced while it measured), 'stale'
+    and 'other' (how many processes), 'not_checked'
+    (libc_why_data), 'result' (LIBC_RESULTS)}, with what the line of its
+    result says beside: how many processes and the names looked for where
+    every one is clean, the names where none was found (a reason not
+    checked carries both of its own); and whether the note on what this
+    does not look at is printed (where either machine was checked).
+    libc_texts prints from it."""
+    out = {}
+    for side, data in (('old', old), ('new', new)):
+        if 'postgres_libc' not in data['held']:
+            out[side] = {'state': 'earlier format'}
+            continue
+        p = data['postgres_libc']
+        why = libc_why_data(p)
+        flagged = bool(p['stale'] or p['other'] or p['replaced']
+                       or why['machine'] or why['named'] or why['unnamed'])
+        result = ('flagged' if flagged else 'clean' if p['processes']
+                  else 'no process found')
+        if result not in LIBC_RESULTS:
+            raise ValueError(f'a result not in LIBC_RESULTS: {result!r}')
+        out[side] = {'state': 'checked', 'replaced': p['replaced'],
+                     'stale': len(p['stale']), 'other': len(p['other']),
+                     'not_checked': why, 'result': result}
+        if result == 'clean':
+            out[side]['processes'] = p['processes']
+        if result != 'flagged':
+            out[side]['looked_for'] = list(p['looked_for'])
+    out['note'] = any(out[s]['state'] == 'checked' for s in ('old', 'new'))
+    return out
+
+
+def libc_texts(lc):
     """[(text, is a warning, above)]: each machine's PostgreSQL processes
-    against the C library measured there, and what that does not look at.
+    against the C library measured there, and what that does not look at,
+    printed from libc_data's LC.
     above marks what voids the comparison, drawn above the list of changes
     as the control is: the OLD machine's PostgreSQL on a replaced or another
     C library (its indexes were not built with what was measured there), the
@@ -6097,21 +6196,20 @@ def libc_texts(old, new):
     not above: the list is what changes when it restarts. A `!!` is a
     Bang with its kind and data (report_warnings)."""
     out = []
-    earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
-               if 'postgres_libc' not in data['held']]
+    earlier = [side for side in ('old', 'new')
+               if lc[side]['state'] == 'earlier format']
     if earlier:
-        files = ('the OLD and NEW files were' if len(earlier) == 2
-                 else f'the {earlier[0]} file was')
+        side = 'both' if len(earlier) == 2 else earlier[0]
+        sides, files = earlier_files(side)
         out.append((Bang(f'!! PostgreSQL processes NOT checked on '
-                         f'{which_machines(earlier)}: {files} '
-                         + EARLIER.format(which_machines(earlier)) + '.',
-                         'libc_earlier_format', {'side': side_of(earlier)}),
+                         f'{which_machines(sides)}: {files} '
+                         + EARLIER.format(which_machines(sides)) + '.',
+                         'libc_earlier_format', {'side': side}),
                     True, False))
-    for side, data in zip(('OLD', 'NEW'), (old, new)):
-        if side in earlier:
+    for at in ('old', 'new'):
+        p, side = lc[at], at.upper()
+        if p['state'] == 'earlier format':
             continue
-        p = data['postgres_libc']
-        at = side.lower()
         if p['replaced']:
             out.append((Bang(f'!! The glibc of the {side} machine was '
                              'replaced on disk while it was measured, so what '
@@ -6120,41 +6218,40 @@ def libc_texts(old, new):
                              {'side': at}), True, True))
         if p['stale']:
             out.append((Bang(f'!! PostgreSQL on the {side} machine: '
-                             f'{len(p["stale"])} process(es) still run the '
+                             f'{p["stale"]} process(es) still run the '
                              'glibc that was replaced on disk, so they do not '
                              'sort with the glibc measured there until '
                              'PostgreSQL is restarted.', 'libc_stale',
-                             {'side': at, 'processes': len(p['stale'])}),
+                             {'side': at, 'processes': p['stale']}),
                         True, side == 'OLD'))
         if p['other']:
             out.append((Bang(f'!! PostgreSQL on the {side} machine: '
-                             f'{len(p["other"])} process(es) run another C '
+                             f'{p["other"]} process(es) run another C '
                              'library than the one measured there, as when '
                              'PostgreSQL runs in a container, so they do not '
                              'sort with the glibc measured there.',
                              'libc_other',
-                             {'side': at, 'processes': len(p['other'])}),
+                             {'side': at, 'processes': p['other']}),
                         True, True))
-        why = libc_why(p)
+        why = libc_why_said(p['not_checked'])
         if why:
             out.append((Bang(f'!! PostgreSQL processes NOT checked on the '
                              f'{side} machine: {why}. Run locale_order.py '
                              f'there {ADVICE}.', 'libc_not_checked',
-                             dict(libc_why_data(p), side=at)), True, False))
-        if not (p['stale'] or p['other'] or why or p['replaced']):
-            if p['processes']:
-                out.append((f'PostgreSQL on the {side} machine: '
-                            f'{libc_clean(p)}.', False, False))
-            else:
-                out.append((Bang(f'!! PostgreSQL on the {side} machine: no '
-                                 'process named '
-                                 f'{" or ".join(p["looked_for"])} was found, '
-                                 'so nothing checked which C library '
-                                 'PostgreSQL runs there.', 'libc_no_process',
-                                 {'side': at,
-                                  'looked_for': list(p['looked_for'])}),
-                            True, False))
-    if len(earlier) < 2:
+                             dict(p['not_checked'], side=at)), True, False))
+        if p['result'] == 'clean':
+            out.append((f'PostgreSQL on the {side} machine: '
+                        f'{libc_clean(p)}.', False, False))
+        elif p['result'] == 'no process found':
+            out.append((Bang(f'!! PostgreSQL on the {side} machine: no '
+                             'process named '
+                             f'{" or ".join(p["looked_for"])} was found, '
+                             'so nothing checked which C library '
+                             'PostgreSQL runs there.', 'libc_no_process',
+                             {'side': at,
+                              'looked_for': list(p['looked_for'])}),
+                        True, False))
+    if lc['note']:
         out.append(('This looks at the C library PostgreSQL runs, not at its '
                     'locale data: a PostgreSQL that was not restarted can '
                     'already use locales installed after it started.', False,
@@ -10818,15 +10915,16 @@ def change_groups(measured, groups, entries):
     return {'state': 'reported', 'groups': out}
 
 
-# The file compare() writes its counts and findings to, once its report
+# The file compare() writes its data to, once its report
 # is printed, for the run's data file (scripts/report_data.py); unset,
 # nothing is written.
 STEP11_DATA_ENV = 'PG_GLIBC_AUDIT_STEP11_DATA'
 
 
-def write_counts(counts, findings):
-    """Write COUNTS and FINDINGS to the file STEP11_DATA_ENV names, as
-    {'step': 11, 'counts': ..., 'findings': ...}: first under another
+def write_counts(counts, findings, checks):
+    """Write COUNTS, FINDINGS and CHECKS to the file STEP11_DATA_ENV names,
+    as {'step': 11, 'counts': ..., 'findings': ..., 'checks': ...}: first
+    under another
     name, then given its own, so that a file cut short is never there
     under it. A file that cannot be written ends the comparison: what was
     printed and not written would be a report the data file says nothing
@@ -10836,8 +10934,8 @@ def write_counts(counts, findings):
         return
     try:
         with open(path + '.partial', 'w', encoding='utf-8') as f:
-            json.dump({'step': 11, 'counts': counts, 'findings': findings},
-                      f, sort_keys=True)
+            json.dump({'step': 11, 'counts': counts, 'findings': findings,
+                       'checks': checks}, f, sort_keys=True)
             f.write('\n')
         os.replace(path + '.partial', path)
     except OSError as e:
@@ -11249,11 +11347,14 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             True, 'machines_order_undetermined',
             {'version': old['glibc_version']}))
     warnings += [(text, True, kind, data) for text, kind, data in unchecked]
-    libc = libc_texts(old, new)
-    checks = (('control', control_texts(old, new)),
+    check_data = {'control': control_data(old, new),
+                  'money': money_data(old, new, both),
+                  'postgres_libc': libc_data(old, new)}
+    libc = libc_texts(check_data['postgres_libc'])
+    checks = (('control', control_texts(check_data['control'])),
               ('postgres libc above',
                [(text, warning) for text, warning, above in libc if above]),
-              ('money', money_texts(old, new, both)),
+              ('money', money_texts(check_data['money'])),
               ('postgres libc',
                [(text, warning) for text, warning, above in libc if not above]))
     use, use_rows = use_texts(model)
@@ -11472,7 +11573,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     for line in report:
         print(line)
     report_warnings(blocks, g)
-    write_counts(counts, findings)
+    write_counts(counts, findings, check_data)
     return 0
 
 
