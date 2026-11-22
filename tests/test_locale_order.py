@@ -613,7 +613,7 @@ def check_kind(text):
                       r"locale\(s\) found unchanged were found so by their sort "
                       r"tables, which decide for every string\." + builtin, text)
     if mt:
-        return 'charmaps', {'checked': 0, 'by_table': int(mt[1]),
+        return 'charmaps', {'needed': False, 'by_table': int(mt[1]),
                             'builtin': aside(mt, 2)}
     mt = re.fullmatch(r'PostgreSQL on the ' + SIDE + r' machine: (\d+) '
                       r'process\(es\) named postgres or postmaster, all running '
@@ -6531,7 +6531,7 @@ class FindingKinds(unittest.TestCase):
                 m.printer(m.LOCALE_KINDS, 'a new kind', part)
         with self.assertRaises(LookupError):
             m.Drawn([('a new kind', {})], m.REPORT)
-        run = m.Drawn([('closing', {'text': m.CLOSING}),
+        run = m.Drawn([('closing', {'text': m.CLOSING, 'state': 'plain'}),
                        ('not on the new machine', {'name': 'x'})], m.REPORT,
                       {'pg_names': {}, 'o': {}})
         run('closing')
@@ -8927,8 +8927,8 @@ class CharmapsCheckedInTheComparison(Checks):
                 (['en_US.utf8'], ['POSIX', 'de_DE.utf8'],
                  ({'checked': 1, 'by_table': 1}, ['POSIX'])),
                 ([], ['C', 'POSIX', 'de_DE.utf8'],
-                 ({'checked': 0, 'by_table': 1}, ['C', 'POSIX'])),
-                ([], ['de_DE.utf8'], ({'checked': 0, 'by_table': 1}, []))):
+                 ({'needed': False, 'by_table': 1}, ['C', 'POSIX'])),
+                ([], ['de_DE.utf8'], ({'needed': False, 'by_table': 1}, []))):
             with self.subTest(compared=compared, firm=firm):
                 _, found = m.charmap_findings(
                     data, data, (('dir', root),) * 2, compared, firm=firm)
@@ -16294,7 +16294,7 @@ class SortTablesCompared(Checks):
         self.assertEqual(r['unchanged'], 6)
         # No locale needs its charmaps checked, and the line says why.
         for out in (r['checks'], s['checks']):
-            self.assertIn(('charmaps', {'checked': 0, 'by_table': 4,
+            self.assertIn(('charmaps', {'needed': False, 'by_table': 4,
                                         'builtin': ['C', 'POSIX']}), out)
 
     def test_the_character_sets_where_the_tables_decide_some(self):
@@ -16688,7 +16688,7 @@ class SortTablesCompared(Checks):
 
 
 class TheClosingNamesOnlyWhatIsThere(unittest.TestCase):
-    """closing_text: CLOSING_TABLES speaks of every locale found
+    """closing_state: CLOSING_TABLES speaks of every locale found
     unchanged, so it needs one (16.203: an all() over none is true);
     CLOSING_MIXED where some were cleared by an identical table; CLOSING
     otherwise. No measured pair has no unchanged locale (C and POSIX
@@ -16696,12 +16696,12 @@ class TheClosingNamesOnlyWhatIsThere(unittest.TestCase):
 
     def test_each_closing(self):
         for same, firm, by_tables, closing in (
-                (['C', 'en_US'], {'C', 'en_US'}, True, m.CLOSING_TABLES),
-                (['C', 'en_US'], {'C'}, True, m.CLOSING_MIXED),
-                (['C', 'en_US'], {'C'}, False, m.CLOSING),
-                ([], set(), False, m.CLOSING)):
+                (['C', 'en_US'], {'C', 'en_US'}, True, 'tables'),
+                (['C', 'en_US'], {'C'}, True, 'mixed'),
+                (['C', 'en_US'], {'C'}, False, 'plain'),
+                ([], set(), False, 'plain')):
             with self.subTest(same=same, firm=firm, by_tables=by_tables):
-                self.assertEqual(m.closing_text(same, firm, by_tables),
+                self.assertEqual(m.closing_state(same, firm, by_tables),
                                  closing)
 
 
