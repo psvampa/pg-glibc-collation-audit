@@ -11605,6 +11605,53 @@ class CtypeCompared(Checks):
             with self.subTest(case=case):
                 self.assertEqual(how(*args), (words, exact))
 
+    def test_each_change_printed_from_its_data(self):
+        """What the report and the file say of a character's or a byte's
+        change, printed from the data ctype_texts writes of it
+        (ctype_change_data, ctype_change_said), is ctype_how's on the
+        tables themselves: every mix of capital, small letter and
+        classes, a value that is the character itself on either side,
+        characters and bytes; and grouped, then ungrouped, each comes back
+        in order."""
+        a, b, x = 0x1E9E, 0xDF, 0x41
+        maps = [((a, a), (a, a)), ((a, x), (a, a)), ((x, a), (a, a)),
+                ((a, a), (b, a)), ((a, b), (a, x)), ((x, b), (b, x))]
+        classes = [([], []), (['punct', 'print'], ['alpha', 'print']),
+                   (['alpha', 'upper'], ['alpha', 'lower']), (['print'], [])]
+        wide = (m.short_character, lambda c: f'U+{c:04X}')
+        entries = []
+        for i, mp in enumerate(maps):
+            for j, (was, now) in enumerate(classes):
+                if mp == maps[0] and was == now:
+                    continue
+                with self.subTest(maps=mp, was=was, now=now):
+                    d = m.ctype_change_data(mp, was, now,
+                                            lambda c: f'U+{c:04X}')
+                    self.assertEqual(
+                        m.ctype_change_said(d, a, *wide, m.code_point),
+                        m.ctype_how(a, mp, was, now, *wide))
+                    e = dict({'char': f'U+{a + 1 + i * 8 + j:04X}',
+                              'classified': bool(was)}, **d)
+                    entries.append(e)
+                    byte = tuple((y & 0xFF, z & 0xFF) for y, z in mp)
+                    d = m.ctype_change_data(byte, was, now,
+                                            lambda c: f'{c:02X}')
+                    self.assertEqual(
+                        m.ctype_change_said(d, a & 0xFF,
+                                            lambda c: f'0x{c:02X}',
+                                            lambda c: f'{c:02X}',
+                                            lambda v: int(v, 16)),
+                        m.ctype_how(a & 0xFF, byte, was, now,
+                                    lambda c: f'0x{c:02X}',
+                                    lambda c: f'{c:02X}'))
+        # Each change once more, on a character further on: two
+        # characters to an entry.
+        entries += [dict(e, char=f'U+{m.code_point(e["char"]) + 0x400:04X}')
+                    for e in entries]
+        grouped = m.ctype_grouped(entries, 'char')
+        self.assertEqual(len(grouped) * 2, len(entries))
+        self.assertEqual(m.ctype_ungrouped(grouped, 'char'), entries)
+
     def test_locales_on_two_tables(self):
         new = {'de_DE.utf8': (as_letters(0x1063), SMALL_BYTES),
                'en_US.utf8': (as_letters(0x1063), SMALL_BYTES),

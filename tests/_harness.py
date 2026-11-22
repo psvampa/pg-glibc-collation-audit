@@ -1757,8 +1757,9 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     machine's name and number of locales, and the line of totals of both;
     then the findings it wrote beside them (step11_groups_held), with
     the characters file's text (`characters`, None where none was
-    written); and the checks beside the order (step11_checks_held) and
-    upper(), lower() and ILIKE (step11_use_held), read by report_data's
+    written); and the checks beside the order (step11_checks_held),
+    upper(), lower() and ILIKE (step11_use_held) and the character rules
+    of characters and bytes (step11_ctype_held), read by report_data's
     reader too, against the run's `!!` (WARNINGS, as report.json holds
     step 11's warnings).
     A file that is not there is right only where no report was printed
@@ -1832,6 +1833,9 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     step11_use_held(r, s if summary is not None else None, files,
                     rd.step11_data(path)['checks']['postgres_use'], path,
                     where)
+    step11_ctype_held(r, s if summary is not None else None, files,
+                      rd.step11_data(path)['checks']['ctype'], warnings,
+                      path, where)
     return c
 
 
@@ -2088,6 +2092,144 @@ def step11_use_held(r, s, files, u, path, where):
                                  f'rows {got.get(bad)!r} under {bad!r}, '
                                  f'{path} holds {said.get(bad)!r}')
 
+
+
+# What check_kind reads of the lines without `!!` this data prints: the
+# same, the built-in locales and those of another encoding.
+CTYPE_SAID_KEYS = ({'same', 'count', 'other', 'utf8'}, {'builtin'},
+                   {'elsewhere', 'with euc'})
+# The words the tests give a side of a locale whose character rules were
+# not checked (the tests' own, beside locale_order's).
+CTYPE_WHERE = {'both': 'both machines', 'old': 'old machine',
+               'new': 'new machine'}
+
+
+def _ctype_how(how, own):
+    """What parse_characters reads of an LC_CTYPE changed row's 'how'
+    ('upper: itself -> U+A7C5; classes: none -> alpha alnum'), as the
+    data writes a change: OWN, the row's own character or byte, for
+    'itself'; each class list, [] for 'none'."""
+    out = {}
+    for part in how.split('; '):
+        k, v = part.split(': ', 1)
+        a, b = v.split(' -> ')
+        if k == 'classes':
+            out[k] = {'old': [] if a == 'none' else a.split(' '),
+                      'new': [] if b == 'none' else b.split(' ')}
+        else:
+            out[k] = {'old': own if a == 'itself' else a,
+                      'new': own if b == 'itself' else b}
+    return out
+
+
+def step11_ctype_held(r, s, files, c, warned, path, where):
+    """step 11's data on the character rules of characters and bytes
+    (ctype_texts), as it wrote them to PATH, against what check_kind reads
+    of the lines on what is the same and what is not compared, in the
+    report, the summary and the characters file's notes; and against
+    every row parse_characters reads of its groups (the first ones the
+    file names, characters then bytes) and of the locales its `!!` on
+    what is not checked names (S, FILES None where not written)."""
+    import locale_order as lo
+    want = []
+    if c['state'] == 'compared':
+        lines = c['lines']
+
+        def count(*kinds):
+            return sum(1 for v in lines.values() if v in kinds)
+        for what, key, kinds in (('character', 'character_groups', ('utf8',)),
+                                 ('byte', 'byte_groups',
+                                  ('utf8', 'other encoding', 'euc'))):
+            same = count(*kinds) - sum(len(g['names']) for g in c[key])
+            if same:
+                want.append({'same': what, 'count': same,
+                             'other': bool(c[key]),
+                             'utf8': what == 'character'})
+        builtin = [n for n in ('C', 'POSIX') if lines.get(n) == 'built in']
+        if builtin:
+            want.append({'builtin': builtin})
+        if count('other encoding', 'euc'):
+            want.append({'elsewhere': count('other encoding', 'euc'),
+                         'with euc': bool(count('euc'))})
+    want = sorted(json.dumps(x, sort_keys=True) for x in want)
+    for text, found in (('report', r['checks']),
+                        ('summary', s['checks'] if s is not None else None),
+                        ('characters file',
+                         files.checks if files is not None else None)):
+        if found is None:
+            continue
+        got = sorted(json.dumps(d, sort_keys=True) for k, d in found
+                     if k == 'ctype' and set(d) in CTYPE_SAID_KEYS)
+        if got != want:
+            raise AssertionError(f'{where}: the {text} prints {got!r}, '
+                                 f'{path} holds {want!r}')
+    if files is None or c['state'] != 'compared':
+        return
+    i = 0
+    for what, key, unit in (('character', 'character_groups', 'char'),
+                            ('byte', 'byte_groups', 'byte')):
+        for g in c[key]:
+            i += 1
+            label = f'LC_CTYPE_group_{i}'
+            if files.ctype_groups.get(label) != (tuple(g['names']), what):
+                raise AssertionError(
+                    f'{where}: the characters file names {label} '
+                    f'{files.ctype_groups.get(label)!r}, {path} holds '
+                    f'{(tuple(g["names"]), what)!r}')
+            said = []
+            each = [dict({k: v for k, v in e.items() if k != unit + 's'},
+                         **{unit: u}) for e in g['changes']
+                    for u in e[unit + 's']]
+            for x in sorted(each, key=lambda x: int(
+                    x[unit][2:] if unit == 'char' else x[unit], 16)):
+                change = {k: v for k, v in x.items()
+                          if k not in (unit, 'classified')}
+                own = x[unit]
+                said.append((own if unit == 'char' else f'byte {own}',
+                             change,
+                             ('classified' if x['classified'] else
+                              'not classified') if unit == 'char' else '-'))
+            got = [(row['chars'],
+                    _ctype_how(row['how'], row['chars'] if unit == 'char'
+                               else row['chars'][5:]),
+                    row['before'])
+                   for row in files.get((label,), [])
+                   if row['finding'] == 'LC_CTYPE changed']
+            if got != said:
+                bad = next((a, b) for a, b in zip(got + [None] * len(said),
+                                                  said + [None] * len(got))
+                           if a != b)
+                raise AssertionError(f'{where}: the characters file prints '
+                                     f'under {label} {bad[0]!r}, {path} '
+                                     f'holds {bad[1]!r}')
+    # Every locale with a row not checked is on that line, but those the
+    # line on EUC not checked names, whose rows it gives.
+    rowed = {k[0] for k, rows in files.items()
+             if len(k) == 1 and any(row['finding'] == 'LC_CTYPE not checked'
+                                    for row in rows)}
+    rowed -= {n for item in (warned.get('items') or [])
+              if item['kind'] == 'euc_not_checked'
+              for r in item['data']['reasons'] for g in r['groups']
+              for n in g['names']}
+    names = sorted(n for n, v in c['lines'].items() if v == 'not checked')
+    if sorted(rowed) != names:
+        raise AssertionError(f'{where}: the characters file has rows not '
+                             f'checked of {sorted(rowed)!r}, {path} holds '
+                             f'{names!r}')
+    if warned['state'] != 'reported':
+        return
+    told = {}
+    for item in warned['items']:
+        if item['kind'] == 'ctype_not_checked':
+            for x in item['data']['locales']:
+                told.setdefault(x['name'], []).append(
+                    f'{CTYPE_WHERE[x["side"]]}: {x["why"]}'.translate(
+                        lo.TEXT_ESCAPES))
+    got = {n: [row['why'] for row in files.get((n,), [])
+               if row['finding'] == 'LC_CTYPE not checked'] for n in names}
+    if got != {n: told.get(n) for n in names}:
+        raise AssertionError(f'{where}: the characters file prints the rows '
+                             f'not checked {got!r}, the `!!` say {told!r}')
 
 
 def _codeset_label(cs):
