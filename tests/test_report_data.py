@@ -78,10 +78,12 @@ def step11_files(d):
     write(d, f'measured_order_characters.{PAIR}.tsv',
           '# Step 11, x -> y: every character.\n'
           'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured\n'
+          'sv_SE\tsort table changed\t-\tits compiled sort table '
+          'changed\t-\t-\t-\t-\n'
           'sv_SE\tmoved\tU+00E5\t-\tx\t>\t<\ton both machines\n'
           'sv_SE,sv_SE.utf8\tmoved\tU+00E4\t-\tx\t>\t<\ton both machines\n'
           '# Control: held.\n'
-          '# end: 2 locale group(s), 2 row(s)\n')
+          '# end: 2 locale group(s), 3 row(s)\n')
     write(d, f'measured_order_confirm.{PAIR}.UTF8.sql', 'select 1;\n')
     # Another pair's, whose new side's name extends this one's (16.109).
     write(d, f'measured_order_confirm.{PAIR}.1.UTF8.sql', 'select 1;\n')
@@ -143,7 +145,9 @@ FINDINGS = {'state': 'reported', 'groups': [{
          'other_strings': 0, 'runs': [['U+00E4', 'U+00E4']],
          'listed': 'runs'},
         {'kind': 'undecided', 'count': 1, 'pairs': [['U+0061', 'bytes 80']]}],
-    'names_bytes': True, 'sort_table': rd.NOT_YET}]}
+    'names_bytes': True, 'sort_table': {
+        'state': 'changed', 'step11': 'changed',
+        'reason': 'no levels on one machine'}}]}
 
 
 # The counts of step11_files' two locales, C unchanged (firm, built into
@@ -598,7 +602,7 @@ class EveryFileWritten(_Folder):
         self.assertEqual(s11['state'], 'reported')
         self.assertEqual(s11['verdicts']['sv_SE'],
                          {'verdict': 'changed', 'words': 'the order changes'})
-        self.assertEqual(len(s11['characters']['rows']), 2)
+        self.assertEqual(len(s11['characters']['rows']), 3)
         self.assertEqual(s11['sql_files'], [
             {'encoding': 'UTF8',
              'file': f'measured_order_confirm.{PAIR}.UTF8.sql'}])
@@ -1421,8 +1425,8 @@ class AFileCutShort(_Folder):
         self.refused()
 
     def test_the_characters_file(self):
-        for cut in ('# end: 2 locale group(s), 2 row(s)\n',
-                    '# end: 2 locale group(s), 2 row(s)'):
+        for cut in ('# end: 2 locale group(s), 3 row(s)\n',
+                    '# end: 2 locale group(s), 3 row(s)'):
             with self.subTest(cut=cut):
                 step2_files(self.d, **MACHINES)
                 step11_files(self.d)
@@ -1431,8 +1435,8 @@ class AFileCutShort(_Folder):
                 text = open(p, encoding='utf-8').read()
                 write(self.d, os.path.basename(p), text.replace(cut, ''))
                 self.refused(**ON_MACHINES)
-        for wrong in ('# end: 2 locale group(s), 3 row(s)\n',
-                      '# end: 1 locale group(s), 2 row(s)\n'):
+        for wrong in ('# end: 2 locale group(s), 4 row(s)\n',
+                      '# end: 1 locale group(s), 3 row(s)\n'):
             with self.subTest(wrong=wrong):
                 step2_files(self.d, **MACHINES)
                 step11_files(self.d)
@@ -1440,7 +1444,7 @@ class AFileCutShort(_Folder):
                                  f'measured_order_characters.{PAIR}.tsv')
                 text = open(p, encoding='utf-8').read()
                 write(self.d, os.path.basename(p), text.replace(
-                    '# end: 2 locale group(s), 2 row(s)\n', wrong))
+                    '# end: 2 locale group(s), 3 row(s)\n', wrong))
                 self.refused(**ON_MACHINES)
 
     def test_a_row_of_another_width(self):
@@ -1703,7 +1707,7 @@ class TheReaderIsStrict(_Folder):
             ('no codeset', lambda r: group(r)['locales']['sv_SE']['codeset']
              .update(old=''), "locales['sv_SE'] is"),
             ('the sort table', lambda r: group(r).update(sort_table={
-                'state': 'reported', 'why': 'x'}), 'sort_table is'),
+                'state': 'reported', 'why': 'x'}), 'sort_table.state is'),
             ('a key less', lambda r: group(r).pop('names_bytes'),
              'has the keys'),
         ]
@@ -1736,6 +1740,324 @@ class TheReaderIsStrict(_Folder):
                     json.dump(r, f)
                 with self.assertRaisesRegex(rd.ReportError, re.escape(msg)):
                     rd.load(p)
+
+    def sort_table(self, r, table, rows=(), found_by='step 11'):
+        """R with its one group's sort table TABLE, found by FOUND_BY,
+        and ROWS of the characters file under the line of its table
+        (where the table changed): (characters, kind) each."""
+        g = r['step11']['findings']['groups'][0]
+        g['sort_table'] = table
+        if found_by != 'step 11':
+            g.update(found_by=found_by, findings=[], names_bytes=False)
+        old = r['step11']['characters']['rows']
+        rest = [x for x in old if x[1] != 'sort table changed']
+        head = []
+        if isinstance(table, dict) and table.get('state') == 'changed':
+            head = [['sv_SE', 'sort table changed', '-',
+                     'its compiled sort table changed', '-', '-', '-', '-']]
+            head += [['sv_SE', 'sort table changed', chars,
+                      rd.NAMED_HOW[kind], '-', '-', '-', 'compiled table']
+                     for chars, kind in rows]
+        r['step11']['characters']['rows'] = head + rest
+        return r
+
+    def tables_warned(self, r, disagree=(), not_compared=(), more=0):
+        """R with the tables' `!!` naming DISAGREE and NOT_COMPARED, each
+        list cutting MORE names it does not print."""
+        items = r['warnings']['step11']['items']
+        p = os.path.join(self.d, 'warned.jsonl')
+        if disagree:
+            items.append(rd.warning_item(p, 'tables_disagree', {
+                'names': list(disagree), 'more': more}, '!! x'))
+        if not_compared:
+            items.append(rd.warning_item(p, 'tables_not_compared', {
+                'groups': [{'why': 'x', 'names': list(not_compared),
+                            'more': more}]}, '!! x'))
+        return r
+
+    def test_sort_tables_that_do_not_hang_together(self):
+        """A group's sort table (locale_order.table_data), its rows in the
+        characters file and the tables' `!!`, each written wrong alone,
+        refused for the reason named, each check and each half of a check
+        of two parts with its own case; and each state the tool writes
+        read, those no real run prints among them."""
+        named = {'state': 'changed', 'step11': 'changed',
+                 'reason': 'items differ',
+                 'naming': {'state': 'named',
+                            'counts': {'marked': 2, 'old': 0, 'new': 1,
+                                       'flip': 1},
+                            'more': 0, 'others': True}}
+        rows = [('U+0061..U+0062', 'marked'), ('bytes 80', 'new'),
+                ('U+0063', 'flip')]
+        many = [(f'U+{0x100 + 2 * k:04X}', 'marked') for k in range(21)]
+
+        def table(**over):
+            t = copy.deepcopy(named)
+            t.update({k: v for k, v in over.items() if k != 'naming'})
+            if 'naming' in over:
+                t['naming'] = over['naming']
+            return t
+
+        def naming(**over):
+            return dict(copy.deepcopy(named['naming']), **over)
+
+        def counts(**over):
+            return naming(counts=dict(named['naming']['counts'], **over))
+
+        bare = {'state': 'changed', 'step11': 'changed',
+                'reason': 'no levels on one machine'}
+        reads = [
+            ('named', lambda r: self.sort_table(r, named, rows)),
+            ('more than the report lists', lambda r: self.sort_table(
+                r, table(naming=naming(counts={'marked': 21, 'old': 0,
+                                               'new': 0, 'flip': 0},
+                                       more=1, others=False)), many)),
+            ('one code point twice', lambda r: self.sort_table(
+                r, table(naming=counts(marked=3)),
+                [('U+0061..U+0062', 'marked'), ('U+0062', 'marked')]
+                + rows[1:])),
+            ('no levels', lambda r: self.sort_table(r, bare)),
+            ('no line', lambda r: self.tables_warned(self.sort_table(
+                r, {'state': 'no line'}), not_compared=['sv_SE'])),
+            ('no line, a list cut', lambda r: self.tables_warned(
+                self.sort_table(r, {'state': 'no line'}), disagree=['xx'],
+                more=1)),
+            ('the record', lambda r: self.tables_warned(self.sort_table(
+                r, table(naming={'state': 'record'})), disagree=['sv_SE'])),
+            ('the numbering, step 11 the same', lambda r: self.sort_table(
+                r, table(step11='same', naming={'state': 'numbering'}),
+                found_by='its sort table alone')),
+            ('unread, not measured', lambda r: self.sort_table(
+                r, table(step11='unmeasured', naming={
+                    'state': 'unread', 'reasons': ['on the old machine, x']}),
+                found_by='its sort table alone')),
+            ('levels, not measured', lambda r: self.sort_table(
+                r, table(step11='unmeasured', naming={
+                    'state': 'levels', 'old': 4, 'new': 3}),
+                found_by='its sort table alone')),
+            ('no levels, not measured', lambda r: self.sort_table(
+                r, dict(bare, step11='unmeasured'),
+                found_by='its sort table alone')),
+        ]
+        for name, change in reads:
+            with self.subTest(reads=name):
+                r = change(copy.deepcopy(self.good))
+                p = os.path.join(self.d, 'read.json')
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(r, f)
+                self.assertEqual(rd.load(p), r)
+
+        def wrong(t, rws=rows, found_by='step 11'):
+            return lambda r: self.sort_table(r, t, rws, found_by)
+        cases = [
+            # _sort_table.
+            ('not an object', wrong([]), 'sort_table is []'),
+            ('a state', wrong({'state': 'same'}), '.sort_table.state is'),
+            ('no line, a key more', wrong({'state': 'no line', 'x': 1}),
+             'has the keys'),
+            ('no line of the table alone', wrong(
+                {'state': 'no line'}, found_by='its sort table alone'),
+             'no line of a table that alone'),
+            ('step 11 unknown', wrong(table(step11='moved')),
+             '.sort_table.step11 is'),
+            ('a reason', wrong(table(reason='other')),
+             '.sort_table.reason is'),
+            ('step 11 said the same of its own change', wrong(
+                table(step11='same')), "said 'same' of a change found by "
+             "step 11"),
+            ('step 11 said changed of the table alone', wrong(
+                table(), found_by='its sort table alone'),
+             "said 'changed' of a change found by its sort table alone"),
+            ('no levels, naming', wrong(dict(bare, naming=named['naming'])),
+             'has the keys'),
+            ('items differ, no naming', wrong(dict(
+                bare, reason='items differ')), 'has the keys'),
+            ('naming not an object', wrong(table(naming=[])),
+             '.naming is []'),
+            ('a naming state', wrong(table(naming={'state': 'some'})),
+             '.naming.state is'),
+            ('the record, a key more', wrong(
+                table(naming={'state': 'record', 'more': 0}), ()),
+             'has the keys'),
+            ('no reason', wrong(table(naming={'state': 'unread',
+                                              'reasons': []}), ()),
+             '.reasons is []'),
+            ('an empty reason', wrong(table(naming={'state': 'unread',
+                                                    'reasons': ['']}), ()),
+             ".reasons is ['']"),
+            ('reasons not a list', wrong(table(naming={'state': 'unread',
+                                                       'reasons': 'x'}), ()),
+             ".reasons is 'x'"),
+            ('the same levels', wrong(table(naming={
+                'state': 'levels', 'old': 3, 'new': 3}), ()),
+             'has the levels 3 and 3'),
+            ('no levels counted', wrong(table(naming={
+                'state': 'levels', 'old': 0, 'new': 3}), ()),
+             'has the levels 0 and 3'),
+            ('a count missing', wrong(table(naming=naming(counts={
+                'marked': 2, 'old': 0, 'new': 1}))), 'has the keys'),
+            ('a count not a number', wrong(table(naming=counts(new='1'))),
+             '.naming is'),
+            ('more not a number', wrong(table(naming=naming(more=-1))),
+             '.naming is'),
+            ('others not a bool', wrong(table(naming=naming(others=1))),
+             '.naming is'),
+            ('nothing named but flips', wrong(table(naming=counts(
+                marked=0, new=0, flip=1)), [('U+0063', 'flip')]),
+             'names no sequence marked or on one side only'),
+            ('flips beside none marked', wrong(table(naming=counts(
+                marked=0)), rows[1:]), 'flip(s) beside none marked'),
+            # _table_rows_held.
+            ('no rows', lambda r: self.sort_table(r, named, rows).__setitem__(
+                'step11', dict(r['step11'], characters=dict(
+                    r['step11']['characters'], rows=[
+                        x for x in r['step11']['characters']['rows']
+                        if x[1] != 'sort table changed']))),
+             'the sort table rows are of []'),
+            ('rows of no changed table', lambda r: self.tables_warned(
+                self.sort_table(r, named, rows), not_compared=['sv_SE'])
+             ['step11']['findings']['groups'][0].update(
+                 sort_table={'state': 'no line'}),
+             "the sort table rows are of ['sv_SE'], the changed sort "
+             "tables of []"),
+            ('another label', lambda r: [x.__setitem__(0, 'sv_SE,sv_FI')
+                                         for x in self.sort_table(
+                                             r, named, rows)['step11'][
+                                             'characters']['rows']
+                                         if x[1] == 'sort table changed'],
+             "the sort table rows are of ['sv_SE,sv_FI']"),
+            ('two runs of one label', lambda r: self.sort_table(
+                r, named, rows)['step11']['characters']['rows'].insert(
+                    2, ['sv_SE', 'moved', 'U+00E5', '-', 'x', '>', '<',
+                        'on both machines']),
+             "the sort table rows are of ['sv_SE', 'sv_SE']"),
+            ('a line with characters', lambda r: self.sort_table(
+                r, named, rows)['step11']['characters']['rows'][0]
+             .__setitem__(2, 'U+0061'), 'do not open with its line'),
+            ('a line with no words', lambda r: self.sort_table(
+                r, named, rows)['step11']['characters']['rows'][0]
+             .__setitem__(3, '-'), 'do not open with its line'),
+            ('a line with a test', lambda r: self.sort_table(
+                r, named, rows)['step11']['characters']['rows'][0]
+             .__setitem__(4, 'x'), 'do not open with its line'),
+            ('names where it names none', wrong(bare, rows[:1]),
+             'name 1 sequence(s), its table none'),
+            ('names beside the record', lambda r: self.tables_warned(
+                self.sort_table(r, table(naming={'state': 'record'}),
+                                rows[:1]), disagree=['sv_SE']),
+             'name 1 sequence(s), its table none'),
+            ('a how unknown', lambda r: self.sort_table(
+                r, named, rows)['step11']['characters']['rows'][1]
+             .__setitem__(3, 'moved'), "'U+0061..U+0062', 'moved'"),
+            ('not measured by the table', lambda r: self.sort_table(
+                r, named, rows)['step11']['characters']['rows'][1]
+             .__setitem__(7, 'on both machines'), "'on both machines']"),
+            ('a kind in two runs', wrong(table(naming=counts(marked=3)), [
+                ('U+0061..U+0062', 'marked'), ('bytes 80', 'new'),
+                ('U+0064', 'marked'), ('U+0063', 'flip')]),
+             'the marked names are not in one run'),
+            ('kinds out of order', wrong(named, [rows[1], rows[0], rows[2]]),
+             "the kinds are in the order ['new', 'marked', 'flip']"),
+            ('a name before the one before it', wrong(named, [
+                ('U+0063..U+0064', 'marked'), ('U+0061', 'marked')]
+                + rows[1:]), "'U+0061' is not after the name before it"),
+            ('bytes before a character', wrong(table(naming=counts(new=2)), [
+                rows[0], ('bytes 80', 'new'), ('U+0041', 'new'), rows[2]]),
+             "'U+0041' is not after"),
+            ('a count otherwise', wrong(table(naming=counts(marked=3))),
+             "the data counts {'marked': 3"),
+            ('a flip counted otherwise', wrong(table(naming=counts(flip=2))),
+             "the data counts {'marked': 2, 'old': 0, 'new': 1, 'flip': 2}"),
+            ('more otherwise', wrong(table(naming=naming(more=1))),
+             'and the data leaves 1 out of the report'),
+            ('more left out', wrong(table(naming=naming(counts={
+                'marked': 21, 'old': 0, 'new': 0, 'flip': 0}, others=False)),
+                many), 'and the data leaves 0 out of the report'),
+            ('bytes not said', wrong(table(naming=naming(others=False))),
+             'a name in bytes is True, the data says False'),
+            ('bytes said of none, counted', wrong(table(naming=naming(
+                counts={'marked': 2, 'old': 0, 'new': 0, 'flip': 2})),
+                [rows[0], ('U+0063..U+0064', 'flip')]),
+             'a name in bytes is False, the data says True'),
+            ('a range backwards', wrong(table(naming=counts(new=2)), [
+                rows[0], ('bytes 81..80', 'new'), rows[2]]),
+             "'bytes 81..80' is not a range of strings of one length"),
+            ('a range of two lengths', wrong(table(naming=counts(new=2)), [
+                rows[0], ('bytes 80..80 00', 'new'), rows[2]]),
+             'is not a range of strings of one length'),
+            ('a name of nothing', wrong(named, [rows[0], ('80', 'new'),
+                                                rows[2]]),
+             "'80' is not a name of a sequence"),
+            # _tables_held.
+            ('no line in no list', wrong({'state': 'no line'}),
+             "'sv_SE' is said otherwise by the tables' warnings"),
+            ('no line, another not compared', lambda r: self.tables_warned(
+                self.sort_table(r, {'state': 'no line'}),
+                not_compared=['xx']), "'sv_SE' is said otherwise"),
+            ('no line, another in disagree', lambda r: self.tables_warned(
+                self.sort_table(r, {'state': 'no line'}), disagree=['xx']),
+             "'sv_SE' is said otherwise"),
+            ('the record, another in disagree', lambda r: self.tables_warned(
+                self.sort_table(r, table(naming={'state': 'record'}), ()),
+                disagree=['xx']), "'sv_SE' is said otherwise"),
+            ('the record, the other list cut', lambda r: self.tables_warned(
+                self.sort_table(r, table(naming={'state': 'record'}), ()),
+                not_compared=['xx'], more=1), "'sv_SE' is said otherwise"),
+            ('the record not in disagree', wrong(
+                table(naming={'state': 'record'}), ()),
+             "'sv_SE' is said otherwise"),
+            ('the numbering not compared too', lambda r: self.tables_warned(
+                self.sort_table(r, table(naming={'state': 'numbering'})),
+                disagree=['sv_SE'], not_compared=['sv_SE']),
+             "'sv_SE' is said otherwise"),
+            ('a change named and in disagree', lambda r: self.tables_warned(
+                self.sort_table(r, named, rows), disagree=['sv_SE']),
+             "'sv_SE' is said otherwise"),
+            ('a change named and not compared', lambda r: self.tables_warned(
+                self.sort_table(r, named, rows), not_compared=['sv_SE']),
+             "'sv_SE' is said otherwise"),
+            ('the record of the table alone in disagree',
+             lambda r: self.tables_warned(self.sort_table(
+                 r, table(step11='same', naming={'state': 'record'}),
+                 found_by='its sort table alone'), disagree=['sv_SE']),
+             "'sv_SE' is said otherwise"),
+        ]
+        for name, change, msg in cases:
+            with self.subTest(case=name):
+                r = copy.deepcopy(self.good)
+                change(r)
+                p = os.path.join(self.d, 'changed.json')
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(r, f)
+                with self.assertRaisesRegex(rd.ReportError, re.escape(msg)):
+                    rd.load(p)
+
+    def test_the_sort_table_constants_are_locale_orders(self):
+        """What step 11 said, the reasons, the states of what a table
+        names, the words of each kind of name and the escapes of a label
+        the reader allows are those locale_order writes by; and
+        locale_order refuses to write a sort table outside them: one it
+        added and the reader did not would refuse a real run."""
+        import locale_order as lo
+        for name in ('TABLE_STEP11', 'TABLE_REASONS', 'TABLE_NAMED',
+                     'NAMED_HOW', 'TSV_ESCAPES'):
+            with self.subTest(name=name):
+                self.assertEqual(getattr(rd, name), getattr(lo, name))
+        for args in (({'state': 'same'}, ()),
+                     ({'state': 'named', 'counts': {}}, ()),
+                     ({'state': 'record'}, (('marked', 'a', 'U+0061'),))):
+            with self.subTest(named=args), self.assertRaises(ValueError):
+                lo.table_named(*args)
+        record = lo.table_named({'state': 'record'})
+        for args in ((None, 'moved', record), (lo.NO_LEVELS_ONE, 'same',
+                                                record),
+                     (None, 'same', None), ('other', 'same', None)):
+            with self.subTest(data=args[:2]), self.assertRaises(ValueError):
+                lo.table_data(*args)
+        self.assertEqual(lo.table_data(None, 'same', record),
+                         {'state': 'changed', 'step11': 'same',
+                          'reason': 'items differ',
+                          'naming': {'state': 'record'}})
 
     def test_the_unchanged_report_is_read(self):
         p = os.path.join(self.d, 'same.json')

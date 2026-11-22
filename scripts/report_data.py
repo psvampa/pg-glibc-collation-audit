@@ -6,9 +6,8 @@ change.
 Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
-only inside a sentence (step 2's totals and character sets, the
-provenance of each side, and each sort table of step 11's findings)
-is 'not yet reported': a
+only inside a sentence (step 2's totals and character sets, and the
+provenance of each side) is 'not yet reported': a
 later step of the work turns each one into data (branch 24 of the
 plan).
 The `!!` notices of steps 0, 1, 2 and 11
@@ -16,7 +15,8 @@ are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
 gives each kind its list and its short title. Step 11's counts are
 data too, and so is each group of locales it found changed, with what
-moved in it, and each check beside the order: step11.<pair>.data.json,
+moved in it and its sort table, and each check beside the order:
+step11.<pair>.data.json,
 beside the `!!` of its warnings file.
 
 load() is the strict reader: a key missing or added, or a state outside
@@ -2533,11 +2533,231 @@ def _finding(where, x):
         raise ReportError(f'{where}.all is {x["all"]!r}')
 
 
+# What a group's sort_table says (locale_order.table_data, table_named):
+# what step 11 said of a locale whose table changed, why the table changed,
+# and what it names or why it names nothing; how the characters file names
+# each kind of sequence a table names (locale_order.NAMED_HOW); and how it
+# writes a locale in a label (locale_order.TSV_ESCAPES).
+TABLE_STEP11 = ('changed', 'same', 'unmeasured')
+TABLE_REASONS = ('no levels on one machine', 'items differ')
+TABLE_NAMED = ('named', 'record', 'numbering', 'unread', 'levels')
+NAMED_HOW = {'marked': 'marked by the table as changed',
+             'old': 'only in the old machine\'s table',
+             'new': 'only in the new machine\'s table',
+             'flip': 'compares differently against one marked as changed'}
+TSV_ESCAPES = {9: '\\t', 10: '\\n', 13: '\\r', 44: '\\x2c', 92: '\\\\'}
+# A name a sort table gives (locale_order.table_naming): a code point, a
+# run of them, a string of several, or bytes, one string or a range of
+# strings of one length.
+TABLE_ITEM = re.compile(r'(U\+[0-9A-F]{4,6})(?:\.\.(U\+[0-9A-F]{4,6})'
+                        r'|(?: U\+[0-9A-F]{4,6})+)?'
+                        r'|(bytes [0-9A-F]{2}(?: [0-9A-F]{2})*)'
+                        r'(?:\.\.([0-9A-F]{2}(?: [0-9A-F]{2})*))?')
+
+
+def _sort_table(where, t, found_by):
+    """A group's sort_table (locale_order.table_data): 'no line' where
+    its table printed none, which only a group step 11 found can be; else
+    'changed', what step 11 said (found by the table alone, FOUND_BY,
+    exactly where step 11 did not say 'changed'), why, and, where the
+    items differ, what the table names: counts of which some sequence is
+    marked or on one side only, and a flip only beside one marked
+    (locale_order.table_sequences)."""
+    if not isinstance(t, dict):
+        raise ReportError(f'{where} is {t!r}')
+    _one_of(f'{where}.state', t.get('state'), ('no line', 'changed'))
+    if t['state'] == 'no line':
+        _keys(where, t, ['state'])
+        if found_by != 'step 11':
+            raise ReportError(f'{where}: no line of a table that alone found '
+                              'the change')
+        return
+    _one_of(f'{where}.step11', t.get('step11'), TABLE_STEP11)
+    _one_of(f'{where}.reason', t.get('reason'), TABLE_REASONS)
+    if (found_by == 'step 11') != (t['step11'] == 'changed'):
+        raise ReportError(f'{where}: step 11 said {t["step11"]!r} of a change '
+                          f'found by {found_by}')
+    if t['reason'] == 'no levels on one machine':
+        _keys(where, t, ['state', 'step11', 'reason'])
+        return
+    _keys(where, t, ['state', 'step11', 'reason', 'naming'])
+    nm, w = t['naming'], f'{where}.naming'
+    if not isinstance(nm, dict):
+        raise ReportError(f'{w} is {nm!r}')
+    _one_of(f'{w}.state', nm.get('state'), TABLE_NAMED)
+    if nm['state'] in ('record', 'numbering'):
+        _keys(w, nm, ['state'])
+    elif nm['state'] == 'unread':
+        _keys(w, nm, ['state', 'reasons'])
+        if not _is_strs(nm['reasons']):
+            raise ReportError(f'{w}.reasons is {nm["reasons"]!r}')
+    elif nm['state'] == 'levels':
+        _keys(w, nm, ['state', 'old', 'new'])
+        if not (_is_positive(nm['old']) and _is_positive(nm['new'])
+                and nm['old'] != nm['new']):
+            raise ReportError(f'{w} has the levels {nm["old"]!r} and '
+                              f'{nm["new"]!r}')
+    else:
+        _keys(w, nm, ['state', 'counts', 'more', 'others'])
+        _keys(f'{w}.counts', nm['counts'], list(NAMED_HOW))
+        c = nm['counts']
+        if not (all(_is_count(v) for v in c.values())
+                and _is_count(nm['more']) and _is_bool(nm['others'])):
+            raise ReportError(f'{w} is {nm!r}')
+        if not (c['marked'] or c['old'] or c['new']):
+            raise ReportError(f'{w} names no sequence marked or on one side '
+                              'only')
+        if c['flip'] and not c['marked']:
+            raise ReportError(f'{w} names {c["flip"]} flip(s) beside none '
+                              'marked')
+
+
+def _label(locales):
+    """The characters file's label of a group of LOCALES, as
+    locale_order.compare writes it: each name as shown() prints it, with
+    TSV_ESCAPES, in order, joined by commas."""
+    return ','.join(x.encode('utf-8', 'surrogateescape').decode(
+        'utf-8', 'replace').translate(TSV_ESCAPES) for x in sorted(locales))
+
+
+def _table_item(where, tok):
+    """((first, last), size) of a name a sort table gives: its first and
+    last sequence as table_naming sorts them, code points first (0, points)
+    and then bytes (1, length, value), and how many sequences it holds: a
+    run of code points or a range of byte strings of one length, by value
+    (locale_order.byte_runs), else one."""
+    m = TABLE_ITEM.fullmatch(tok) if isinstance(tok, str) else None
+    if not m:
+        raise ReportError(f'{where}: {tok!r} is not a name of a sequence')
+    if m[3]:
+        a = bytes.fromhex(m[3][6:])
+        b = bytes.fromhex(m[4]) if m[4] else a
+        x, y = int.from_bytes(a, 'big'), int.from_bytes(b, 'big')
+        if m[4] and (len(a) != len(b) or y <= x):
+            raise ReportError(f'{where}: {tok!r} is not a range of strings '
+                              'of one length')
+        return ((1, len(a), x), (1, len(b), y)), y - x + 1
+    if m[2]:
+        return ((0, (int(m[1][2:], 16),)), (0, (int(m[2][2:], 16),))), \
+            _run_size(where, [m[1], m[2]])
+    cps = tuple(int(x, 16) for x in re.findall(r'U\+([0-9A-F]+)', tok))
+    return ((0, cps), (0, cps)), 1
+
+
+def _table_rows_held(where, groups, rows):
+    """Each group's sort_table against the characters file's ROWS: one
+    run of 'sort table changed' rows per group whose table changed, under
+    that group's label (_label), in the groups' order, and no other; its
+    first row the line ('-'), and, where the table names sequences, one
+    row per name after it: the kinds in NAMED_HOW's order, each kind's
+    names in table_naming's order (one may repeat the code point of the one
+    before: two byte strings of one character, as ISIRI-3342, GB18030,
+    ARMSCII-8 and EUC-TW have at glibc-2.39), their sequences adding up to
+    each count, one named by its bytes exactly where the data says so, and
+    as many as the report lists and leaves out (more); none where the table
+    names nothing."""
+    # A run is the rows of one label one after the other: a label met
+    # again after other rows is a second run of it.
+    runs, prev = [], None
+    for r in rows:
+        if r[1] != 'sort table changed':
+            prev = None
+            continue
+        if r[0] != prev:
+            runs.append((r[0], []))
+        prev = r[0]
+        runs[-1][1].append(r)
+    changed = [g for g in groups if g['sort_table']['state'] == 'changed']
+    got = [lb for lb, _ in runs]
+    want = [_label(g['locales']) for g in changed]
+    if got != want:
+        raise ReportError(f'{where}: the sort table rows are of {got[:5]}, '
+                          f'the changed sort tables of {want[:5]}')
+    how = {v: k for k, v in NAMED_HOW.items()}
+    for g, (label, rs) in zip(changed, runs):
+        nm = g['sort_table'].get('naming', {})
+        w = f'{where}: the sort table rows of {label!r}'
+        head, named = rs[0], rs[1:]
+        if head[2] != '-' or head[3] == '-' or head[4:] != ['-'] * 4:
+            raise ReportError(f'{w} do not open with its line: {head!r}')
+        if nm.get('state') != 'named':
+            if named:
+                raise ReportError(f'{w} name {len(named)} sequence(s), its '
+                                  'table none')
+            continue
+        counts = dict.fromkeys(NAMED_HOW, 0)
+        kinds, in_bytes, last = [], False, None
+        for r in named:
+            if r[3] not in how or r[4:] != ['-', '-', '-', 'compiled table']:
+                raise ReportError(f'{w}: {r!r}')
+            kind = how[r[3]]
+            if not kinds or kinds[-1] != kind:
+                if kind in kinds:
+                    raise ReportError(f'{w}: the {kind} names are not in one '
+                                      'run')
+                kinds.append(kind)
+                last = None
+            (first, end), size = _table_item(w, r[2])
+            if last is not None and first < last:
+                raise ReportError(f'{w}: {r[2]!r} is not after the name '
+                                  'before it')
+            last = end
+            counts[kind] += size
+            in_bytes = in_bytes or r[2].startswith('bytes ')
+        if kinds != [x for x in NAMED_HOW if x in kinds]:
+            raise ReportError(f'{w}: the kinds are in the order {kinds!r}')
+        if counts != nm['counts']:
+            raise ReportError(f'{w} hold {counts!r}, the data counts '
+                              f'{nm["counts"]!r}')
+        if nm['more'] != max(len(named) - LIST_LIMIT, 0):
+            raise ReportError(f'{w}: {len(named)} name(s), and the data '
+                              f'leaves {nm["more"]} out of the report')
+        if in_bytes != nm['others']:
+            raise ReportError(f'{w}: a name in bytes is {in_bytes}, the data '
+                              f'says {nm["others"]}')
+
+
+def _tables_held(where, groups, warned):
+    """Each group's sort_table against the tables' `!!` of the same run
+    (WARNED, step 11's warnings; locale_order.table_verdicts): a locale of
+    a group whose table printed no line is in tables_disagree or
+    tables_not_compared; one whose changed table names nothing by its
+    record or numbering, step 11 having found the change, is in
+    tables_disagree and not in tables_not_compared; no other changed
+    locale is in either. Where a list is cut (more), a name it does not
+    print is not looked for in that list; the other is read whole."""
+    if warned['state'] != 'reported':
+        return
+    dis, nc, dis_cut, nc_cut = set(), set(), False, False
+    for it in warned['items']:
+        if it['kind'] == 'tables_disagree':
+            dis.update(it['data']['names'])
+            dis_cut = dis_cut or it['data']['more'] > 0
+        elif it['kind'] == 'tables_not_compared':
+            for x in it['data']['groups']:
+                nc.update(x['names'])
+                nc_cut = nc_cut or x['more'] > 0
+    for i, g in enumerate(groups):
+        t, w = g['sort_table'], f'{where}.groups[{i}].sort_table'
+        nm = t.get('naming', {}).get('state')
+        for name in sorted(g['locales']):
+            if t['state'] == 'no line':
+                ok = name in dis or name in nc or dis_cut or nc_cut
+            elif t['step11'] == 'changed' and nm in ('record', 'numbering'):
+                ok = (name in dis or dis_cut) and name not in nc
+            else:
+                ok = name not in dis and name not in nc
+            if not ok:
+                raise ReportError(f'{w}: {name!r} is said otherwise by the '
+                                  "tables' warnings")
+
+
 def _findings(where, f, verdicts):
     """step 11's findings (locale_order.change_groups): each changed locale
     of VERDICTS in one group and none other, the groups sorted by their
     names, the headings they print under numbered from 0 with none
-    skipped, and each group's findings in the order step 11 finds them."""
+    skipped, each group's findings in the order step 11 finds them, and
+    each group's sort table (_sort_table)."""
     _keys(where, f, ['state', 'groups'])
     if not isinstance(f['groups'], list):
         raise ReportError(f'{where}.groups is {f["groups"]!r}')
@@ -2572,7 +2792,6 @@ def _findings(where, f, verdicts):
         _one_of(f'{w}.found_by', g['found_by'], FOUND_BY)
         if not _is_bool(g['names_bytes']):
             raise ReportError(f'{w}.names_bytes is {g["names_bytes"]!r}')
-        _not_yet(f'{w}.sort_table', g['sort_table'])
         found = g['findings']
         if not isinstance(found, list):
             raise ReportError(f'{w}.findings is {found!r}')
@@ -2580,6 +2799,8 @@ def _findings(where, f, verdicts):
             if found or g['names_bytes']:
                 raise ReportError(f'{w}: step 11 found nothing in a change '
                                   'its sort table alone found')
+        _sort_table(f'{w}.sort_table', g['sort_table'], g['found_by'])
+        if g['found_by'] == 'its sort table alone':
             continue
         for k, x in enumerate(found):
             _finding(f'{w}.findings[{k}]', x)
@@ -2924,6 +3145,13 @@ def load(path):
                 ('reported', 'not reported'),
                 {'reported': lambda w, f: _findings(w, f, o['verdicts']),
                  **nr})
+        if o['findings']['state'] == 'reported' and \
+                o['characters']['state'] == 'reported':
+            _table_rows_held(f'{where}.characters', o['findings']['groups'],
+                             o['characters']['rows'])
+        if o['findings']['state'] == 'reported':
+            _tables_held(f'{where}.findings', o['findings']['groups'],
+                         r['warnings']['step11'])
         _stated(f'{where}.checks', o['checks'],
                 ('reported', 'not reported'),
                 {'reported': lambda w, c: _checks(

@@ -1513,7 +1513,8 @@ def byte_range(text):
 TABLE_REASON = (r'(?:on the (?:old|new) machine, |the (?:OLD|NEW) file holds |the '
                 r'packed tables of the (?:OLD|NEW) file |the record (?:of|stored '
                 r'for) its table )[^;]*')
-# The lines of the verdict by the sort tables (table_verdicts, TableNaming).
+# The lines of the verdict by the sort tables (table_verdicts,
+# table_change_lines).
 TABLE_PHRASE = (
     r'its compiled sort table changed(?:'
     r': (' + re.escape(m.NO_LEVELS_ONE) + r')'
@@ -1574,7 +1575,7 @@ def table_phrase(mt, among):
 
 
 def named_head(counts):
-    """What table_naming writes for these counts, spelled here on its own."""
+    """What table_head writes for these counts, spelled here on its own."""
     parts = []
     if counts['marked']:
         parts.append(f'it marks {counts["marked"]:,} sequence(s) as changed')
@@ -17093,6 +17094,26 @@ class SortTablesNamed(Checks):
         named, r, s, f = self.named(old, new)
         self.assertEqual(named['unnamed'], (1, 2))
 
+    def test_a_table_step_11_could_not_measure_names_nothing(self):
+        """A locale step 11 could not measure (an error on the old machine,
+        as another patch level can give) whose table changed in its number
+        of levels: changed by its table alone, the line says that the
+        table names nothing and why, and that step 11 could not measure it,
+        in the three outputs alike (named()); its data says the same
+        (the holder of every comparison). No RHEL run prints it."""
+        def error(d):
+            d['locales']['de_DE.utf8'] = {
+                'codeset': d['locales']['de_DE.utf8']['codeset'],
+                'error': 'measuring failed: MemoryError()'}
+        old = one_level([b'a', b'b', b'c'])
+        new = {s: w + [[1]] for s, w in old.items()}
+        named, r, s, f = self.named(old, new, [error])
+        self.assertEqual(named, {'counts': None, 'items': [], 'more': 0,
+                                 'unnamed': (1, 2)})
+        self.assertEqual(by_name(r)['de_DE.utf8']['table'],
+                         (None, 'step 11 could not measure it'))
+        self.assertIsNone(by_name(r)['de_DE.utf8']['moved'])
+
     def test_a_table_that_cannot_be_named_says_why(self):
         """Every way a side's record cannot be had says so, beside the
         other side's, and the locale stays changed: never 'nothing'."""
@@ -17184,8 +17205,9 @@ class SortTablesNamed(Checks):
         # the table names no sequence (backlog 16.54, the SQL files).
         with self.assertRaises(LookupError):
             naming.tests('x')
-        head = naming('x')[0]
-        self.assertTrue(head.startswith(': it marks'), head)
+        got = m.json.loads(naming('x')[0])
+        self.assertEqual(got['state'], 'named', got)
+        self.assertTrue(got['counts']['marked'], got)
         pairs, untested = naming.tests('x')
         self.assertEqual(len(pairs) + untested,
                          sum(map(len, m.table_sequences(*(
