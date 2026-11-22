@@ -147,7 +147,7 @@ FINDINGS = {'state': 'reported', 'groups': [{
         {'kind': 'undecided', 'count': 1, 'pairs': [['U+0061', 'bytes 80']]}],
     'names_bytes': True, 'sort_table': {
         'state': 'changed', 'step11': 'changed',
-        'reason': 'no levels on one machine'}}]}
+        'reason': 'no levels on one machine'}}], 'tables_only': []}
 
 
 # The counts of step11_files' two locales, C unchanged (firm, built into
@@ -181,7 +181,9 @@ CHECKS = {'control': {s: {n: {'state': 'byte order'} for n in ('C', 'POSIX')}
                     'character_groups': [], 'byte_groups': [],
                     'euc': {'ascii_alone': [], 'character_groups': [],
                             'not_checked': []},
-                    'utf8': {'names': []}}}
+                    'utf8': {'names': []}},
+          'charmaps': {'state': 'checked', 'checked': 1, 'by_table': 0,
+                       'builtin': ['C']}}
 
 
 # One `!!` of each kind as a step writes it (kind, data), with the title
@@ -340,9 +342,9 @@ SAMPLES = {
         {'locales': ['a', 'b']},
         '2 locales not on the new machine: a database that uses one cannot '
         'use it there'),
-    'closing': ({'state': 'mixed'},
+    'closing': ({'state': 'tables'},
                 'Whether the two machines compare strings with the same glibc '
-                'code, and rules of several letters'),
+                'code'),
     'control_failed': (
         {'side': 'new', 'names': ['C', 'POSIX']},
         'What was measured on the new machine: the control failed (C and '
@@ -1090,7 +1092,7 @@ class Warnings(_Folder):
 
     def test_step11_with_the_machines(self):
         """Step 11's file, read as steps 0 to 2's are once step 11 ran:
-        none is not reported, an empty one holds none, and each `!!` it
+        none is not reported, one holds its closing, and each `!!` it
         holds comes with its list and title; without step 11 it is not
         read."""
         step2_files(self.d, **MACHINES)
@@ -1099,10 +1101,10 @@ class Warnings(_Folder):
         self.assertEqual(self.written(**over)['warnings']['step11'], {
             'state': 'not reported',
             'why': f'the step wrote no step11.{PAIR}.warnings.jsonl'})
-        warnings_file(self.d, 11, [])
-        self.assertEqual(self.written(**over)['warnings']['step11'],
-                         {'state': 'reported', 'items': []})
-        kinds = ['same_build', 'other_encoding']
+        warnings_file(self.d, 11, ['closing'])
+        self.assertEqual([i['kind'] for i in self.written(
+            **over)['warnings']['step11']['items']], ['closing'])
+        kinds = ['same_build', 'other_encoding', 'closing']
         warnings_file(self.d, 11, kinds)
         items = self.written(**over)['warnings']['step11']['items']
         self.assertEqual([(i['kind'], i['class'], i['title']) for i in items],
@@ -1469,7 +1471,8 @@ class TheReaderIsStrict(_Folder):
         warnings_file(self.d, 1, ['signatures_unchecked',
                                   'collation_version_same'])
         warnings_file(self.d, 2, ['c_utf8_differs', 'names_untraced'])
-        warnings_file(self.d, 11, ['same_build', 'other_encoding'])
+        warnings_file(self.d, 11, ['same_build', 'other_encoding',
+                                   'closing'])
         self.good = self.written(**ON_MACHINES)
 
     def refuses(self, change):
@@ -1842,6 +1845,8 @@ class TheReaderIsStrict(_Folder):
         for name, change in reads:
             with self.subTest(reads=name):
                 r = change(copy.deepcopy(self.good))
+                if name.endswith(', not measured'):
+                    r['step11']['checks']['charmaps']['checked'] = 0
                 p = os.path.join(self.d, 'read.json')
                 with open(p, 'w', encoding='utf-8') as f:
                     json.dump(r, f)
@@ -2032,6 +2037,280 @@ class TheReaderIsStrict(_Folder):
                 with self.assertRaisesRegex(rd.ReportError, re.escape(msg)):
                     rd.load(p)
 
+    def test_verdicts_closing_and_character_sets_that_do_not_hang_together(
+            self):
+        """Step 11's verdicts' words, its closing, the locales its tables
+        alone decided and its line on the character sets, each written
+        wrong alone in the reader's example, refused for the reason named:
+        what load() runs each check on."""
+        cm = lambda r: r['step11']['checks']['charmaps']  # noqa: E731
+
+        def closing(state):
+            def change(r):
+                for i in r['warnings']['step11']['items']:
+                    if i['kind'] == 'closing':
+                        i['data']['state'] = state
+                        i['title'] = rd.CLOSING_TITLES[state]
+            return change
+
+        def refused_bang(r):
+            r['warnings']['step11']['items'].append(rd.warning_item(
+                os.path.join(self.d, 'w.jsonl'), 'glibc_refused', {
+                    'locales': [{'name': 'sv_SE', 'side': 'old',
+                                 'categories': ['LC_COLLATE']}]}, '!! x'))
+        cases = [
+            ('a state', lambda r: cm(r).update(state='x'), '.state is'),
+            ('a key less', lambda r: cm(r).pop('by_table'), 'has the keys'),
+            ('a count', lambda r: cm(r).update(checked=-1), 'charmaps is {'),
+            ('C and POSIX out of order', lambda r: cm(r).update(
+                builtin=['POSIX', 'C']), 'charmaps is {'),
+            ('not needed with no table', lambda r: cm(r).update(
+                state='not needed', by_table=0) or cm(r).pop('checked'),
+             'not needed with no locale its sort table decided'),
+            ('a count the verdicts do not give', lambda r: cm(r).update(
+                checked=2), 'the verdicts and groups of the same run say'),
+            ('not checked beside no `!!`', lambda r: r['step11'][
+                'checks'].update(charmaps={'state': 'not checked'}),
+             "is 'not checked' beside 0 `!!`"),
+            ('the closing', closing('plain'),
+             "step 11 closes ['plain'], its verdicts 'tables'"),
+            ('words of another verdict', lambda r: r['step11']['verdicts'][
+                'sv_SE'].update(words='built into glibc'),
+             "['sv_SE'] is 'changed' in the words"),
+            ('C firm by a table', lambda r: r['step11']['verdicts'][
+                'C'].update(words=rd.VERDICT_WORDS['firm', 'sort table']),
+             "['C'] is firm 'sort table'"),
+            ('refused by a `!!` and not by its verdict', refused_bang,
+             "refuse {}, the `!!` of glibc refusing {'sv_SE': 'old'}"),
+            ('decided by its table alone and changed', lambda r: r[
+                'step11']['findings'].update(tables_only=['sv_SE']),
+             "tables_only names ['sv_SE']"),
+            ('tables alone, a list', lambda r: r['step11'][
+                'findings'].update(tables_only='C'), 'tables_only is'),
+            ('tables alone, a name twice', lambda r: r['step11'][
+                'findings'].update(tables_only=['C', 'C']),
+             'tables_only is'),
+        ]
+        for name, change, msg in cases:
+            with self.subTest(case=name):
+                r = copy.deepcopy(self.good)
+                change(r)
+                p = os.path.join(self.d, 'changed.json')
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(r, f)
+                with self.assertRaisesRegex(rd.ReportError, re.escape(msg)):
+                    rd.load(p)
+
+    def test_each_tie_of_the_closing_and_the_character_sets(self):
+        """Each check of _verdict_basis, _verdicts_held, _closing_held,
+        _tables_only_held and _charmaps_held, and each half of one of two
+        parts, with a case only it refuses, on the verdicts and `!!` the
+        tool writes; and the states no run of the suite reaches read: C
+        or POSIX alone aside, a locale of no levels step 11 could not
+        measure, C step 11 could not measure, two machines refusing a
+        locale for different categories."""
+        W = rd.VERDICT_WORDS
+
+        def basis(**v):
+            return rd._verdict_basis('v', {
+                n: {'verdict': a, 'words': W[a, b]}
+                for n, (a, b) in v.items()})
+
+        def warned(*items):
+            return {'state': 'reported', 'items': [
+                {'kind': k, 'data': d} for k, d in items]}
+
+        def control(old='byte order', new='byte order', name='C'):
+            out = {s: {n: {'state': 'byte order'} for n in rd.BUILTIN}
+                   for s in ('old', 'new')}
+            out['old'][name]['state'], out['new'][name]['state'] = old, new
+            return out
+        unseen = [{'locales': {'a': {}}, 'sort_table': {
+            'state': 'changed', 'step11': 'unmeasured'}}]
+        firm = basis(C=('firm', 'built in'), a=('firm', 'sort table'))
+        checked = {'state': 'checked', 'checked': 1, 'by_table': 0,
+                   'builtin': []}
+        cases = [
+            # (case, call, the refusal it raises, or None where it reads)
+            ('words of no verdict', lambda: rd._verdict_basis('v', {
+                'a': {'verdict': 'firm', 'words': 'unchanged'}}),
+             "['a'] is 'firm' in the words 'unchanged'"),
+            ('words of another verdict', lambda: rd._verdict_basis('v', {
+                'a': {'verdict': 'far', 'words': W['changed', '-']}}),
+             "['a'] is 'far' in the words"),
+            ('C not built in', lambda: basis(C=('firm', 'no levels')),
+             "['C'] is firm 'no levels'"),
+            ('built in, not C', lambda: basis(a=('firm', 'built in')),
+             "['a'] is firm 'built in'"),
+            ('no levels step 11 could not measure', lambda: basis(
+                a=('firm', 'no levels, not measured')), None),
+            ('refused on the old machine, the `!!` the new', lambda:
+             rd._verdicts_held('v', {'a': {'verdict': 'refused',
+                                          'words': W['refused', 'old']}},
+                               warned(('glibc_refused', {'locales': [
+                                   {'name': 'a', 'side': 'new'}]}))),
+             "refuse {'a': 'old'}, the `!!` of glibc refusing {'a': 'new'}"),
+            ('refused with no `!!`', lambda: rd._verdicts_held(
+                'v', {'a': {'verdict': 'refused',
+                            'words': W['refused', 'both']}}, warned()),
+             "refuse {'a': 'both'}, the `!!` of glibc refusing {}"),
+            ('refused on both, for different categories', lambda:
+             rd._verdicts_held('v', {'a': {'verdict': 'refused',
+                                          'words': W['refused', 'both']}},
+                               warned(('glibc_refused', {'locales': [
+                                   {'name': 'a', 'side': 'old'},
+                                   {'name': 'a', 'side': 'new'}]}))), None),
+            ('tables, a locale only as far as measured', lambda:
+             rd._closing_held('w', basis(a=('firm', 'sort table'),
+                                         b=('far', '-')),
+                              warned(('closing', {'state': 'tables'}))),
+             "closes ['tables'], its verdicts 'mixed'"),
+            ('mixed, every one firm', lambda: rd._closing_held(
+                'w', firm, warned(('closing', {'state': 'mixed'}))),
+             "closes ['mixed'], its verdicts 'tables'"),
+            ('mixed, none firm by its table', lambda: rd._closing_held(
+                'w', basis(a=('firm', 'no levels'), b=('far', '-')),
+                warned(('closing', {'state': 'mixed'}))),
+             "closes ['mixed'], its verdicts 'plain'"),
+            ('plain, one firm by its table', lambda: rd._closing_held(
+                'w', basis(a=('firm', 'sort table, not measured'),
+                           b=('far', '-')),
+                warned(('closing', {'state': 'plain'}))),
+             "closes ['plain'], its verdicts 'mixed'"),
+            ('no locale unchanged', lambda: rd._closing_held(
+                'w', basis(a=('changed', '-')),
+                warned(('closing', {'state': 'plain'}))), None),
+            ('two closings', lambda: rd._closing_held(
+                'w', firm, warned(('closing', {'state': 'tables'}),
+                                  ('closing', {'state': 'tables'}))),
+             "closes ['tables', 'tables']"),
+            # A locale of no levels step 11 found changed is in the tables'
+            # `!!` of disagreeing, and one with an identical table can stay
+            # firm beside it (table_verdicts): read.
+            ('firm by its table, the tables disagreeing', lambda:
+             rd._closing_held('w', basis(a=('firm', 'sort table'),
+                                         b=('changed', '-')), warned(
+                ('tables_disagree', {'names': ['b'], 'more': 0}),
+                ('closing', {'state': 'tables'}))), None),
+            ('tables alone, one not firm', lambda: rd._tables_only_held(
+                't', ['b'], basis(b=('far', '-')), control()),
+             "names ['b']"),
+            ('tables alone, C not firm', lambda: rd._tables_only_held(
+                't', ['C'], basis(C=('changed', '-')),
+                control(old='not measured')), "names ['C']"),
+            ('tables alone, its words measured', lambda:
+             rd._tables_only_held('t', ['a'], firm, control()),
+             "names ['a'], the verdicts say step 11 could not measure []"),
+            ('tables alone, words not measured, not named', lambda:
+             rd._tables_only_held('t', [], basis(
+                 a=('firm', 'sort table, not measured')), control()),
+             "could not measure ['a']"),
+            ('C not measured on a machine, not named', lambda:
+             rd._tables_only_held('t', [], firm, control(
+                 new='not measured')),
+             'leaves out C, which a machine could not measure'),
+            ('C named, byte order on both', lambda: rd._tables_only_held(
+                't', ['C'], firm, control()),
+             'names C, measured as byte order on both machines'),
+            ('C named, not measured on a machine', lambda:
+             rd._tables_only_held('t', ['C'], firm, control(
+                 old='not measured')), None),
+            ('the line, not an object', lambda: rd._charmaps_shape(
+                'c', ['checked']), "c is ['checked']"),
+            ('the line, a count not a number', lambda: rd._charmaps_shape(
+                'c', dict(checked, checked=True)), 'c is {'),
+            ('the line, C and POSIX out of order', lambda:
+             rd._charmaps_shape('c', dict(checked, builtin=['POSIX', 'C'])),
+             'c is {'),
+            ('the line, POSIX alone', lambda: rd._charmaps_shape(
+                'c', dict(checked, builtin=['POSIX'])), None),
+            ('checked beside a `!!`', lambda: rd._charmaps_held(
+                'c', checked, [], basis(a=('changed', '-')),
+                warned(('measured_in_part', {}))),
+             "is 'checked' beside 1 `!!`"),
+            ('not needed, a `!!` printed instead', lambda:
+             rd._charmaps_held('c', {'state': 'not checked'}, [], firm,
+                               warned(('charmaps_machine_not_checked', {
+                                   'named_by_bytes': False}))),
+             'is not checked where it was not needed'),
+            ('a `!!` naming by bytes', lambda: rd._charmaps_held(
+                'c', {'state': 'not checked'}, [], firm,
+                warned(('charmaps_not_checked', {'named_by_bytes': True}))),
+             None),
+            ('a changed one step 11 did not measure, checked', lambda:
+             rd._charmaps_held('c', dict(checked, checked=2), unseen,
+                               basis(a=('changed', '-'), b=('far', '-')),
+                               warned()),
+             "'checked': 1"),
+            ('one only as far as measured, not checked', lambda:
+             rd._charmaps_held('c', dict(checked, checked=0), [],
+                               basis(b=('far', '-')), warned()),
+             "'checked': 1"),
+            ('by its table, not counted', lambda: rd._charmaps_held(
+                'c', checked, [], basis(a=('changed', '-'),
+                                        b=('firm', 'sort table')),
+                warned()), "'by_table': 1"),
+            ('C firm, not aside', lambda: rd._charmaps_held(
+                'c', checked, [], basis(a=('changed', '-'),
+                                        C=('firm', 'built in')),
+                warned()), "'builtin': ['C']"),
+            ('C checked, not aside', lambda: rd._charmaps_held(
+                'c', dict(checked, checked=0), [],
+                basis(C=('changed', '-')), warned()), "'builtin': ['C']"),
+            ('checked, nothing to check', lambda: rd._charmaps_held(
+                'c', dict(checked, checked=0, by_table=1), [], firm,
+                warned()), "'state': 'not needed'"),
+            ('not needed, one to check', lambda: rd._charmaps_held(
+                'c', {'state': 'not needed', 'by_table': 1, 'builtin': []},
+                [], basis(a=('firm', 'sort table'), b=('changed', '-')),
+                warned()), "'state': 'checked'"),
+            ('C alone aside', lambda: rd._charmaps_held(
+                'c', dict(checked, builtin=['C']), [],
+                basis(C=('firm', 'built in'), a=('changed', '-')),
+                warned()), None),
+            ('POSIX alone aside, not needed', lambda: rd._charmaps_held(
+                'c', {'state': 'not needed', 'by_table': 1,
+                      'builtin': ['POSIX']}, [],
+                basis(POSIX=('firm', 'built in'), a=('firm', 'sort table')),
+                warned()), None),
+            ('no `!!` read', lambda: rd._charmaps_held(
+                'c', {'state': 'not checked'}, [], firm,
+                {'state': 'not reported', 'why': 'x'}), None),
+        ]
+        for name, call, msg in cases:
+            with self.subTest(case=name):
+                if msg is None:
+                    call()
+                    continue
+                with self.assertRaisesRegex(rd.ReportError, re.escape(msg)):
+                    call()
+
+    def test_the_closing_and_character_set_constants_are_locale_orders(
+            self):
+        """The states of the line on the character sets, the verdicts'
+        words and the closings that the reader allows are those
+        locale_order writes by, and C and
+        POSIX are node_charmaps' built-in locales; locale_order refuses
+        to print outside them: one it added and the reader did not would
+        refuse a real run."""
+        import locale_order as lo
+        import node_charmaps as nc
+        for name in ('CHARMAPS_LINE', 'VERDICT_WORDS'):
+            with self.subTest(name=name):
+                self.assertEqual(getattr(rd, name), getattr(lo, name))
+        self.assertEqual(rd.BUILTIN, tuple(nc.BUILTIN))
+        self.assertEqual(set(rd.CLOSING_TITLES), set(lo.CLOSINGS))
+        for d in ({'state': 'not checked'}, {'state': 'x'},
+                  {'state': 'checked', 'checked': 1, 'by_table': 0,
+                   'builtin': ['POSIX', 'C']}):
+            with self.subTest(charmaps=d), self.assertRaises(ValueError):
+                lo.charmaps_text(d)
+        for args in (('firm',), ('firm', 'x'), ('refused', 'either')):
+            with self.subTest(words=args), self.assertRaises(ValueError):
+                lo.verdict_words(*args)
+        with self.assertRaises(ValueError):
+            lo.run_findings({}, {}, [], [], [], [], closing='x')
+
     def test_the_sort_table_constants_are_locale_orders(self):
         """What step 11 said, the reasons, the states of what a table
         names, the words of each kind of name and the escapes of a label
@@ -2126,8 +2405,8 @@ class TheReaderIsStrict(_Folder):
             # One locale only on the new machine, with step 2's rules
             # for it: the new machine holds three.
             c = r['step11']['counts']
-            r['step11']['verdicts']['de_DE'] = {'verdict': 'only new',
-                                                'words': 'x'}
+            r['step11']['verdicts']['de_DE'] = {
+                'verdict': 'only new', 'words': 'only on the new machine'}
             by_name = r['step2']['rules_by_name']['locales']['by_name']
             by_name['de_DE'] = dict(by_name['sv_SE'])
             c['only_new'] = 1

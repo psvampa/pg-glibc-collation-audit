@@ -427,8 +427,9 @@ def step11_counts(path):
 
 
 def step11_findings(path):
-    """The findings step 11 wrote to PATH (locale_order.change_groups), as
-    a block of the report: load() checks every one of them."""
+    """The findings step 11 wrote to PATH (locale_order.change_groups,
+    and compare()'s tables_only), as a block of the report: load() checks
+    every one of them."""
     return step11_data(path)['findings']
 
 
@@ -523,9 +524,13 @@ def _checks(where, c, counts, warned):
     _ctype, of the locales _use gives a line; and, where step 11
     compared the character rules, reported its warnings and checked
     upper(), lower() and ILIKE, wholly or in part, the machine whose
-    converter of EUC does not open, held by _euc_ascii_sides."""
+    converter of EUC does not open, held by _euc_ascii_sides; and the
+    line on the character sets, its state and keys (_charmaps_shape),
+    which load() holds to the verdicts, the groups and the `!!` of the
+    same run (_charmaps_held)."""
     _keys(where, c, ['state', 'control', 'money', 'postgres_libc',
-                     'postgres_use', 'ctype'])
+                     'postgres_use', 'ctype', 'charmaps'])
+    _charmaps_shape(f'{where}.charmaps', c['charmaps'])
     _use(f'{where}.postgres_use', c['postgres_use'], counts, warned)
     _ctype(f'{where}.ctype', c['ctype'], counts, warned)
     _euc_ascii_sides(where, c, warned)
@@ -634,6 +639,183 @@ def _checks(where, c, counts, warned):
         if got != want:
             raise ReportError(f'{where} print other `!!` than step 11 '
                               f'wrote: {want!r}, not {got!r}')
+
+
+# What the line without `!!` on the character sets says
+# (locale_order.CHARMAPS_LINE), the `!!` printed instead of it
+# (charmap_findings), and glibc's built-in locales, which neither of its
+# counts holds.
+CHARMAPS_LINE = ('checked', 'not needed', 'not checked')
+CHARMAPS_BANGS = ('charmaps_not_checked', 'charmaps_machine_not_checked',
+                  'measured_in_part')
+BUILTIN = ('C', 'POSIX')
+# Each verdict's words (locale_order.VERDICT_WORDS), by the verdict and what
+# decided it.
+VERDICT_WORDS = {
+    ('changed', '-'): 'the order changes',
+    ('firm', 'built in'): 'built into glibc',
+    ('firm', 'no levels'): 'unchanged, since it has no levels on either '
+                           'machine and glibc compares bytes on both',
+    ('firm', 'no levels, not measured'): 'unchanged, since it has no levels '
+                                         'on either machine and glibc '
+                                         'compares bytes on both; step 11 '
+                                         'could not measure it',
+    ('firm', 'sort table'): 'unchanged by its compiled sort table',
+    ('firm', 'sort table, not measured'): 'unchanged by its compiled sort '
+                                          'table, which step 11 could not '
+                                          'measure',
+    ('far', '-'): 'unchanged only as far as step 11 measured it',
+    ('unmeasured', '-'): 'step 11 could not measure it',
+    ('refused', 'both'): 'refused by glibc on both machines',
+    ('refused', 'old'): 'refused by glibc on the old machine',
+    ('refused', 'new'): 'refused by glibc on the new machine',
+    ('only old', '-'): 'not on the new machine',
+    ('only new', '-'): 'only on the new machine',
+}
+_WORDS = {w: k for k, w in VERDICT_WORDS.items()}
+
+
+def _charmaps_shape(where, cm):
+    """The line on the character sets (locale_order.charmaps_data): its
+    state, and the keys and counts of each."""
+    if not isinstance(cm, dict):
+        raise ReportError(f'{where} is {cm!r}')
+    _one_of(f'{where}.state', cm.get('state'), CHARMAPS_LINE)
+    _keys(where, cm, {'checked': ['state', 'checked', 'by_table', 'builtin'],
+                      'not needed': ['state', 'by_table', 'builtin'],
+                      'not checked': ['state']}[cm['state']])
+    if cm['state'] == 'not checked':
+        return
+    if not (_is_count(cm.get('checked', 0)) and _is_count(cm['by_table'])
+            and cm['builtin'] in ([], ['C'], ['POSIX'], ['C', 'POSIX'])):
+        raise ReportError(f'{where} is {cm!r}')
+    if cm['state'] == 'not needed' and not cm['by_table']:
+        raise ReportError(f'{where} is not needed with no locale its sort '
+                          'table decided')
+
+
+def _verdict_basis(where, verdicts):
+    """{locale: (verdict, what decided it)} of step 11's verdicts, each
+    from its words (VERDICT_WORDS): words that are not its verdict's are
+    refused, and so is a firm C or POSIX that is not built in, or a firm
+    locale built in that is neither."""
+    out = {}
+    for name, x in verdicts.items():
+        got = _WORDS.get(x['words'])
+        if got is None or got[0] != x['verdict']:
+            raise ReportError(f'{where}[{name!r}] is {x["verdict"]!r} in the '
+                              f'words {x["words"]!r}')
+        if x['verdict'] == 'firm' and \
+                (got[1] == 'built in') != (name in BUILTIN):
+            raise ReportError(f'{where}[{name!r}] is firm '
+                              f'{got[1]!r}')
+        out[name] = got
+    return out
+
+
+def _verdicts_held(where, verdicts, warned):
+    """Each verdict's words, a closed state (_verdict_basis), and the
+    machines a refused one names, as glibc_refused, the `!!` of the same
+    run, names them: both where both refused it, whatever each refused."""
+    basis = _verdict_basis(where, verdicts)
+    if warned['state'] != 'reported':
+        return basis
+    sides = {}
+    for i in warned['items']:
+        if i['kind'] == 'glibc_refused':
+            for x in i['data']['locales']:
+                sides.setdefault(x['name'], set()).update(
+                    ('old', 'new') if x['side'] == 'both' else (x['side'],))
+    want = {n: 'both' if len(v) == 2 else next(iter(v))
+            for n, v in sides.items()}
+    got = {n: b for n, (v, b) in basis.items() if v == 'refused'}
+    if got != want:
+        raise ReportError(f'{where} refuse {got!r}, the `!!` of glibc '
+                          f'refusing {want!r}')
+    return basis
+
+
+def _tables_only_held(where, only, basis, control):
+    """The locales step 11 could not measure that their sort table alone
+    found unchanged (locale_order.table_verdicts' 'tables only'): each one
+    firm, and, C and POSIX aside, exactly the firm ones whose words say
+    step 11 could not measure them."""
+    firm = {n for n, (v, b) in basis.items() if v == 'firm'}
+    unread = {n for n, (v, b) in basis.items()
+              if b.endswith(', not measured')}
+    if not set(only) <= firm or set(only) - set(BUILTIN) != unread:
+        raise ReportError(f'{where} names {sorted(only)[:5]}, the verdicts '
+                          f'say step 11 could not measure '
+                          f'{sorted(unread)[:5]}')
+    # C and POSIX are built in, measured or not: their control says
+    # whether step 11 measured them (control_data). One a machine could
+    # not measure is not measured; one measured as byte order on both is.
+    for name in BUILTIN:
+        states = {control[s][name]['state'] for s in ('old', 'new')}
+        if name in firm and 'not measured' in states and name not in only:
+            raise ReportError(f'{where} leaves out {name}, which a machine '
+                              'could not measure')
+        if name in only and states == {'byte order'}:
+            raise ReportError(f'{where} names {name}, measured as byte '
+                              'order on both machines')
+
+
+def _closing_held(where, basis, warned):
+    """The closing step 11 printed, as the verdicts decide it
+    (locale_order.closing_state): 'tables' where there is a locale
+    unchanged and every one is firm, else 'mixed' where one is firm by its
+    sort table, else 'plain'."""
+    if warned['state'] != 'reported':
+        return
+    got = [i['data']['state'] for i in warned['items']
+           if i['kind'] == 'closing']
+    firm = [b for v, b in basis.values() if v == 'firm']
+    far = any(v == 'far' for v, b in basis.values())
+    want = ('tables' if firm and not far else
+            'mixed' if any(b.startswith('sort table') for b in firm)
+            else 'plain')
+    if got != [want]:
+        raise ReportError(f'{where}: step 11 closes {got!r}, its verdicts '
+                          f'{want!r}')
+
+
+def _charmaps_held(where, cm, groups, basis, warned):
+    """The line on the character sets, against the verdicts of the same
+    run (BASIS, _verdict_basis), its groups and its `!!`: not printed
+    exactly where a `!!` on the character sets is; the locales its sort
+    table decided, C and POSIX aside, those the firm verdicts count; the
+    locales checked, the changed and unchanged ones step 11 measured that
+    no table decided, those the verdicts and the groups count (a changed
+    one step 11 could not measure, found by its table alone, is not
+    checked); C and POSIX said aside where either is firm or checked; and
+    'not needed' exactly where none was checked and the tables decided
+    some, and no `!!` named a locale by its bytes."""
+    bangs = [i for i in warned['items'] if i['kind'] in CHARMAPS_BANGS] \
+        if warned['state'] == 'reported' else None
+    if bangs is not None and bool(bangs) != (cm['state'] == 'not checked'):
+        raise ReportError(f'{where} is {cm["state"]!r} beside '
+                          f'{len(bangs)} `!!` on the character sets')
+    firm = {n for n, (v, b) in basis.items() if v == 'firm'}
+    unseen = {x for g in groups for x in g['locales']
+              if g['sort_table'].get('step11') == 'unmeasured'}
+    compared = {n for n, (v, b) in basis.items()
+                if v == 'far' or (v == 'changed' and n not in unseen)}
+    other = len(firm - set(BUILTIN))
+    aside = [x for x in BUILTIN if x in firm or x in compared]
+    named = bangs is not None and any(i['data'].get('named_by_bytes')
+                                      for i in bangs)
+    due = 'not needed' if not compared and other and not named else None
+    if cm['state'] == 'not checked':
+        if due and bangs is not None:
+            raise ReportError(f'{where} is not checked where it was not '
+                              'needed')
+        return
+    want = {'state': due or 'checked', 'by_table': other, 'builtin': aside}
+    if not due:
+        want['checked'] = len(compared - set(BUILTIN))
+    if cm != want:
+        raise ReportError(f'{where} is {cm!r}, the verdicts and groups of '
+                          f'the same run say {want!r}')
 
 
 # What step 11 could check of upper(), lower() and ILIKE, what a row of a
@@ -2753,12 +2935,18 @@ def _tables_held(where, groups, warned):
 
 
 def _findings(where, f, verdicts):
-    """step 11's findings (locale_order.change_groups): each changed locale
+    """step 11's findings (locale_order.change_groups, and compare()'s
+    tables_only): each changed locale
     of VERDICTS in one group and none other, the groups sorted by their
     names, the headings they print under numbered from 0 with none
     skipped, each group's findings in the order step 11 finds them, and
-    each group's sort table (_sort_table)."""
-    _keys(where, f, ['state', 'groups'])
+    each group's sort table (_sort_table); and the locales the tables
+    alone found unchanged (tables_only), each once, which load() holds to
+    the verdicts and the control of the same run (_tables_only_held)."""
+    _keys(where, f, ['state', 'groups', 'tables_only'])
+    if not (_is_strs(f['tables_only']) or f['tables_only'] == []) or \
+            len(set(f['tables_only'])) != len(f['tables_only']):
+        raise ReportError(f'{where}.tables_only is {f["tables_only"]!r}')
     if not isinstance(f['groups'], list):
         raise ReportError(f'{where}.groups is {f["groups"]!r}')
     seen, printed, before = set(), set(), None
@@ -3157,6 +3345,19 @@ def load(path):
                 {'reported': lambda w, c: _checks(
                     w, c, o['counts'], r['warnings']['step11']),
                  **nr})
+        basis = _verdicts_held(f'{where}.verdicts', o['verdicts'],
+                               r['warnings']['step11'])
+        _closing_held(where, basis, r['warnings']['step11'])
+        if o['findings']['state'] == 'reported' and \
+                o['checks']['state'] == 'reported':
+            _tables_only_held(f'{where}.findings.tables_only',
+                              o['findings']['tables_only'], basis,
+                              o['checks']['control'])
+        if o['findings']['state'] == 'reported' and \
+                o['checks']['state'] == 'reported':
+            _charmaps_held(f'{where}.checks.charmaps',
+                           o['checks']['charmaps'], o['findings']['groups'],
+                           basis, r['warnings']['step11'])
     _stated('step11', r['step11'], ('not run', 'reported', 'not reported'),
             {'not run': s11_not_run, 'reported': s11, **nr})
     if ((r['warnings']['step11']['state'] == 'not run')

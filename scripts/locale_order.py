@@ -5959,7 +5959,7 @@ def names_note(in_bytes, several):
 # locale is found unchanged, or one found unchanged was not compared by its
 # sort table and none was found unchanged by an identical one (CLOSING_MIXED
 # when one was, CLOSING_TABLES when every one was by its table or compares
-# bytes; closing_text): what two machines that agree here can still disagree
+# bytes; closing_state): what two machines that agree here can still disagree
 # on.
 CLOSING = ('!! Not measured: a rule that shows only in strings of several '
            'letters, such as a contraction ("ch" sorted as one letter), an '
@@ -10118,32 +10118,35 @@ CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
                  'reliably, so a change there may go unseen.')
 
 
-# Each closing by the state its block is written under (closing_lines).
-CLOSINGS = {CLOSING: 'plain', CLOSING_TABLES: 'tables',
-            CLOSING_MIXED: 'mixed'}
+# Each closing by its state, which its block is written under
+# (closing_lines).
+CLOSINGS = {'plain': CLOSING, 'tables': CLOSING_TABLES,
+            'mixed': CLOSING_MIXED}
 
 
-def closing_text(same, firm, by_tables):
+def closing_state(same, firm, by_tables):
     """The closing of a run whose unchanged locales are SAME, FIRM those
     its table decided for any text, BY_TABLES whether one of them has an
-    identical table: CLOSING_TABLES only where there is an unchanged locale
-    and every one is firm (an all() over none is true, and the sentence
-    speaks of them, 16.203), else CLOSING_MIXED where one of them has an
-    identical table (BY_TABLES), else CLOSING."""
+    identical table: 'tables' (CLOSING_TABLES) only where there is an
+    unchanged locale and every one is firm (an all() over none is true,
+    and the sentence speaks of them, 16.203), else 'mixed'
+    (CLOSING_MIXED) where one of them has an identical table (BY_TABLES),
+    else 'plain' (CLOSING)."""
     if same and all(x in firm for x in same):
-        return CLOSING_TABLES
-    return CLOSING_MIXED if by_tables else CLOSING
+        return 'tables'
+    return 'mixed' if by_tables else 'plain'
 
 
 def run_findings(o, n, warnings, partly, unmeasured, only_old,
-                 checks=(), refused=None, beside=(), closing=CLOSING):
+                 checks=(), refused=None, beside=(), closing='plain'):
     """[(kind, data)]: what the run says beside the changed locales -- its
     warnings, the locales NOT known to be unchanged (glibc refused them, they
     could not be measured, or they are not on the new machine) and those
     unchanged only as far as measured, the checks of each machine beside the
     order (control, money, PostgreSQL processes, how PostgreSQL uses each
     locale), what the order does not place (beside), and what no comparison
-    measures."""
+    measures: the closing of CLOSINGS whose state is the argument
+    closing (closing_state), any other an error."""
     found = [('warning', {'text': text, 'wrap': wrap, 'kind': kind,
                           'data': data})
              for text, wrap, kind, data in warnings]
@@ -10161,7 +10164,9 @@ def run_findings(o, n, warnings, partly, unmeasured, only_old,
               for name in unmeasured]
     found += [('not on the new machine', {'name': name}) for name in only_old]
     found += list(beside)
-    found.append(('closing', {'text': closing}))
+    if closing not in CLOSINGS:
+        raise ValueError(f'no closing {closing!r}')
+    found.append(('closing', {'text': CLOSINGS[closing], 'state': closing}))
     return found
 
 
@@ -10502,7 +10507,7 @@ def use_notes(items):
 
 def closing_lines(items, ctx):
     return [Bang(fill_columns(d['text'], width=78, subsequent_indent='   '),
-                 'closing', {'state': CLOSINGS[d['text']]}) for d in items]
+                 'closing', {'state': d['state']}) for d in items]
 
 
 def closing_summary(items, ctx):
@@ -10921,17 +10926,10 @@ def charmap_findings(old, new, charmaps, compared, firm=(), named=()):
     named = set(named)
     # C and POSIX are glibc's built-in locale: neither count holds them.
     builtin = [x for x in nc.BUILTIN if x in firm or x in compared]
-    aside = (f' {" and ".join(builtin)} '
-             f'{"is" if len(builtin) == 1 else "are"} not counted: '
-             f'{"it is" if len(builtin) == 1 else "they are"} built into '
-             'glibc, from no charmap.'
-             if builtin else '')
     if not compared and other and not named:
-        return {}, [('charmaps checked', {
-            'text': 'Character sets: not checked, and not needed: the '
-                    f'{other} locale(s) found unchanged were found so by their '
-                    'sort tables, which decide for every string.' + aside,
-            'warning': False})]
+        data = {'state': 'not needed', 'by_table': other, 'builtin': builtin}
+        return {}, [('charmaps checked', {'text': charmaps_text(data),
+                                          'warning': False, 'data': data})]
     lacking, found, whole = {}, [], []
     for side, data, how in (('old', old, charmaps[0]), ('new', new, charmaps[1])):
         if not isinstance(how, MachineCharmaps):
@@ -10986,20 +10984,55 @@ def charmap_findings(old, new, charmaps, compared, firm=(), named=()):
     found += [('in part', {'name': name, 'sides': lacking[name]})
               for name in sorted(lacking)]
     if not found:
-        checked = sum(1 for name in compared if name not in nc.BUILTIN)
-        if other:
-            text = ('Character sets: every byte sequence that each machine\'s '
-                    'charmaps give a character is among the strings measured, '
-                    f'in the {checked} locale(s) checked. The {other} '
-                    'locale(s) unchanged by their sort tables need no such '
-                    'check: the table decides for every string.' + aside)
-        else:
-            text = ('Character sets: every byte sequence that each machine\'s '
-                    'charmaps give a character, in the '
-                    f'{checked} locale(s) compared, is among the strings '
-                    'measured.' + aside)
-        found.append(('charmaps checked', {'text': text, 'warning': False}))
+        data = {'state': 'checked',
+                'checked': sum(1 for name in compared
+                               if name not in nc.BUILTIN),
+                'by_table': other, 'builtin': builtin}
+        found.append(('charmaps checked', {'text': charmaps_text(data),
+                                           'warning': False, 'data': data}))
     return lacking, found
+
+
+# What the line without `!!` on the character sets says (charmap_findings):
+# the check ran and found nothing, or was not needed; or it is not printed,
+# because a `!!` on the character sets is (charmaps_data).
+CHARMAPS_LINE = ('checked', 'not needed', 'not checked')
+
+
+def charmaps_text(d):
+    """The line without `!!` on the character sets, from its data: how
+    many locales were checked (where the check ran), how many the sort
+    tables decided, and C and POSIX aside where they are among them."""
+    if d['state'] not in ('checked', 'not needed') or \
+            d['builtin'] not in ([], ['C'], ['POSIX'], ['C', 'POSIX']):
+        raise ValueError(f'no line on the character sets for {d!r}')
+    b = d['builtin']
+    aside = (f' {" and ".join(b)} {"is" if len(b) == 1 else "are"} not '
+             f'counted: {"it is" if len(b) == 1 else "they are"} built into '
+             'glibc, from no charmap.' if b else '')
+    if d['state'] == 'not needed':
+        return ('Character sets: not checked, and not needed: the '
+                f'{d["by_table"]} locale(s) found unchanged were found so by '
+                'their sort tables, which decide for every string.' + aside)
+    if d['by_table']:
+        return ('Character sets: every byte sequence that each machine\'s '
+                'charmaps give a character is among the strings measured, '
+                f'in the {d["checked"]} locale(s) checked. The '
+                f'{d["by_table"]} locale(s) unchanged by their sort tables '
+                'need no such check: the table decides for every string.'
+                + aside)
+    return ('Character sets: every byte sequence that each machine\'s '
+            'charmaps give a character, in the '
+            f'{d["checked"]} locale(s) compared, is among the strings '
+            'measured.' + aside)
+
+
+def charmaps_data(found):
+    """The data of the line without `!!` on the character sets, from
+    charmap_findings' findings: its own, or 'not checked' where it is not
+    printed, which a `!!` on the character sets says instead."""
+    got = [d['data'] for kind, d in found if kind == 'charmaps checked']
+    return got[0] if got else {'state': 'not checked'}
 
 
 def stores(piece, codeset):
@@ -11240,6 +11273,42 @@ VERDICTS = ('changed', 'firm', 'far', 'unmeasured', 'refused', 'only old',
             'only new')
 
 
+# The words of each verdict (verdicts_by_name), by the verdict and what
+# decided it: a firm locale is built into glibc (C and POSIX), has no
+# levels on either machine, or has the same sort table on both, and step
+# 11 measured it or could not ('tables only'); a refused one names the
+# machines that refused it.
+VERDICT_WORDS = {
+    ('changed', '-'): 'the order changes',
+    ('firm', 'built in'): 'built into glibc',
+    ('firm', 'no levels'): 'unchanged, since it has no levels on either '
+                           'machine and glibc compares bytes on both',
+    ('firm', 'no levels, not measured'): 'unchanged, since it has no levels '
+                                         'on either machine and glibc '
+                                         'compares bytes on both; step 11 '
+                                         'could not measure it',
+    ('firm', 'sort table'): 'unchanged by its compiled sort table',
+    ('firm', 'sort table, not measured'): 'unchanged by its compiled sort '
+                                          'table, which step 11 could not '
+                                          'measure',
+    ('far', '-'): 'unchanged only as far as step 11 measured it',
+    ('unmeasured', '-'): 'step 11 could not measure it',
+    ('refused', 'both'): 'refused by glibc on both machines',
+    ('refused', 'old'): 'refused by glibc on the old machine',
+    ('refused', 'new'): 'refused by glibc on the new machine',
+    ('only old', '-'): 'not on the new machine',
+    ('only new', '-'): 'only on the new machine',
+}
+
+
+def verdict_words(verdict, basis='-'):
+    """[verdict, its words] of VERDICT_WORDS; a pair not there is an
+    error."""
+    if (verdict, basis) not in VERDICT_WORDS:
+        raise ValueError(f'no words for {verdict!r} by {basis!r}')
+    return [verdict, VERDICT_WORDS[verdict, basis]]
+
+
 def verdicts_by_name(changed, same, firm, unmeasured, refused, only_old,
                      only_new, table_found, by_bytes):
     """{locale: [state, words]}: compare()'s verdict for every locale of
@@ -11253,32 +11322,26 @@ def verdicts_by_name(changed, same, firm, unmeasured, refused, only_old,
             for x in d['names']}
     out = {}
     for name in changed:
-        out[name] = ['changed', 'the order changes']
+        out[name] = verdict_words('changed')
     for name in same:
+        unread = ', not measured' if name in only else ''
         if name in firm and name in ('C', 'POSIX'):
-            out[name] = ['firm', 'built into glibc']
+            out[name] = verdict_words('firm', 'built in')
         elif name in firm and name in by_bytes:
-            out[name] = ['firm', 'unchanged, since it has no levels on '
-                         'either machine and glibc compares bytes on both'
-                         + ('; step 11 could not measure it' if name in only
-                            else '')]
+            out[name] = verdict_words('firm', 'no levels' + unread)
         elif name in firm:
-            out[name] = ['firm', 'unchanged by its compiled sort table, which '
-                         'step 11 could not measure' if name in only
-                         else 'unchanged by its compiled sort table']
+            out[name] = verdict_words('firm', 'sort table' + unread)
         else:
-            out[name] = ['far', 'unchanged only as far as step 11 measured '
-                         'it']
+            out[name] = verdict_words('far')
     for name in unmeasured:
-        out[name] = ['unmeasured', 'step 11 could not measure it']
+        out[name] = verdict_words('unmeasured')
     for name, sides in refused.items():
-        where = ('both machines' if len(sides) == 2
-                 else f'the {next(iter(sides))} machine')
-        out[name] = ['refused', f'refused by glibc on {where}']
+        out[name] = verdict_words('refused', 'both' if len(sides) == 2
+                                  else next(iter(sides)))
     for name in only_old:
-        out[name] = ['only old', 'not on the new machine']
+        out[name] = verdict_words('only old')
     for name in only_new:
-        out[name] = ['only new', 'only on the new machine']
+        out[name] = verdict_words('only new')
     return out
 
 
@@ -11748,6 +11811,10 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # each group measured alike (change_groups).
     entries = change_locales(changed, o, n, pg_names)
     findings = change_groups(measured, groups, entries)
+    # The locales its table alone found unchanged, step 11 not measuring
+    # them (table_verdicts' 'tables only'), whose line prints these names.
+    findings['tables_only'] = [x for kind, d in table_found
+                               if kind == 'tables only' for x in d['names']]
     # Unchanged only as far as it was measured: some neighbours were not
     # measured at every level (unclassified), so a change in how they are
     # told apart would not show.
@@ -11803,7 +11870,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     warnings += [(text, True, kind, data) for text, kind, data in unchecked]
     check_data = {'control': control_data(old, new),
                   'money': money_data(old, new, both),
-                  'postgres_libc': libc_data(old, new)}
+                  'postgres_libc': libc_data(old, new),
+                  'charmaps': charmaps_data(beside)}
     libc = libc_texts(check_data['postgres_libc'])
     checks = (('control', control_texts(check_data['control'])),
               ('postgres libc above',
@@ -11835,11 +11903,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     other = other_encoding_text(both + only_new, model, firm)
     if other:
         beside.append(('other encoding', {'text': other}))
-    # closing_text picks CLOSING_TABLES, CLOSING_MIXED or CLOSING; the
-    # comments over the three say when.
+    # closing_state picks 'tables', 'mixed' or 'plain', whose texts
+    # (CLOSINGS) are CLOSING_TABLES, CLOSING_MIXED and CLOSING; the comments
+    # over the three say when.
     by_tables = any(r == 'identical' for r in routes.values())
     found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
-                         refused, beside, closing_text(same, firm, by_tables))
+                         refused, beside, closing_state(same, firm, by_tables))
     ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to,
            'changes': entries}
 

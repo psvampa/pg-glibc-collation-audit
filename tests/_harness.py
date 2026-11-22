@@ -1735,7 +1735,8 @@ def check_step11_counts(r, out_dir, path):
     with open(chars, encoding='utf-8') as fh:
         text = fh.read()
     step11_counts_held(report, brief, f, log, characters=text,
-                       warnings=r['warnings']['step11'])
+                       warnings=r['warnings']['step11'],
+                       verdicts=s11['verdicts'])
     if s11['counts'] != rd.step11_counts(f):
         raise AssertionError(f'{path}: step 11 counts {s11["counts"]!r}, '
                              f'{f} holds {rd.step11_counts(f)!r}')
@@ -1748,8 +1749,34 @@ def check_step11_counts(r, out_dir, path):
                              f'{f} holds {rd.step11_checks(f)!r}')
 
 
+def _verdicts_of(path):
+    """The verdicts a --verdicts-to wrote to PATH, as report_data reads
+    them ({locale: {'verdict', 'words'}}); None where no --verdicts-to
+    was given, 'missing' where it was and the file is not there."""
+    if path is None:
+        return None
+    if not os.path.exists(path):
+        return 'missing'
+    with open(path, encoding='utf-8') as f:
+        v = json.load(f)
+    return {n: {'verdict': x[0], 'words': x[1]}
+            for n, x in v['locales'].items()}
+
+
+def _with_verdicts(argv, tmp):
+    """(argv, the verdicts file): a --compare given a --verdicts-to in TMP
+    where it has none, so that every comparison's verdicts are read."""
+    argv = [str(a) for a in argv]
+    if '--compare' not in argv:
+        return argv, None
+    if '--verdicts-to' in argv:
+        return argv, argv[argv.index('--verdicts-to') + 1]
+    v = os.path.join(tmp, 'verdicts.json')
+    return argv + ['--verdicts-to', v], v
+
+
 def step11_counts_held(report, summary, path, where, *, warnings,
-                       unread=None, characters=None):
+                       unread=None, characters=None, verdicts=None):
     """The counts step 11 wrote to `path` (locale_order.write_counts)
     against what test_locale_order's readers take from the text it
     printed: parse_report of its report (`report`), and parse_summary of
@@ -1762,14 +1789,21 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     upper(), lower() and ILIKE (step11_use_held) and the character rules
     (step11_ctype_held), read by report_data's
     reader too, against the run's `!!` (WARNINGS, as report.json holds
-    step 11's warnings).
+    step 11's warnings); the line on the character sets and the closing
+    (step11_charmaps_held), and the locales the tables alone decided
+    (step11_tables_only_held). VERDICTS: what the run's --verdicts-to
+    wrote, as report.json holds it (_verdicts_of), which report_data's
+    readers of the verdicts' words, the closing, the tables alone and the
+    character sets hold the data to; 'missing' where the run was given
+    one and wrote none, refused once a report was printed.
     A file that is not there is right only where no report was printed
     (a comparison refused). UNREAD is why the readers cannot read this
     report (a test whose locale names they cannot split): then the file
     is only read, by report_data's reader. Its readers of each group's
     sort table run in either case: _sort_table and _tables_held, and,
     where the characters file was written, _table_rows_held against its
-    rows."""
+    rows; and so do its readers of the verdicts, the closing, the tables
+    alone and the line on the character sets."""
     import report_data as rd
     printed = any(ln.startswith('Old machine: ')
                   for ln in report.split('\n'))
@@ -1796,6 +1830,21 @@ def step11_counts_held(report, summary, path, where, *, warnings,
                 if ln and not ln.startswith('# ')]
         rd._table_rows_held(where, fnd['groups'], rows)
     rd._tables_held(where, fnd['groups'], warnings)
+    cm = rd.step11_data(path)['checks']['charmaps']
+    # report_data's readers of the verdicts' words, the closing, the
+    # locales the tables alone decided and the line on the character sets,
+    # against the verdicts of the same run, on every comparison too.
+    if verdicts == 'missing':
+        raise AssertionError(f'{where} printed a report and wrote no '
+                             'verdicts file')
+    if verdicts is not None:
+        basis = rd._verdicts_held(f'{where}: verdicts', verdicts, warnings)
+        rd._closing_held(where, basis, warnings)
+        rd._tables_only_held(f'{where}: findings.tables_only',
+                             fnd['tables_only'], basis,
+                             rd.step11_data(path)['checks']['control'])
+        rd._charmaps_held(f'{where}: checks.charmaps', cm, fnd['groups'],
+                          basis, warnings)
     if unread is not None:
         if not (isinstance(unread, str) and unread):
             raise AssertionError(f'no reason why {where} is not read')
@@ -1852,7 +1901,75 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     step11_ctype_held(r, s if summary is not None else None, files,
                       rd.step11_data(path)['checks']['ctype'], warnings,
                       path, where)
+    step11_charmaps_held(r, s if summary is not None else None, files, cm,
+                         warnings, path, where)
+    step11_tables_only_held(r, s if summary is not None else None, files,
+                            fnd['tables_only'], path, where)
     return c
+
+
+def step11_tables_only_held(r, s, files, only, path, where):
+    """The line on the locales step 11 could not measure that their sort
+    table alone found unchanged, as step 11 wrote its names to PATH
+    (findings['tables_only']), against the names the readers take from the
+    report and the summary (the first LIST_LIMIT; the count the report
+    prints is held to its names by parse_report, not to the data) and from
+    the characters file's note (every one)."""
+    import locale_order as lo
+    names = [lo.shown(x) for x in only]
+    shown = names[:lo.LIST_LIMIT]
+    for what, got in (('report', r['tables_only']),
+                      ('summary', s['tables_only'] if s is not None else None),
+                      ('characters file',
+                       files.tables_only if files is not None else None)):
+        if got is None:
+            continue
+        want = names if what == 'characters file' else shown
+        if got != want:
+            raise AssertionError(f'{where}: the {what} names {got!r} '
+                                 f'unchanged by their tables alone, {path} '
+                                 f'holds {want!r}')
+
+
+def step11_charmaps_held(r, s, files, cm, warnings, path, where):
+    """The line without `!!` on the character sets, as step 11 wrote it
+    to PATH (charmaps_data), against what check_kind reads of the report,
+    the summary (S None where none was written) and the characters
+    file's notes (FILES None where none was written): none where the
+    data says 'not checked', else its counts and C and POSIX aside; and
+    the closing, as the readers take it from the three, the text of the
+    state step 11's warnings hold."""
+    import locale_order as lo
+    if cm['state'] == 'not checked':
+        want = []
+    elif cm['state'] == 'not needed':
+        want = [('charmaps', {'needed': False, 'by_table': cm['by_table'],
+                              'builtin': cm['builtin']})]
+    else:
+        want = [('charmaps', dict({'checked': cm['checked']},
+                                  **({'by_table': cm['by_table']}
+                                     if cm['by_table'] else {}),
+                                  builtin=cm['builtin']))]
+    closing = [i['data']['state'] for i in warnings['items']
+               if i['kind'] == 'closing']
+    # Written out here, not read from lo.CLOSINGS (_closed_words).
+    text = {'plain': lo.CLOSING, 'tables': lo.CLOSING_TABLES,
+            'mixed': lo.CLOSING_MIXED}[closing[0]] if closing else None
+    for what, checks, said in (
+            ('report', r['checks'], r['closing']),
+            ('summary', s['checks'] if s is not None else None,
+             s['closing'] if s is not None else None),
+            ('characters file', files.checks if files is not None else None,
+             files.closing if files is not None else None)):
+        if checks is None:
+            continue
+        got = [x for x in checks if x[0] == 'charmaps']
+        if got != want:
+            raise AssertionError(f'{where}: the {what} prints the character '
+                                 f'sets as {got!r}, {path} holds {want!r}')
+        if text is not None and said != text:
+            raise AssertionError(f'{where}: the {what} closes with {said!r}, '
+                                 f'the warnings hold {closing!r}')
 
 
 # The control's words for C or POSIX not checked on a side (control_texts),
@@ -2831,19 +2948,23 @@ def held_main(main, stdout):
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
     `!!` agree (step11_written), and so do its counts, findings and
     checks (step11_counts_held, its summary and characters file read from the
-    --summary-to and --characters-to of sys.argv), on a refusal too.
+    --summary-to and --characters-to of sys.argv), on a refusal too; the
+    sys.argv of a --compare given a --verdicts-to in its temporary folder
+    where it has none (_with_verdicts), whose verdicts step11_counts_held
+    holds the data to.
     Returns what main() returns."""
     import tempfile
     from unittest import mock
     import glibc_locale_data as g
     import locale_order
     start = len(stdout.getvalue())
-    argv = list(sys.argv)
     with tempfile.TemporaryDirectory() as tmp:
+        argv, vpath = _with_verdicts(sys.argv, tmp)
         path = os.path.join(tmp, 'w.jsonl')
         data = os.path.join(tmp, 'data.json')
         with mock.patch.dict(os.environ, {g.WARNINGS_ENV: path,
-                                          locale_order.STEP11_DATA_ENV: data}):
+                                          locale_order.STEP11_DATA_ENV: data}), \
+                mock.patch.object(sys, 'argv', argv):
             try:
                 rc = main()
             finally:
@@ -2853,7 +2974,8 @@ def held_main(main, stdout):
                                    data, 'main()',
                                    characters=_characters_of(argv, out),
                                    warnings={'state': 'reported',
-                                             'items': recs})
+                                             'items': recs},
+                                   verdicts=_verdicts_of(vpath))
     return rc
 
 
@@ -2863,14 +2985,18 @@ def held_compare(argv, *, counts_unread=None, **kw):
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
     `!!` agree (step11_written), and so do its counts, findings and
     checks (step11_counts_held, with the summary of its --summary-to and the
-    characters file of its --characters-to), on a refusal too.
+    characters file of its --characters-to), on a refusal too. ARGV is run
+    with a --verdicts-to in its temporary folder where it has none
+    (_with_verdicts), whose verdicts step11_counts_held holds the data to.
     COUNTS_UNREAD is why the readers cannot read its report
-    (step11_counts_held's unread). Returns the CompletedProcess."""
+    (step11_counts_held's unread). Returns the CompletedProcess, whose args
+    are those run."""
     import tempfile
     import glibc_locale_data as g
     import locale_order
     env = dict(kw.pop('env', None) or os.environ)
     with tempfile.TemporaryDirectory() as tmp:
+        argv, vpath = _with_verdicts(argv, tmp)
         path = os.path.join(tmp, 'w.jsonl')
         data = os.path.join(tmp, 'data.json')
         env[g.WARNINGS_ENV] = path
@@ -2884,7 +3010,8 @@ def held_compare(argv, *, counts_unread=None, **kw):
         step11_counts_held(out, _summary_of(argv, out, where), data, where,
                            unread=counts_unread,
                            characters=_characters_of(argv, out),
-                           warnings={'state': 'reported', 'items': recs})
+                           warnings={'state': 'reported', 'items': recs},
+                           verdicts=_verdicts_of(vpath))
     return p
 
 
