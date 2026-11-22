@@ -12080,6 +12080,53 @@ class CtypeComparedInEuc(Checks):
         self.assertEqual(self.euc(*self.pair(new_tables=new)), [
             {'euc ascii': 'new', 'same': True, 'names': EUC_OF}])
 
+    def test_every_ctype_group_numbered_in_order(self):
+        """No run of the suite prints two groups of EUC, nor one of byte
+        sequences and characters at once, nor UTF-8's beside them: A1 A2
+        of EUC-KR converted to another character on the new machine,
+        U+3000 and U+3001 joining [[:punct:]] there, and U+00E9 read as
+        U+00EA by UTF-8's converter. The file numbers the groups by their
+        locales, the byte sequences before the characters, UTF-8 last."""
+        def otherwise(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0xEA})
+        conv = self.entry('EUC-KR', 'ko_KR', other=(b'\xa1\xa2',))
+        new = {n: (small_with('punct', [0x3000, 0x3001]), SMALL_BYTES)
+               for n in EUC_OF}
+        found, rows = self.rows(*self.pair(new_use=8, new_converter=conv,
+                                           new_tables=new,
+                                           new_edits=[otherwise]))
+        jp, kr = ('ja_JP', 'ja_JP.eucjp', 'zh_CN'), ('ko_KR', 'ko_KR.euckr')
+        said = {(n, w): [(r['finding'], r['chars'], r['how'])
+                         for r in rows[(label,)]]
+                for label, (n, w) in rows.ctype_groups.items()}
+        self.assertEqual(
+            [rows.ctype_groups[f'LC_CTYPE_group_{i}'] for i in range(1, 5)],
+            [(jp, 'character'), (kr, 'byte sequence'), (kr, 'character'),
+             (('de_DE.utf8',), 'byte sequence')])
+        punct = 'classes: none -> punct'
+        self.assertEqual(said, {
+            (jp, 'character'): [('LC_CTYPE changed', 'U+3000', punct),
+                                ('LC_CTYPE changed', 'U+3001', punct)],
+            (kr, 'byte sequence'): [('LC_CTYPE converted', 'bytes A1 A2',
+                                     'U+3001 -> U+3002')],
+            (kr, 'character'): [('LC_CTYPE changed', 'U+3000', punct)],
+            (('de_DE.utf8',), 'byte sequence'): [
+                ('LC_CTYPE converted', 'bytes C3 A9', 'U+00E9 -> U+00EA')]})
+
+    def test_ascii_alone_on_each_side(self):
+        """The machine whose converter does not open, old, new or both, a
+        change of A's rules named: the line says only ASCII was compared,
+        on that side."""
+        new = {n: (small_with(upper={0x41: 0x42}), SMALL_BYTES)
+               for n in EUC_OF}
+        for uses, side in (((9, 8), 'old'), ((9, 9), 'both'), ((8, 9), 'new')):
+            with self.subTest(side=side):
+                self.assertEqual(self.euc(*self.pair(
+                    old_use=uses[0], new_use=uses[1], new_tables=new)), [
+                    {'euc change': {0x41: 'gains the capital B (U+0042)'},
+                     'other': 0, 'names': EUC_OF},
+                    {'euc ascii': side, 'same': False, 'names': EUC_OF}])
+
     def test_a_converter_not_measured(self):
         """Not measured on a side, or its two answers disagreeing: NOT
         checked with why, never the same."""

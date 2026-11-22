@@ -174,7 +174,10 @@ CHECKS = {'control': {s: {n: {'state': 'byte order'} for n in ('C', 'POSIX')}
                            'one_byte': 1, 'left_out': [], 'elsewhere': 0},
           'ctype': {'state': 'compared',
                     'lines': {'C': 'built in', 'sv_SE': 'utf8'},
-                    'character_groups': [], 'byte_groups': []}}
+                    'character_groups': [], 'byte_groups': [],
+                    'euc': {'ascii_alone': [], 'character_groups': [],
+                            'not_checked': []},
+                    'utf8': {'names': []}}}
 
 
 # One `!!` of each kind as a step writes it (kind, data), with the title
@@ -2373,14 +2376,19 @@ class TheReaderIsStrict(_Folder):
                          sorted(rd.USE_ERROR_KINDS))
 
     def ctype_rich(self):
-        """(data, counts, warnings) of step 11's character rules over eight
+        """(data, counts, warnings) of step 11's character rules over ten
         locales, every line given one at least: a group of characters naming its locale
         (two changes of one character each and one of two characters), a
-        group of bytes of every locale compared, a locale not checked and
-        one of EUC, each with the `!!` a run prints of it."""
+        group of bytes of every locale compared, a locale not checked;
+        three of EUC: one whose characters change, compared for ASCII
+        alone, one the same, one not checked on each machine (a reason
+        kept as it is, one capitalized); and the locale of UTF-8 under the
+        rows of the line on UTF-8's converter; each with the `!!` a run
+        prints of it."""
         lines = {'C': 'built in', 'POSIX': 'built in', 'de_DE': 'utf8',
                  'sv_SE': 'utf8', 'ja_JP': 'euc', 'th_TH': 'other encoding',
-                 'xx_XX': 'refused', 'yy_YY': 'not checked'}
+                 'xx_XX': 'refused', 'yy_YY': 'not checked', 'ko_KR': 'euc',
+                 'zh_TW': 'euc'}
         letters = ['alpha', 'alnum', 'print', 'graph']
         data = {'state': 'compared', 'lines': lines, 'character_groups': [
             {'names': ['sv_SE'], 'changes': [
@@ -2392,15 +2400,30 @@ class TheReaderIsStrict(_Folder):
                  'upper': {'old': 'U+1E9E', 'new': 'U+00DF'},
                  'lower': {'old': 'U+00DF', 'new': 'U+1E9E'}}]}],
             'byte_groups': [
-            {'names': ['de_DE', 'ja_JP', 'sv_SE', 'th_TH'], 'changes': [
+            {'names': ['de_DE', 'ja_JP', 'ko_KR', 'sv_SE', 'th_TH',
+                       'zh_TW'], 'changes': [
                 {'bytes': ['A0', 'AD'], 'classes': {'old': ['print'],
                                                     'new': []}},
                 {'bytes': ['B5'], 'upper': {'old': 'B5', 'new': 'CC'},
-                 'classes': {'old': ['print'], 'new': letters}}]}]}
+                 'classes': {'old': ['print'], 'new': letters}}]}],
+            'euc': {'character_groups': [
+                {'names': ['ja_JP'], 'changes': [
+                    {'chars': ['U+3000', 'U+3001'], 'classified': False,
+                     'classes': {'old': [],
+                                 'new': ['punct', 'print', 'graph']}}]}],
+                'ascii_alone': [{'side': 'new', 'groups': [
+                    {'encoding': 'EUC-JP', 'names': ['ja_JP']}]}],
+                'not_checked': [
+                    {'name': 'zh_TW', 'side': 'old',
+                     'why': "glibc's converter of EUC-TW could not be "
+                            'measured: x'},
+                    {'name': 'zh_TW', 'side': 'new',
+                     'why': 'the converter part holds no EUC-TW'}]},
+            'utf8': {'names': ['sv_SE']}}
         counts = {'state': 'reported',
-                  'machines': {'old': {'label': 'a', 'locales': 9},
-                               'new': {'label': 'b', 'locales': 8}},
-                  'changed': 0, 'unchanged': 6,
+                  'machines': {'old': {'label': 'a', 'locales': 11},
+                               'new': {'label': 'b', 'locales': 10}},
+                  'changed': 0, 'unchanged': 8,
                   'unchanged_as_far_as_measured': 0, 'not_measured': 1,
                   'refused': 1, 'only_old': 1, 'only_new': 0}
         items = [
@@ -2409,21 +2432,32 @@ class TheReaderIsStrict(_Folder):
                 'classified': [{'character': 'U+0282', 'change': 'x'},
                                {'character': 'U+1E9E', 'change': 'y'}]}),
             ('ctype_bytes_changed', {
-                'locales': 4, 'names': [], 'bytes': [
+                'locales': 6, 'names': [], 'bytes': [
                     {'byte': 'A0', 'change': 'z'},
                     {'byte': 'AD', 'change': 'z'},
                     {'byte': 'B5', 'change': 'z'}]}),
             ('ctype_not_checked', {'locales': [
                 {'name': 'yy_YY', 'side': 'new', 'why': 'w'}]}),
-            ('euc_same', {'other': False, 'groups': [
-                {'encoding': 'EUC-JP', 'names': ['ja_JP']}]})]
+            ('euc_characters_changed', {
+                'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP']}],
+                'count': 2, 'classified': []}),
+            ('euc_same', {'other': True, 'groups': [
+                {'encoding': 'EUC-KR', 'names': ['ko_KR']}]}),
+            ('euc_not_checked', {'reasons': [
+                {'why': "glibc's converter of EUC-TW could not be "
+                        'measured: x', 'side': 'old',
+                 'groups': [{'encoding': 'EUC-TW', 'names': ['zh_TW']}]},
+                {'why': 'The converter part holds no EUC-TW', 'side': 'new',
+                 'groups': [{'encoding': 'EUC-TW', 'names': ['zh_TW']}]}]}),
+            ('utf8_changed', {'locales': 1, 'sequences': [
+                {'bytes': 'C3 A9', 'old': 'U+00E9', 'new': 'U+00EA'}]})]
         warned = {'state': 'reported',
                   'items': [{'kind': k, 'data': d} for k, d in items]}
         return data, counts, warned
 
     def test_ctype_that_does_not_hang_together(self):
-        """Step 11's data on the character rules of characters and bytes
-        (_ctype), each written wrong alone over data that puts a locale
+        """Step 11's data on the character rules (_ctype), each written
+        wrong alone over data that puts a locale
         on every line, refused for the reason named: every key and
         state; each group's locales and changes; the lines against the
         counts and C and POSIX; each group against its `!!`, the locales
@@ -2447,6 +2481,9 @@ class TheReaderIsStrict(_Folder):
 
         def add(r, kind, data):
             r[2]['items'].append({'kind': kind, 'data': data})
+
+        def euc(r):
+            return r[0]['euc']
         keys, group, ours = 'has the keys', r'names is', 'the `!!` say'
         cases = [
             # Every key and state.
@@ -2459,6 +2496,10 @@ class TheReaderIsStrict(_Folder):
                 character_groups={})),
             (group, lambda r: byts(r).update(names=['th_TH', 'de_DE',
                                                     'ja_JP', 'sv_SE'])),
+            (keys, lambda r: r[0].pop('euc')),
+            (keys, lambda r: r[0].pop('utf8')),
+            (keys, lambda r: euc(r).pop('ascii_alone')),
+            (keys, lambda r: r[0]['utf8'].update(odd=1)),
             (group, lambda r: byts(r).update(names=['de_DE', 'de_DE'])),
             (group, lambda r: byts(r).update(names=[])),
             (group, lambda r: chars(r).update(names=['th_TH'])),
@@ -2516,9 +2557,9 @@ class TheReaderIsStrict(_Folder):
                         {'bytes': ['41'], 'classes': {
                             'old': [], 'new': ['print']}}]}))),
             # The lines, against the counts and C and POSIX.
-            (r'gives 9 locale\(s\) a line', lambda r: r[0]['lines'].update(
+            (r'gives 11 locale\(s\) a line', lambda r: r[0]['lines'].update(
                 zz_ZZ='other encoding')),
-            (r'gives 8 locale\(s\) a line, 0 refused', lambda r: r[0][
+            (r'gives 10 locale\(s\) a line, 0 refused', lambda r: r[0][
                 'lines'].update(xx_XX='other encoding')),
             ('built in', lambda r: r[0]['lines'].update(
                 POSIX='other encoding')),
@@ -2548,12 +2589,87 @@ class TheReaderIsStrict(_Folder):
                 r, 'ctype_not_checked')['locales'].append(
                     {'name': 'th_TH', 'side': 'old', 'why': 'w'})),
             ('give EUC', lambda r: r[0]['lines'].update(
-                ja_JP='other encoding')),
+                ko_KR='other encoding')),
             ('give EUC', lambda r: r[0]['lines'].update(th_TH='euc')),
             ('give EUC', lambda r: bang(r, 'euc_same')['groups'].append(
                 {'encoding': 'TIS-620', 'names': ['th_TH']})),
             ('give EUC', lambda r: bang(r, 'euc_same')['groups'].append(
                 {'encoding': 'X', 'names': ['C']})),
+            # The groups of EUC, read as those of characters and held to
+            # their `!!`.
+            (r'euc\.character_groups\[0\]\.names is', lambda r: euc(r)[
+                'character_groups'][0].update(names=['th_TH'])),
+            (r'euc\.character_groups\[0\]\.changes\[0\] is', lambda r: euc(
+                r)['character_groups'][0]['changes'][0].update(chars=[])),
+            (r'euc\.character_groups are .* ' + ours, lambda r: bang(
+                r, 'euc_characters_changed').update(count=1)),
+            (r'euc\.character_groups are .* ' + ours, lambda r: euc(r)[
+                'character_groups'][0]['changes'][0].update(classified=True)),
+            (r'euc\.character_groups are .* ' + ours, lambda r: bang(
+                r, 'euc_characters_changed').update(classified=[
+                    {'character': 'U+3000', 'change': 'x'}])),
+            (r'euc\.character_groups are .* ' + ours, lambda r: bang(
+                r, 'euc_characters_changed')['groups'][0]['names'].append(
+                    'ko_KR')),
+            # Compared for ASCII alone: its shape, and each half of its
+            # tie to the lines on EUC.
+            (r'ascii_alone is', lambda r: euc(r)['ascii_alone'][0].update(
+                side='odd')),
+            (r'ascii_alone is', lambda r: euc(r)['ascii_alone'].append(
+                {'side': 'new', 'groups': [
+                    {'encoding': 'EUC-KR', 'names': ['ko_KR']}]})),
+            (r'ascii_alone names', lambda r: euc(r)['ascii_alone'].append(
+                {'side': 'old', 'groups': [
+                    {'encoding': 'EUC-JP', 'names': ['ja_JP']}]})),
+            (r'ascii_alone names', lambda r: euc(r)['ascii_alone'][0][
+                'groups'].append({'encoding': 'TIS-620',
+                                  'names': ['th_TH']})),
+            (r'euc\.ascii_alone names .* change', lambda r: euc(r)[
+                'ascii_alone'][0]['groups'].append(
+                    {'encoding': 'EUC-KR', 'names': ['ko_KR']})),
+            (r'euc\.ascii_alone names .* change', lambda r: add(
+                r, 'euc_ascii_same', {'side': 'new', 'groups': [
+                    {'encoding': 'EUC-JP', 'names': ['ja_JP']}]})),
+            # The locales of EUC not checked: their shape, and against
+            # their `!!`, the reason as a sentence starts with it.
+            (r'not_checked is', lambda r: euc(r)['not_checked'][0].update(
+                side='odd')),
+            (r'not_checked is', lambda r: euc(r)['not_checked'][0].update(
+                odd=1)),
+            (r"ascii_alone names \['ja_JP', 'th_TH'\]$", lambda r: (
+                r[2].update(state='not reported', why=['x']),
+                euc(r)['ascii_alone'][0]['groups'].append(
+                    {'encoding': 'TIS-620', 'names': ['th_TH']}))),
+            (r'not_checked is', lambda r: euc(r)['not_checked'][0].update(
+                side='both')),
+            (r'not_checked is', lambda r: euc(r)['not_checked'].append(
+                {'name': 'ko_KR', 'side': 'old', 'why': 'w'})),
+            (r'not_checked is', lambda r: euc(r)['not_checked'].insert(
+                0, {'name': 'th_TH', 'side': 'old', 'why': 'w'})),
+            (r'euc\.not_checked are', lambda r: bang(
+                r, 'euc_not_checked')['reasons'][0].update(side='new')),
+            (r'euc\.not_checked are', lambda r: bang(
+                r, 'euc_not_checked')['reasons'][0].update(
+                    why="Glibc's converter of EUC-TW could not be "
+                        'measured: x')),
+            (r'euc\.not_checked are', lambda r: bang(
+                r, 'euc_not_checked')['reasons'][1].update(
+                    why='the converter part holds no EUC-TW')),
+            (r'euc\.not_checked are', lambda r: bang(
+                r, 'euc_not_checked')['reasons'][1]['groups'].append(
+                    {'encoding': 'EUC-KR', 'names': ['ko_KR']})),
+            (r'euc\.not_checked are', lambda r: euc(r)['not_checked'].pop()),
+            # The locales of UTF-8 under the rows of its converter's line.
+            (r'utf8\.names is', lambda r: r[0]['utf8'].update(
+                names=['sv_SE', 'de_DE'])),
+            (r'utf8\.names is', lambda r: r[0]['utf8'].update(
+                names=['sv_SE', 'sv_SE'])),
+            (r'utf8\.names is', lambda r: r[0]['utf8'].update(
+                names=['th_TH'])),
+            (r'utf8\.names are', lambda r: r[0]['utf8'].update(
+                names=['de_DE', 'sv_SE'])),
+            (r'utf8\.names are', lambda r: r[0]['utf8'].update(names=[])),
+            (r'utf8\.names are', lambda r: drop(r, 'utf8_changed')),
         ]
 
         def read(r):
@@ -2572,6 +2688,19 @@ class TheReaderIsStrict(_Folder):
         add(shared, 'euc_ascii_same', {'side': 'new', 'groups': [
             {'encoding': 'EUC-JP', 'names': ['de_DE']}]})
         read(shared)
+        # A file of an earlier format, whose line on UTF-8's converter is
+        # one machine's: its locales read, held to their number alone.
+        early = ({'state': 'earlier format', 'utf8': {'names': ['sv_SE']}},
+                 good[1], {'state': 'reported', 'items': [
+                     {'kind': 'ctype_earlier_format', 'data': {'side': 'old'}},
+                     {'kind': 'utf8_one_side', 'data': {
+                         'side': 'new', 'why': [], 'locales': 1,
+                         'sequences': [{'bytes': 'C3 A9', 'old': 'U+00E9',
+                                        'new': 'U+00EA'}]}}]})
+        read(early)
+        early[0]['utf8']['names'] = []
+        with self.assertRaisesRegex(rd.ReportError, r'utf8\.names are'):
+            read(early)
         # Counts or warnings step 11 did not report: the shape alone.
         for k in (1, 2):
             alone = list(copy.deepcopy(good))
@@ -2611,23 +2740,88 @@ class TheReaderIsStrict(_Folder):
             json.dump(r, f)
         rd.load(p)
 
+    def test_the_euc_side_is_that_of_upper_and_lower(self):
+        """The machine whose converter of EUC does not open, for each
+        locale of EUC compared (_euc_ascii_sides): as the lines on EUC
+        say it, compared for ASCII alone or the same for ASCII, and as the
+        lines on upper(), lower() and ILIKE say it, an error on the new
+        machine, on the old one or on both; each wrong alone, in either
+        direction, is refused; a locale of another encoding in those lines
+        is not one of them; and the check runs through load()."""
+        def run(alone, same, new, back, both, other=()):
+            c = {'ctype': {'state': 'compared', 'euc': {'ascii_alone': [
+                {'side': s, 'groups': [{'encoding': 'E', 'names': n}]}
+                for s, n in alone]}},
+                 'postgres_use': {'state': 'checked', 'back': [
+                     {'encoding': 'E', 'names': back}] if back else []}}
+            items = [{'kind': 'euc_ascii_same', 'data': {
+                'side': s, 'groups': [{'encoding': 'E', 'names': n}]}}
+                for s, n in same]
+            items += [{'kind': k, 'data': {'groups': [
+                {'encoding': 'E', 'names': n}]}}
+                for k, n in (('use_error_new', new), ('use_error_both', both))
+                if n]
+            items += [{'kind': 'euc_same', 'data': {'other': False, 'groups': [
+                {'encoding': 'E', 'names': list(other)}]}}] if other else []
+            rd._euc_ascii_sides('x', c, {'state': 'reported', 'items': items})
+        good = dict(alone=[('new', ['a'])], same=[('both', ['b']),
+                                                  ('old', ['c'])],
+                    new=['a', 'th_TH'], back=['c'], both=['b'], other=['d'])
+        run(**good)
+        for why, over in (
+                ('a side', dict(alone=[('old', ['a'])])),
+                ('a side', dict(same=[('new', ['b']), ('old', ['c'])])),
+                ('missing on EUC', dict(same=[('both', ['b'])],
+                                        other=['c', 'd'])),
+                ('missing on upper', dict(back=[])),
+                ('a locale of EUC the same', dict(new=['a', 'd'])),
+                ('a locale of EUC changed', dict(both=['b', 'a']))):
+            with self.subTest(why=why):
+                with self.assertRaisesRegex(rd.ReportError,
+                                            'compare ASCII alone on'):
+                    run(**dict(good, **over))
+
+        def change(r):
+            d = {'side': 'new', 'groups': [{'encoding': 'UTF-8',
+                                            'names': ['sv_SE']}]}
+            r['warnings']['step11']['items'].append(
+                {'kind': 'euc_ascii_same',
+                 'class': rd.KINDS['euc_ascii_same'][0],
+                 'title': rd.KINDS['euc_ascii_same'][2](d), 'data': d,
+                 'text': '!! x'})
+        with self.assertRaisesRegex(rd.ReportError, 'compare ASCII alone on'):
+            self.refuses_by(change)
+
     def test_the_ctype_constants_are_locale_orders(self):
-        """The states, lines and classes the reader allows for the
-        character rules, and the lines each kind of group compares, are
-        those locale_order writes and prints by; and locale_order refuses
-        to write a value outside them: one it added and the reader did not
+        """The states, lines, classes and sides the reader allows for
+        the character rules, the lines each kind of group compares, and
+        the words a reason keeps as they are where it starts a sentence
+        (with _sentence against sentence), are those locale_order writes
+        and prints by; and locale_order refuses to write a state, line,
+        class or side outside them: one it added and the reader did not
         would refuse a real run."""
         import locale_order as lo
         for name in ('CTYPE_DATA_STATES', 'CTYPE_LINES', 'CTYPE_CLASSES',
-                     'CTYPE_COMPARED'):
+                     'CTYPE_COMPARED', 'CTYPE_SIDES', 'SENTENCE_AS_IS'):
             with self.subTest(name=name):
                 self.assertEqual(getattr(rd, name), getattr(lo, name))
         data = self.ctype_rich()[0]
         self.assertIs(lo.ctype_held(data), data)
+        # The reader's sentence of a reason is locale_order's.
+        for why in ("glibc's converter", 'iconv_open said', 'its encoding',
+                    'Its encoding', 'glibcx', 'g', ''):
+            with self.subTest(why=why):
+                self.assertEqual(rd._sentence(why), lo.sentence(why))
         for change in (lambda d: d.update(state='same'),
                        lambda d: d['lines'].update(C='odd'),
                        lambda d: d['byte_groups'][0]['changes'][0][
-                           'classes'].update(new=['letter'])):
+                           'classes'].update(new=['letter']),
+                       lambda d: d['euc']['character_groups'][0]['changes'][
+                           0]['classes'].update(new=['letter']),
+                       lambda d: d['euc']['ascii_alone'][0].update(
+                           side='either'),
+                       lambda d: d['euc']['not_checked'][0].update(
+                           side='either')):
             d = copy.deepcopy(data)
             change(d)
             with self.assertRaisesRegex(ValueError, 'outside their'):

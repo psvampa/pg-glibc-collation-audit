@@ -16,8 +16,8 @@ are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
 gives each kind its list and its short title. Step 11's counts are
 data too, and so is each group of locales it found changed, with what
-moved in it, and each check beside the order but the lines and rows
-on EUC and UTF8 databases: step11.<pair>.data.json.
+moved in it, and each check beside the order: step11.<pair>.data.json,
+beside the `!!` of its warnings file.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -519,12 +519,16 @@ def _checks(where, c, counts, warned):
     checks exactly those the data print (_check_bangs), where step 11
     reported its warnings, and the money compared only where it reported
     its counts; upper(), lower() and ILIKE (use_texts), held by _use;
-    and the character rules of characters and bytes (ctype_texts), held
-    by _ctype, of the locales _use gives a line."""
+    the character rules (ctype_texts, euc_texts, utf8_texts), held by
+    _ctype, of the locales _use gives a line; and, where step 11
+    compared the character rules, reported its warnings and checked
+    upper(), lower() and ILIKE, wholly or in part, the machine whose
+    converter of EUC does not open, held by _euc_ascii_sides."""
     _keys(where, c, ['state', 'control', 'money', 'postgres_libc',
                      'postgres_use', 'ctype'])
     _use(f'{where}.postgres_use', c['postgres_use'], counts, warned)
     _ctype(f'{where}.ctype', c['ctype'], counts, warned)
+    _euc_ascii_sides(where, c, warned)
     # The same locales, those on both machines, given a line by each.
     u, t = c['postgres_use'], c['ctype']
     if 'lines' in u and 'lines' in t and set(u['lines']) != set(t['lines']):
@@ -1279,69 +1283,49 @@ def _ctype_change(at, x, unit, value):
 
 
 def _ctype(where, c, counts, warned):
-    """step 11's data on the character rules of characters and bytes
-    (locale_order.ctype_texts): its state; where compared, the line of
+    """step 11's data on the character rules (locale_order.ctype_texts):
+    its state; where compared, the line of
     each locale on both machines (where step 11 reported its counts, as
     many as they give, those glibc refuses as many as they count; C and
     POSIX built in where glibc does not refuse them and no other), each
     group's locales
     once, in order, of the lines its kind compares, the groups in the
-    order printed and each change as _ctype_change reads it; and, where
-    step 11 reported its warnings, the earlier format exactly where its
-    `!!` is, each group exactly the `!!` printed of it (its locales, all
-    those compared or each by name, how many change, which the old
-    machine classified, which bytes), the locales not checked exactly
-    those its `!!` names, and those of EUC those the lines on EUC name
-    that a UTF8 database cannot use. Which locales a UTF8 database can
-    use no other fact of the run says: where no group of characters
-    names them all, their number is held only as part of those
-    compared."""
+    order printed and each change as _ctype_change reads it; in an EUC
+    database, as _ctype_euc reads them; the locales of UTF-8 under the
+    rows of the line on UTF-8's converter, as _ctype_utf8 reads them;
+    and, where step 11 reported its warnings, the earlier format exactly
+    where its `!!` is, each group exactly the `!!` printed of it (its
+    locales, all those compared or each by name, how many change, which
+    the old machine classified, which bytes), the locales not checked
+    exactly those its `!!` names, those of EUC those the lines on EUC
+    name that a UTF8 database cannot use, each group of EUC exactly its
+    `!!` (its locales, how many change, which the old machine
+    classified), those compared for ASCII alone among those the lines on
+    EUC say change and none of those they say are the same for ASCII,
+    each locale and side of EUC not checked exactly its `!!`'s with its
+    reason as a sentence starts with it (_sentence), and as many locales
+    of UTF-8 as the line on UTF-8's converter counts. Which locales a
+    UTF8 database can use no other fact of the run says: where no group
+    of characters names them all, their number is held only as part of
+    those compared; nor which are of UTF-8 on both machines: held only
+    by their number and their line."""
     if not isinstance(c, dict):
         raise ReportError(f'{where} is {c!r}')
     _one_of(f'{where}.state', c.get('state'), CTYPE_DATA_STATES)
     if c['state'] == 'earlier format':
-        _keys(where, c, ['state'])
+        _keys(where, c, ['state', 'utf8'])
     else:
         _keys(where, c, ['state', 'lines', 'character_groups',
-                         'byte_groups'])
+                         'byte_groups', 'euc', 'utf8'])
         lines = c['lines']
         if not (isinstance(lines, dict) and all(
                 _is_str(n) and v in CTYPE_LINES for n, v in lines.items())):
             raise ReportError(f'{where}.lines is {lines!r}')
         for key, unit, value in (('character_groups', 'char', _is_cp),
                                  ('byte_groups', 'byte', _is_byte)):
-            gs = c[key]
-            if not isinstance(gs, list):
-                raise ReportError(f'{where}.{key} is {gs!r}')
-            seen = []
-            for i, g in enumerate(gs):
-                at = f'{where}.{key}[{i}]'
-                _keys(at, g, ['names', 'changes'])
-                if not (_is_strs(g['names'])
-                        and g['names'] == sorted(set(g['names']))
-                        and all(lines.get(n) in CTYPE_COMPARED[key]
-                                for n in g['names'])):
-                    raise ReportError(f'{at}.names is {g["names"]!r}')
-                if not (isinstance(g['changes'], list) and g['changes']):
-                    raise ReportError(f'{at}.changes is {g["changes"]!r}')
-                for j, x in enumerate(g['changes']):
-                    _ctype_change(f'{at}.changes[{j}]', x, unit, value)
-                # Each character or byte once in the group, each entry's
-                # in order, the entries in the order of their first.
-                num = ((lambda u: int(u[2:], 16)) if unit == 'char'
-                       else (lambda u: int(u, 16)))
-                each = [[num(u) for u in x[unit + 's']] for x in g['changes']]
-                every = [u for e in each for u in e]
-                if (len(every) != len(set(every))
-                        or any(e != sorted(e) for e in each)
-                        or [e[0] for e in each] != sorted(e[0] for e in each)):
-                    raise ReportError(f'{at}.changes are not in order, or '
-                                      'name a character or byte twice')
-                seen.append(g['names'])
-            every = [n for names in seen for n in names]
-            if len(every) != len(set(every)) or seen != sorted(seen):
-                raise ReportError(f'{where}.{key} names a locale twice or '
-                                  'out of order')
+            _ctype_groups(f'{where}.{key}', c[key], lines,
+                          CTYPE_COMPARED[key], unit, value)
+        _ctype_euc(f'{where}.euc', c['euc'], lines)
         builtin = {n for n, v in lines.items() if v == 'built in'}
         if builtin != {n for n in ('C', 'POSIX')
                        if lines.get(n, 'refused') != 'refused'}:
@@ -1356,11 +1340,18 @@ def _ctype(where, c, counts, warned):
                     f'{where} gives {len(lines)} locale(s) a line, '
                     f'{refused} refused, not the {both} on both machines '
                     f'and the {counts["refused"]} refused the counts give')
+    _ctype_utf8(f'{where}.utf8', c['utf8'], c.get('lines'))
     if warned['state'] != 'reported':
         return
     bangs = {}
     for i in warned['items']:
         bangs.setdefault(i['kind'], []).append(i['data'])
+    # The locales of UTF-8 the rows of the converter's line are under:
+    # as many as that line counts, and none where it is not printed.
+    said = bangs.get('utf8_changed', []) + bangs.get('utf8_one_side', [])
+    if len(c['utf8']['names']) != sum(d['locales'] for d in said):
+        raise ReportError(f'{where}.utf8.names are {c["utf8"]["names"]!r}, '
+                          f'the `!!` count {[d["locales"] for d in said]}')
     early = len(bangs.get('ctype_earlier_format', []))
     if early != (c['state'] == 'earlier format'):
         raise ReportError(f'{where}.state is {c["state"]!r}, and step 11 '
@@ -1423,6 +1414,170 @@ def _ctype(where, c, counts, warned):
     if of('euc') != euc - of('utf8'):
         raise ReportError(f'{where}.lines give EUC to {sorted(of("euc"))}, '
                           f'and the lines on EUC name {sorted(euc)}')
+    e = c['euc']
+    tie('euc.character_groups',
+        [{'names': sorted(n for g in d['groups'] for n in g['names']),
+          'count': d['count'],
+          'classified': [x['character'] for x in d['classified']]}
+         for d in bangs.get('euc_characters_changed', [])],
+        [{'names': g['names'], 'count': len(units(g, 'char')),
+          'classified': units(g, 'char', lambda x: x['classified'])}
+         for g in e['character_groups']])
+    # Compared for ASCII alone where the rest of the text changes: each
+    # locale among those a line on EUC says change, and none of those it
+    # says are the same for ASCII.
+    alone = {n for x in e['ascii_alone'] for g in x['groups']
+             for n in g['names']}
+    changed = {n for k in ('euc_sequences_changed', 'euc_characters_changed')
+               for d in bangs.get(k, []) for g in d['groups']
+               for n in g['names']}
+    same = {n for d in bangs.get('euc_ascii_same', []) for g in d['groups']
+            for n in g['names']}
+    if not alone <= changed or alone & same:
+        raise ReportError(f'{where}.euc.ascii_alone names {sorted(alone)}, '
+                          f'the lines on EUC change {sorted(changed)} and '
+                          f'are the same for ASCII in {sorted(same)}')
+    # Each locale and side not checked, with its reason: the `!!`'s, as
+    # a sentence starts with it.
+    told = {(n, r['side']): r['why'] for d in bangs.get('euc_not_checked', [])
+            for r in d['reasons'] for g in r['groups'] for n in g['names']}
+    held = {(x['name'], x['side']): x['why'] for x in e['not_checked']}
+    if set(told) != set(held) or any(told[k] != _sentence(w)
+                                     for k, w in held.items()):
+        raise ReportError(f'{where}.euc.not_checked are {held!r}, the `!!` '
+                          f'say {told!r}')
+
+
+def _euc_ascii_sides(where, c, warned):
+    """The machine whose converter of an EUC encoding does not open, for
+    each locale of EUC compared: as the lines on EUC say it (compared for
+    ASCII alone, or the same for ASCII) and as the lines on upper(),
+    lower() and ILIKE say it (an error on the new machine, on the old one,
+    on both), the same."""
+    t, u = c['ctype'], c['postgres_use']
+    if (warned['state'] != 'reported' or t['state'] != 'compared'
+            or u['state'] == 'not checked'):
+        return
+    bangs = {}
+    for i in warned['items']:
+        bangs.setdefault(i['kind'], []).append(i['data'])
+
+    def names(*kinds):
+        return {n for k in kinds for d in bangs.get(k, [])
+                for n in _names(d)}
+    said = {}
+    for x in t['euc']['ascii_alone'] + bangs.get('euc_ascii_same', []):
+        for g in x['groups']:
+            for n in g['names']:
+                said[n] = x['side']
+    compared = (names('euc_sequences_changed', 'euc_characters_changed',
+                      'euc_same', 'euc_ascii_same') | set(said))
+    use = {}
+    for side, got in (('new', names('use_error_new')),
+                      ('old', {n for g in u.get('back', [])
+                               for n in g['names']}),
+                      ('both', names('use_error_both'))):
+        for n in got & compared:
+            use[n] = side
+    if said != use:
+        raise ReportError(f'{where}.ctype.euc: the lines on EUC compare '
+                          f'ASCII alone on {said!r}, the lines on upper(), '
+                          f'lower() and ILIKE give an error on {use!r}')
+
+
+def _ctype_groups(where, gs, lines, kinds, unit, value):
+    """Groups of locales whose characters (unit 'char') or bytes ('byte')
+    change alike: each group's locales once, in order, of the lines
+    KINDS, the groups in the order printed, each change as _ctype_change
+    reads it, each character or byte once in its group."""
+    if not isinstance(gs, list):
+        raise ReportError(f'{where} is {gs!r}')
+    seen = []
+    for i, g in enumerate(gs):
+        at = f'{where}[{i}]'
+        _keys(at, g, ['names', 'changes'])
+        if not (_is_strs(g['names'])
+                and g['names'] == sorted(set(g['names']))
+                and all(lines.get(n) in kinds for n in g['names'])):
+            raise ReportError(f'{at}.names is {g["names"]!r}')
+        if not (isinstance(g['changes'], list) and g['changes']):
+            raise ReportError(f'{at}.changes is {g["changes"]!r}')
+        for j, x in enumerate(g['changes']):
+            _ctype_change(f'{at}.changes[{j}]', x, unit, value)
+        # Each character or byte once in the group, each entry's
+        # in order, the entries in the order of their first.
+        num = ((lambda u: int(u[2:], 16)) if unit == 'char'
+               else (lambda u: int(u, 16)))
+        each = [[num(u) for u in x[unit + 's']] for x in g['changes']]
+        every = [u for e in each for u in e]
+        if (len(every) != len(set(every))
+                or any(e != sorted(e) for e in each)
+                or [e[0] for e in each] != sorted(e[0] for e in each)):
+            raise ReportError(f'{at}.changes are not in order, or '
+                              'name a character or byte twice')
+        seen.append(g['names'])
+    every = [n for names in seen for n in names]
+    if len(every) != len(set(every)) or seen != sorted(seen):
+        raise ReportError(f'{where} names a locale twice or out of order')
+
+
+# The lines a locale on EUC can be on: one a UTF8 database can use too, or
+# not (locale_order.euc_texts takes every locale of EUC compared); the
+# sides its lines name (locale_order.CTYPE_SIDES).
+CTYPE_EUC_LINES = ('utf8', 'euc')
+CTYPE_SIDES = ('both', 'old', 'new')
+# The words a reason keeps as they are where it starts a sentence
+# (locale_order.sentence).
+SENTENCE_AS_IS = ('glibc', 'iconv_open')
+
+
+def _sentence(why):
+    """A reason as the line on EUC not checked starts a sentence with it
+    (locale_order.sentence): capitalized, but for SENTENCE_AS_IS."""
+    return (why if why.startswith(SENTENCE_AS_IS)
+            else why[:1].upper() + why[1:])
+
+
+def _ctype_euc(where, e, lines):
+    """step 11's data on the character rules in an EUC database
+    (locale_order.euc_texts): the groups whose characters change, as
+    _ctype_groups reads them; the locales compared for ASCII alone, by
+    side, each side once and each locale once; each locale and side not
+    checked with its reason, once, in order of name; every locale of
+    them compared on a line of CTYPE_EUC_LINES."""
+    _keys(where, e, ['character_groups', 'ascii_alone', 'not_checked'])
+    _ctype_groups(f'{where}.character_groups', e['character_groups'], lines,
+                  CTYPE_EUC_LINES, 'char', _is_cp)
+    a = e['ascii_alone']
+    if not (_maybe(_objects(side=_one_of_f(*CTYPE_SIDES),
+                            groups=_GROUPS))(a)
+            and len({x['side'] for x in a}) == len(a)):
+        raise ReportError(f'{where}.ascii_alone is {a!r}')
+    names = [n for x in a for g in x['groups'] for n in g['names']]
+    if len(names) != len(set(names)) or any(
+            lines.get(n) not in CTYPE_EUC_LINES for n in names):
+        raise ReportError(f'{where}.ascii_alone names {names!r}')
+    nc = e['not_checked']
+    if not (_maybe(_objects(name=_is_str, side=_one_of_f(*CTYPE_SIDES),
+                            why=_is_str))(nc)
+            and _side_sets((x['name'], x['side']) for x in nc)
+            and [x['name'] for x in nc] == sorted(x['name'] for x in nc)
+            and all(lines.get(x['name']) in CTYPE_EUC_LINES for x in nc)):
+        raise ReportError(f'{where}.not_checked is {nc!r}')
+
+
+def _ctype_utf8(where, u, lines):
+    """The locales of UTF-8 the rows of the line on UTF-8's converter are
+    under (locale_order.utf8_texts): each once, in order, none where no
+    line is printed; where the rules were compared, each on the line a
+    UTF8 database can use, or on the one of those not checked."""
+    _keys(where, u, ['names'])
+    n = u['names']
+    if not (n == [] or (_is_strs(n) and n == sorted(set(n)))) or (
+            lines is not None and any(lines.get(x) not in ('utf8',
+                                                           'not checked')
+                                      for x in n)):
+        raise ReportError(f'{where}.names is {n!r}')
 
 
 def _named(d):
