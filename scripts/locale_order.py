@@ -8038,11 +8038,36 @@ def ctype_how(cp, maps, was, now, shown_as, exact_as):
     return ', '.join(words), '; '.join(exact)
 
 
-def ctype_wide_changes(old_part, ok, new_part, nk):
-    """[(code point, classified on the old machine, report's words, file's
-    words)] of every code point whose towupper, towlower or class differs
-    between two wide tables. Classified: the old table maps it or puts it
-    in a class."""
+def ctype_change_data(maps, was, now, as_value):
+    """A character's or byte's change of rules as data: of its upper and
+    of its lower, each that changed, the old value and the new
+    ({'old', 'new'}, as as_value writes one); of its classes, where they
+    changed, the old ones and the new ones, each list in CTYPE_CLASSES'
+    order. maps are ((old upper, new upper), (old lower, new lower))."""
+    d = {}
+    for (x, y), k in zip(maps, ('upper', 'lower')):
+        if x != y:
+            d[k] = {'old': as_value(x), 'new': as_value(y)}
+    if was != now:
+        d['classes'] = {'old': list(was), 'new': list(now)}
+    return d
+
+
+def ctype_change_said(d, cp, shown_as, exact_as, of_value):
+    """ctype_how's (what the report says, what the file says) of the
+    character or byte cp, printed from ctype_change_data's d; of_value
+    reads a value d holds."""
+    maps = tuple((of_value(d[k]['old']), of_value(d[k]['new'])) if k in d
+                 else (cp, cp) for k in ('upper', 'lower'))
+    c = d.get('classes', {'old': [], 'new': []})
+    return ctype_how(cp, maps, c['old'], c['new'], shown_as, exact_as)
+
+
+def ctype_wide_data(old_part, ok, new_part, nk):
+    """[{'char', 'classified', and ctype_change_data's keys}] of every code
+    point whose towupper, towlower or class differs between two wide
+    tables, in order. Classified: the old table maps it or puts it in a
+    class."""
     a, b = ctype_wide_of(old_part, ok), ctype_wide_of(new_part, nk)
     changed = set()
     for i in (0, 1):
@@ -8056,10 +8081,28 @@ def ctype_wide_changes(old_part, ok, new_part, nk):
         was = [k for k in CTYPE_CLASSES if in_runs(a[2][k], starts[k][0], cp)]
         now = [k for k in CTYPE_CLASSES if in_runs(b[2][k], starts[k][1], cp)]
         maps = tuple((a[i].get(cp, cp), b[i].get(cp, cp)) for i in (0, 1))
-        words, exact = ctype_how(cp, maps, was, now, short_character,
-                                 lambda c: f'U+{c:04X}')
-        out.append((cp, bool(was) or cp in a[0] or cp in a[1], words, exact))
+        out.append(dict({'char': f'U+{cp:04X}',
+                         'classified': bool(was) or cp in a[0] or cp in a[1]},
+                        **ctype_change_data(maps, was, now,
+                                            lambda c: f'U+{c:04X}')))
     return out
+
+
+def ctype_wide_said(x):
+    """(code point, classified, report's words, file's words) of an entry
+    of ctype_wide_data, printed from it."""
+    cp = code_point(x['char'])
+    words, exact = ctype_change_said(x, cp, short_character,
+                                     lambda c: f'U+{c:04X}', code_point)
+    return cp, x['classified'], words, exact
+
+
+def ctype_wide_changes(old_part, ok, new_part, nk):
+    """[(code point, classified on the old machine, report's words, file's
+    words)] of every code point whose towupper, towlower or class differs
+    between two wide tables, printed from ctype_wide_data."""
+    return [ctype_wide_said(x)
+            for x in ctype_wide_data(old_part, ok, new_part, nk)]
 
 
 def ctype_tests(old_part, ok, new_part, nk):
@@ -8108,9 +8151,10 @@ def ctype_tests(old_part, ok, new_part, nk):
     return out, skipped
 
 
-def ctype_byte_changes(old_part, ok, new_part, nk):
-    """[(byte, report's words, file's words)] of every byte whose toupper,
-    tolower or class differs between two byte tables."""
+def ctype_byte_data(old_part, ok, new_part, nk):
+    """[{'byte', and ctype_change_data's keys}] of every byte whose
+    toupper, tolower or class differs between two byte tables, in
+    order."""
     A = ctype_unpacked(old_part['bytes'], ok, bytes_whole)
     B = ctype_unpacked(new_part['bytes'], nk, bytes_whole)
     out = []
@@ -8120,10 +8164,28 @@ def ctype_byte_changes(old_part, ok, new_part, nk):
         maps = tuple((A[r * 256 + i], B[r * 256 + i]) for r in (0, 1))
         was = [k for r, k in enumerate(CTYPE_CLASSES, 2) if A[r * 256 + i]]
         now = [k for r, k in enumerate(CTYPE_CLASSES, 2) if B[r * 256 + i]]
-        words, exact = ctype_how(i, maps, was, now, lambda c: f'0x{c:02X}',
-                                 lambda c: f'{c:02X}')
-        out.append((i, words, exact))
+        out.append(dict({'byte': f'{i:02X}'},
+                        **ctype_change_data(maps, was, now,
+                                            lambda c: f'{c:02X}')))
     return out
+
+
+def ctype_byte_said(x):
+    """(byte, report's words, file's words) of an entry of
+    ctype_byte_data, printed from it."""
+    b = int(x['byte'], 16)
+    words, exact = ctype_change_said(x, b, lambda c: f'0x{c:02X}',
+                                     lambda c: f'{c:02X}',
+                                     lambda v: int(v, 16))
+    return b, words, exact
+
+
+def ctype_byte_changes(old_part, ok, new_part, nk):
+    """[(byte, report's words, file's words)] of every byte whose toupper,
+    tolower or class differs between two byte tables, printed from
+    ctype_byte_data."""
+    return [ctype_byte_said(x)
+            for x in ctype_byte_data(old_part, ok, new_part, nk)]
 
 
 UTF8_USE = ' that a UTF8 database can use'
@@ -8149,14 +8211,122 @@ def code_point(u):
     return int(u[2:], 16)
 
 
+# What step 11 could compare of the character rules: the tables of both
+# machines, or not, a file being of a format before them (ctype_texts).
+CTYPE_DATA_STATES = ('compared', 'earlier format')
+# The line each locale on both machines goes to (ctype_texts): its
+# characters and its bytes compared, a UTF8 database can use it ('utf8');
+# its bytes alone, of an encoding no UTF8 database can use ('other
+# encoding', or 'euc' where an EUC database can, which the line on EUC
+# says); C and POSIX, not compared ('built in'); one glibc refuses on
+# either side, named among those ('refused'); one whose rules either
+# side could not measure ('not checked').
+CTYPE_LINES = ('utf8', 'other encoding', 'euc', 'built in', 'refused',
+               'not checked')
+# The lines whose locales each kind of group compares: the characters where
+# a UTF8 database can use the locale, the bytes in every locale compared.
+CTYPE_COMPARED = {'character_groups': ('utf8',),
+                  'byte_groups': ('utf8', 'other encoding', 'euc')}
+
+
+def ctype_held(d):
+    """D, ctype_texts' data, after checking each state, line and class it
+    holds is one of its constants (CTYPE_DATA_STATES, CTYPE_LINES,
+    CTYPE_CLASSES): a value written outside them would refuse the run in
+    report_data, or pass where it reads the constant."""
+    got = {('state', d['state'])}
+    got |= {('line', v) for v in d.get('lines', {}).values()}
+    got |= {('class', k) for key in ('character_groups', 'byte_groups')
+            for g in d.get(key, ()) for x in g['changes']
+            for side in x.get('classes', {}).values() for k in side}
+    allowed = {'state': CTYPE_DATA_STATES, 'line': CTYPE_LINES,
+               'class': CTYPE_CLASSES}
+    bad = sorted((k, v) for k, v in got if v not in allowed[k])
+    if bad:
+        raise ValueError(f'character rules: values outside their '
+                         f'constants: {bad!r}')
+    return d
+
+
+def ctype_unit_key(unit):
+    """How an entry's character ('char', 'U+0282') or byte ('byte',
+    'E0') is ordered: by its number."""
+    return code_point if unit == 'char' else (lambda b: int(b, 16))
+
+
+def ctype_grouped(entries, unit):
+    """ENTRIES (ctype_wide_data's, or ctype_byte_data's, by UNIT 'char'
+    or 'byte') grouped by what changes: [{'chars' or 'bytes': each
+    character or byte of that change, in order, and the entry's other
+    keys}], in the order of each one's first; so that 5,885 characters
+    that become letters on 8 -> 9 are one entry, not 5,885."""
+    by = {}
+    for x in entries:
+        rest = {k: v for k, v in x.items() if k != unit}
+        by.setdefault(json.dumps(rest, sort_keys=True),
+                      (rest, []))[1].append(x[unit])
+    return [dict(rest, **{unit + 's': us}) for rest, us in by.values()]
+
+
+def ctype_ungrouped(changes, unit):
+    """ctype_grouped's CHANGES as the entries they were made of, in
+    order of their character or byte."""
+    out = [dict({k: v for k, v in g.items() if k != unit + 's'}, **{unit: u})
+           for g in changes for u in g[unit + 's']]
+    key = ctype_unit_key(unit)
+    return sorted(out, key=lambda x: key(x[unit]))
+
+
+def ctype_sames(d):
+    """The lines on what was compared and found the same, and on what was
+    not compared, printed from ctype_texts' data d, in their order."""
+    lines = d['lines']
+
+    def count(*kinds):
+        return sum(1 for v in lines.values() if v in kinds)
+    builtin = [n for n in ('C', 'POSIX') if lines.get(n) == 'built in']
+    elsewhere = count('other encoding', 'euc')
+    out = []
+    for what, key in (('character', 'character_groups'),
+                      ('byte', 'byte_groups')):
+        same = (count(*CTYPE_COMPARED[key])
+                - sum(len(g['names']) for g in d[key]))
+        if same:
+            out.append({'text': f'{CTYPE_LINE} of each {what}: the same in the '
+                                f'{"other " if d[key] else ""}{same} '
+                                'locale(s) compared on both machines'
+                                f'{UTF8_USE if what == "character" else ""}.'})
+        if what == 'byte' and builtin:
+            out.append({'text': f'{CTYPE_LINE}: not compared in '
+                                f'{" and ".join(builtin)}, which PostgreSQL '
+                                "handles itself or asks of glibc's built-in "
+                                'locale, not of a locale file.'})
+        if what == 'character' and elsewhere:
+            out.append({'text': f'{CTYPE_LINE} of each character: not compared '
+                                f'in {elsewhere} locale(s) of an encoding '
+                                'no UTF8 database can use; a database that can '
+                                'use them reads their rules byte by byte'
+                                + (', or, in EUC, as the line on EUC says'
+                                   if count('euc') else '') + '.'})
+    return out
+
+
 def ctype_texts(old, new, names, refused, model):
-    """([finding], [file rows], what the SQL files get): what glibc's
+    """([finding], [file rows], what the SQL files get, data): what glibc's
     character rules (LC_CTYPE) answer differently on the two machines, for
     the locales of names. The SQL files of --sql-to get {'groups':
     [(locales, {locale: (old wide table, new wide table)})] of the
     locales a UTF8 database can use whose characters change, a group per
     set of changes; 'why': why no character was compared, or None;
     'unknown': [locales whose rules either side could not measure]}.
+    The data: {'state'} of CTYPE_DATA_STATES; where compared, {'lines': {each
+    locale of names: its line of CTYPE_LINES}, 'character_groups' and
+    'byte_groups': [{'names', 'changes'}] a group of locales per set of
+    changes, in the order printed, its changes as ctype_grouped writes
+    them}. The lines on what was the same and on what was not compared,
+    the rows of the groups and their `!!` are printed from it; the lines
+    on EUC and UTF-8, the one that says where the rows are, and the `!!`
+    and rows of the locales not checked (from why each was not), not.
 
     PostgreSQL picks glibc's functions by the database's encoding, never the
     locale's: in a database of more than one byte per character the wide
@@ -8203,16 +8373,22 @@ def ctype_texts(old, new, names, refused, model):
             found.append({'where': 'byte sequence'})
         return found, rows, {
             'groups': [], 'unknown': [],
-            'why': f'{files} ' + EARLIER.format(which_machines(earlier))}
+            'why': f'{files} ' + EARLIER.format(which_machines(earlier))}, \
+            ctype_held({'state': 'earlier format'})
     euc = {}
     for name in names:
         for view in model.views[name]:
             if view.codeset in CTYPE_EUC:
                 euc[name] = view.codeset
                 break
-    wide_pairs, byte_pairs, unknown, elsewhere, wide_of = {}, {}, {}, [], {}
+    wide_pairs, byte_pairs, unknown, wide_of = {}, {}, {}, {}
+    lines = {}
     for name in names:
-        if name in refused or name in ('C', 'POSIX'):
+        if name in refused:
+            lines[name] = 'refused'
+            continue
+        if name in ('C', 'POSIX'):
+            lines[name] = 'built in'
             continue
         keys, why = [], []
         for machine in model.machines:
@@ -8226,6 +8402,7 @@ def ctype_texts(old, new, names, refused, model):
             # theirs; one reason for both, once.
             unknown[name] = ([('both', why[0][1])] if len(why) == 2
                              and why[0][1] == why[1][1] else why)
+            lines[name] = 'not checked'
             continue
         wide_of[name] = (keys[0][0], keys[1][0])
         # A database or collation of UTF8 opens with a locale of UTF-8, of
@@ -8235,23 +8412,32 @@ def ctype_texts(old, new, names, refused, model):
         # on the new one.
         if model.serves_utf8(name):
             wide_pairs.setdefault((keys[0][0], keys[1][0]), []).append(name)
+            lines[name] = 'utf8'
         else:
-            elsewhere.append(name)
+            lines[name] = 'euc' if name in euc else 'other encoding'
         byte_pairs.setdefault((keys[0][1], keys[1][1]), []).append(name)
-    found, rows, sames = [], [], []
-    builtin = [n for n in ('C', 'POSIX') if n in names and n not in refused]
-    sql = {'groups': [], 'why': None, 'unknown': sorted(unknown)}
-    for what, pairs, changes in (
-            ('character', wide_pairs, ctype_wide_changes),
-            ('byte', byte_pairs, ctype_byte_changes)):
-        compared = sum(map(len, pairs.values()))
+    data = {'state': 'compared', 'lines': lines}
+    for key, pairs, of, unit in (
+            ('character_groups', wide_pairs, ctype_wide_data, 'char'),
+            ('byte_groups', byte_pairs, ctype_byte_data, 'byte')):
         groups = {}
         for (ok, nk), members in pairs.items():
-            got = tuple(changes(old['ctype'], ok, new['ctype'], nk))
+            got = ctype_grouped(of(old['ctype'], ok, new['ctype'], nk), unit)
             if got:
-                groups.setdefault(got, []).extend(members)
-        for got, members in sorted(groups.items(), key=lambda g: sorted(g[1])):
-            members = sorted(members)
+                groups.setdefault(json.dumps(got, sort_keys=True),
+                                  (got, []))[1].extend(members)
+        data[key] = [{'names': sorted(members), 'changes': got}
+                     for got, members in sorted(groups.values(),
+                                                key=lambda g: sorted(g[1]))]
+    ctype_held(data)
+    found, rows = [], []
+    sql = {'groups': [], 'why': None, 'unknown': sorted(unknown)}
+    for what, key in (('character', 'character_groups'),
+                      ('byte', 'byte_groups')):
+        compared = sum(1 for v in lines.values()
+                       if v in CTYPE_COMPARED[key])
+        for g in data[key]:
+            members = g['names']
             # The rows of each character stand under the group's label, its
             # locales named once: under every locale of a group of 863, the
             # file of 2.28 -> 2.34 was 61 MB (measured).
@@ -8261,6 +8447,8 @@ def ctype_texts(old, new, names, refused, model):
                  'change in these locale(s), each a row under that name',
                  '-', '-', '-', '-')]})
             if what == 'character':
+                got = [ctype_wide_said(x)
+                       for x in ctype_ungrouped(g['changes'], 'char')]
                 sql['groups'].append((members, {x: wide_of[x]
                                                 for x in members}))
                 found.append(ctype_character_finding(
@@ -8270,29 +8458,14 @@ def ctype_texts(old, new, names, refused, model):
                      'classified' if known else 'not classified', '-',
                      'on both machines') for cp, known, _, exact in got]})
             else:
+                got = [ctype_byte_said(x)
+                       for x in ctype_ungrouped(g['changes'], 'byte')]
                 found.append(ctype_byte_finding(
                     got, ctype_group_data(members, compared)))
                 rows.append({'names': [label], 'rows': [
                     ('LC_CTYPE changed', f'byte {b:02X}', exact, '-', '-',
                      '-', 'on both machines') for b, _, exact in got]})
-        same = compared - sum(map(len, groups.values()))
-        if same:
-            sames.append({'text': f'{CTYPE_LINE} of each {what}: the same in the '
-                                  f'{"other " if groups else ""}{same} '
-                                  'locale(s) compared on both machines'
-                                  f'{UTF8_USE if what == "character" else ""}.'})
-        if what == 'byte' and builtin:
-            sames.append({'text': f'{CTYPE_LINE}: not compared in '
-                                  f'{" and ".join(builtin)}, which PostgreSQL '
-                                  "handles itself or asks of glibc's built-in "
-                                  'locale, not of a locale file.'})
-        if what == 'character' and elsewhere:
-            sames.append({'text': f'{CTYPE_LINE} of each character: not compared '
-                                  f'in {len(elsewhere)} locale(s) of an encoding '
-                                  'no UTF8 database can use; a database that can '
-                                  'use them reads their rules byte by byte'
-                                  + (', or, in EUC, as the line on EUC says'
-                                     if set(elsewhere) & set(euc) else '') + '.'})
+    sames = ctype_sames(data)
     euc_found, euc_tail = euc_texts(model, {n: c for n, c in euc.items()
                                            if n in wide_of}, wide_of, rows)
     found += euc_found
@@ -8325,7 +8498,7 @@ def ctype_texts(old, new, names, refused, model):
     found += euc_tail
     if not wide_pairs:
         sql['why'] = 'no locale a UTF8 database can use was compared'
-    return found, rows, sql
+    return found, rows, sql, data
 
 
 EUC_LINE = f'{CTYPE_LINE} in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database'
@@ -11512,8 +11685,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                [(text, warning) for text, warning, above in libc if not above]))
     use, use_rows, check_data['postgres_use'] = use_texts(model)
     checks += (('postgres use', use),)
-    ctype, ctype_rows, ctype_sql = ctype_texts(old, new, both, refused,
-                                               model)
+    ctype, ctype_rows, ctype_sql, check_data['ctype'] = ctype_texts(
+        old, new, both, refused, model)
     # A locale that could not be measured takes part as well: whether
     # PostgreSQL imported it does not depend on the measurement.
     sql_files, sql_not_checked = (confirm_groups(

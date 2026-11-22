@@ -687,7 +687,7 @@ class CtypeNotes(unittest.TestCase):
         reason the SQL files get."""
         import types
         model = types.SimpleNamespace(machines=[], views={})
-        found, rows, sql = m.ctype_texts({'held': []}, {'held': ['ctype']},
+        found, rows, sql, _ = m.ctype_texts({'held': []}, {'held': ['ctype']},
                                          [], set(), model)
         self.assertEqual(sql['groups'], [])
         self.assertRegex(sql['why'], r'^the OLD file was written by an '
@@ -713,7 +713,7 @@ class CtypeNotes(unittest.TestCase):
         the SQL files, which name it; and with no locale a UTF8 database can
         use compared, why is said."""
         held = {'held': ['ctype'], 'ctype': {}}
-        found, rows, sql = m.ctype_texts(
+        found, rows, sql, _ = m.ctype_texts(
             held, held, ['ab_CD.utf8'], set(),
             self.model(lambda side: (None, 'not measured') if side == 'new'
                        else (('ok', 'ob'), None)))

@@ -155,9 +155,7 @@ COUNTS = {'machines': {'old': {'label': 'glibc-2.28-251.el8', 'locales': 2},
 
 
 # The checks of step11_files' two machines, as locale_order.write_counts
-# writes them: C and POSIX byte order on both, the decimals of money of both
-# locales the same, one PostgreSQL process on each running the C library
-# measured there.
+# writes them.
 _LIBC = {'state': 'checked', 'replaced': False, 'stale': 0, 'other': 0,
          'processes': 1, 'looked_for': ['postgres', 'postmaster'],
          'not_checked': {'machine': [], 'named': [], 'unnamed': 0},
@@ -173,7 +171,10 @@ CHECKS = {'control': {s: {n: {'state': 'byte order'} for n in ('C', 'POSIX')}
                            'groups': [], 'back_groups': [],
                            'back_changed': [], 'part_unknown': [],
                            'back_not_checked': [], 'converts': 1,
-                           'one_byte': 1, 'left_out': [], 'elsewhere': 0}}
+                           'one_byte': 1, 'left_out': [], 'elsewhere': 0},
+          'ctype': {'state': 'compared',
+                    'lines': {'C': 'built in', 'sv_SE': 'utf8'},
+                    'character_groups': [], 'byte_groups': []}}
 
 
 # One `!!` of each kind as a step writes it (kind, data), with the title
@@ -1094,7 +1095,7 @@ class Warnings(_Folder):
         warnings_file(self.d, 11, [])
         self.assertEqual(self.written(**over)['warnings']['step11'],
                          {'state': 'reported', 'items': []})
-        kinds = ['ctype_characters_changed', 'other_encoding']
+        kinds = ['same_build', 'other_encoding']
         warnings_file(self.d, 11, kinds)
         items = self.written(**over)['warnings']['step11']['items']
         self.assertEqual([(i['kind'], i['class'], i['title']) for i in items],
@@ -1461,7 +1462,7 @@ class TheReaderIsStrict(_Folder):
         warnings_file(self.d, 1, ['signatures_unchecked',
                                   'collation_version_same'])
         warnings_file(self.d, 2, ['c_utf8_differs', 'names_untraced'])
-        warnings_file(self.d, 11, ['euc_ascii_same', 'other_encoding'])
+        warnings_file(self.d, 11, ['same_build', 'other_encoding'])
         self.good = self.written(**ON_MACHINES)
 
     def refuses(self, change):
@@ -2370,6 +2371,267 @@ class TheReaderIsStrict(_Folder):
         self.assertEqual(sorted(k for k in kinds if k.startswith('use_error_')
                                 and k != 'use_error_partial'),
                          sorted(rd.USE_ERROR_KINDS))
+
+    def ctype_rich(self):
+        """(data, counts, warnings) of step 11's character rules over eight
+        locales, every line given one at least: a group of characters naming its locale
+        (two changes of one character each and one of two characters), a
+        group of bytes of every locale compared, a locale not checked and
+        one of EUC, each with the `!!` a run prints of it."""
+        lines = {'C': 'built in', 'POSIX': 'built in', 'de_DE': 'utf8',
+                 'sv_SE': 'utf8', 'ja_JP': 'euc', 'th_TH': 'other encoding',
+                 'xx_XX': 'refused', 'yy_YY': 'not checked'}
+        letters = ['alpha', 'alnum', 'print', 'graph']
+        data = {'state': 'compared', 'lines': lines, 'character_groups': [
+            {'names': ['sv_SE'], 'changes': [
+                {'chars': ['U+0282'], 'classified': True,
+                 'upper': {'old': 'U+0282', 'new': 'U+A7C5'}},
+                {'chars': ['U+08BE', 'U+08BF'], 'classified': False,
+                 'classes': {'old': [], 'new': letters}},
+                {'chars': ['U+1E9E'], 'classified': True,
+                 'upper': {'old': 'U+1E9E', 'new': 'U+00DF'},
+                 'lower': {'old': 'U+00DF', 'new': 'U+1E9E'}}]}],
+            'byte_groups': [
+            {'names': ['de_DE', 'ja_JP', 'sv_SE', 'th_TH'], 'changes': [
+                {'bytes': ['A0', 'AD'], 'classes': {'old': ['print'],
+                                                    'new': []}},
+                {'bytes': ['B5'], 'upper': {'old': 'B5', 'new': 'CC'},
+                 'classes': {'old': ['print'], 'new': letters}}]}]}
+        counts = {'state': 'reported',
+                  'machines': {'old': {'label': 'a', 'locales': 9},
+                               'new': {'label': 'b', 'locales': 8}},
+                  'changed': 0, 'unchanged': 6,
+                  'unchanged_as_far_as_measured': 0, 'not_measured': 1,
+                  'refused': 1, 'only_old': 1, 'only_new': 0}
+        items = [
+            ('ctype_characters_changed', {
+                'locales': 1, 'names': ['sv_SE'], 'count': 4,
+                'classified': [{'character': 'U+0282', 'change': 'x'},
+                               {'character': 'U+1E9E', 'change': 'y'}]}),
+            ('ctype_bytes_changed', {
+                'locales': 4, 'names': [], 'bytes': [
+                    {'byte': 'A0', 'change': 'z'},
+                    {'byte': 'AD', 'change': 'z'},
+                    {'byte': 'B5', 'change': 'z'}]}),
+            ('ctype_not_checked', {'locales': [
+                {'name': 'yy_YY', 'side': 'new', 'why': 'w'}]}),
+            ('euc_same', {'other': False, 'groups': [
+                {'encoding': 'EUC-JP', 'names': ['ja_JP']}]})]
+        warned = {'state': 'reported',
+                  'items': [{'kind': k, 'data': d} for k, d in items]}
+        return data, counts, warned
+
+    def test_ctype_that_does_not_hang_together(self):
+        """Step 11's data on the character rules of characters and bytes
+        (_ctype), each written wrong alone over data that puts a locale
+        on every line, refused for the reason named: every key and
+        state; each group's locales and changes; the lines against the
+        counts and C and POSIX; each group against its `!!`, the locales
+        not checked and those of EUC against theirs, each half of a check
+        of two parts with its own case. The data itself is read whole,
+        and so is a change two characters share and a locale of EUC a
+        UTF8 database can use too."""
+        good = self.ctype_rich()
+
+        def chars(r):
+            return r[0]['character_groups'][0]
+
+        def byts(r):
+            return r[0]['byte_groups'][0]
+
+        def bang(r, kind):
+            return next(i['data'] for i in r[2]['items'] if i['kind'] == kind)
+
+        def drop(r, kind):
+            r[2]['items'][:] = [i for i in r[2]['items'] if i['kind'] != kind]
+
+        def add(r, kind, data):
+            r[2]['items'].append({'kind': kind, 'data': data})
+        keys, group, ours = 'has the keys', r'names is', 'the `!!` say'
+        cases = [
+            # Every key and state.
+            (r'ctype\.state is', lambda r: r[0].update(state='same')),
+            (keys, lambda r: r[0].update(state='earlier format')),
+            (keys, lambda r: r[0].pop('byte_groups')),
+            (r'lines is', lambda r: r[0]['lines'].update(C='odd')),
+            (r'lines is', lambda r: r[0].update(lines=[])),
+            (r'character_groups is', lambda r: r[0].update(
+                character_groups={})),
+            (group, lambda r: byts(r).update(names=['th_TH', 'de_DE',
+                                                    'ja_JP', 'sv_SE'])),
+            (group, lambda r: byts(r).update(names=['de_DE', 'de_DE'])),
+            (group, lambda r: byts(r).update(names=[])),
+            (group, lambda r: chars(r).update(names=['th_TH'])),
+            (group, lambda r: byts(r).update(names=['C'])),
+            (r'changes is', lambda r: chars(r).update(changes=[])),
+            (keys, lambda r: chars(r).update(odd=1)),
+            (keys, lambda r: chars(r)['changes'][0].pop('classified')),
+            (keys, lambda r: chars(r)['changes'][0].update(odd=1)),
+            (keys, lambda r: byts(r)['changes'][0].update(classified=True)),
+            (r'changes\[0\] is', lambda r: chars(r)['changes'][0].pop(
+                'upper')),
+            (r'changes\[0\] is', lambda r: chars(r)['changes'][0].update(
+                chars=[])),
+            (r'changes\[0\] is', lambda r: chars(r)['changes'][0].update(
+                chars=['U+12'])),
+            (r'changes\[0\] is', lambda r: chars(r)['changes'][0].update(
+                chars='U+0282')),
+            (r'changes\[0\] is', lambda r: chars(r)['changes'][0].update(
+                classified=1)),
+            (r'changes\[1\] is', lambda r: byts(r)['changes'][1].update(
+                bytes=['b5'])),
+            (r'upper is', lambda r: chars(r)['changes'][0]['upper'].update(
+                new='U+0282')),
+            (r'upper is', lambda r: chars(r)['changes'][0]['upper'].update(
+                new='A7C5')),
+            (r'upper is', lambda r: byts(r)['changes'][1]['upper'].update(
+                new='U+00CC')),
+            (keys, lambda r: chars(r)['changes'][0]['upper'].pop('new')),
+            (r'classes is', lambda r: chars(r)['changes'][1]['classes'].update(
+                new=['print', 'alpha'])),
+            (r'classes is', lambda r: chars(r)['changes'][1]['classes'].update(
+                new=['alpha', 'alpha'])),
+            (r'classes is', lambda r: chars(r)['changes'][1]['classes'].update(
+                new=['letter'])),
+            (r'classes is', lambda r: chars(r)['changes'][1]['classes'].update(
+                new=[])),
+            (r'classes is', lambda r: chars(r)['changes'][1]['classes'].update(
+                old=None)),
+            ('not in order', lambda r: chars(r)['changes'][1].update(
+                chars=['U+08BF', 'U+08BE'])),
+            ('not in order', lambda r: chars(r).update(
+                changes=chars(r)['changes'][::-1])),
+            ('not in order', lambda r: chars(r)['changes'][2].update(
+                chars=['U+08BE'])),
+            ('not in order', lambda r: byts(r)['changes'][0].update(
+                bytes=['A0', 'A0'])),
+            ('twice or out of order', lambda r: r[0]['byte_groups'].append(
+                {'names': ['th_TH'], 'changes': [
+                    {'bytes': ['41'], 'classes': {'old': [],
+                                                  'new': ['print']}}]})),
+            ('twice or out of order', lambda r: (
+                byts(r).update(names=['th_TH']),
+                r[0]['byte_groups'].append(
+                    {'names': ['de_DE'], 'changes': [
+                        {'bytes': ['41'], 'classes': {
+                            'old': [], 'new': ['print']}}]}))),
+            # The lines, against the counts and C and POSIX.
+            (r'gives 9 locale\(s\) a line', lambda r: r[0]['lines'].update(
+                zz_ZZ='other encoding')),
+            (r'gives 8 locale\(s\) a line, 0 refused', lambda r: r[0][
+                'lines'].update(xx_XX='other encoding')),
+            ('built in', lambda r: r[0]['lines'].update(
+                POSIX='other encoding')),
+            ('built in', lambda r: r[0]['lines'].update(yy_YY='built in')),
+            # Each group against its `!!`.
+            ('printed the earlier format', lambda r: add(
+                r, 'ctype_earlier_format', {'side': 'old'})),
+            (r'character_groups are .* ' + ours, lambda r: bang(
+                r, 'ctype_characters_changed').update(count=3)),
+            (r'character_groups are .* ' + ours, lambda r: bang(
+                r, 'ctype_characters_changed').update(names=[], locales=1)),
+            (r'character_groups are .* ' + ours, lambda r: chars(r)[
+                'changes'][1].update(classified=True)),
+            (r'character_groups are .* ' + ours, lambda r: drop(
+                r, 'ctype_characters_changed')),
+            (r'byte_groups are .* ' + ours, lambda r: bang(
+                r, 'ctype_bytes_changed')['bytes'].pop()),
+            (r'byte_groups are .* ' + ours, lambda r: bang(
+                r, 'ctype_bytes_changed').update(names=[
+                    'de_DE', 'ja_JP', 'sv_SE', 'th_TH'])),
+            (r'byte_groups are .* ' + ours, lambda r: add(
+                r, 'ctype_bytes_changed', bang(r, 'ctype_bytes_changed'))),
+            # The locales not checked and those of EUC against theirs.
+            (r'lines \(not checked\)', lambda r: r[0]['lines'].update(
+                yy_YY='refused', xx_XX='not checked')),
+            (r'lines \(not checked\)', lambda r: bang(
+                r, 'ctype_not_checked')['locales'].append(
+                    {'name': 'th_TH', 'side': 'old', 'why': 'w'})),
+            ('give EUC', lambda r: r[0]['lines'].update(
+                ja_JP='other encoding')),
+            ('give EUC', lambda r: r[0]['lines'].update(th_TH='euc')),
+            ('give EUC', lambda r: bang(r, 'euc_same')['groups'].append(
+                {'encoding': 'TIS-620', 'names': ['th_TH']})),
+            ('give EUC', lambda r: bang(r, 'euc_same')['groups'].append(
+                {'encoding': 'X', 'names': ['C']})),
+        ]
+
+        def read(r):
+            rd._ctype('step11.checks.ctype', r[0], r[1], r[2])
+        read(copy.deepcopy(good))
+        # Two characters that share one change of capital, and a locale of
+        # EUC a UTF8 database can use too: read whole.
+        shared = copy.deepcopy(good)
+        chars(shared)['changes'][0].update(
+            chars=['U+0282', 'U+0283'], upper={'old': 'U+0282',
+                                              'new': 'U+A7C5'})
+        bang(shared, 'ctype_characters_changed').update(count=5, classified=[
+            {'character': 'U+0282', 'change': 'x'},
+            {'character': 'U+0283', 'change': 'x'},
+            {'character': 'U+1E9E', 'change': 'y'}])
+        add(shared, 'euc_ascii_same', {'side': 'new', 'groups': [
+            {'encoding': 'EUC-JP', 'names': ['de_DE']}]})
+        read(shared)
+        # Counts or warnings step 11 did not report: the shape alone.
+        for k in (1, 2):
+            alone = list(copy.deepcopy(good))
+            alone[k] = {'state': 'not reported', 'why': ['x']}
+            alone[0]['lines']['zz_ZZ'] = 'refused'
+            if k == 1:
+                read(alone)
+            else:
+                with self.assertRaisesRegex(rd.ReportError, 'a line'):
+                    read(alone)
+        for why, change in cases:
+            with self.subTest(why=why, line=change.__code__.co_firstlineno):
+                r = copy.deepcopy(good)
+                change(r)
+                with self.assertRaisesRegex(rd.ReportError, why):
+                    read(r)
+
+    def test_the_ctype_lines_are_those_of_upper_and_lower(self):
+        """The locales the data on the character rules gives a line are
+        those the data on upper(), lower() and ILIKE gives one, both of
+        the locales on both machines: a locale one names and the other
+        does not is refused, through load()."""
+        for where in ('ctype', 'postgres_use'):
+            with self.subTest(where=where):
+                def change(r, where=where):
+                    lines = r['step11']['checks'][where]['lines']
+                    lines['de_DE'] = lines.pop('sv_SE')
+                with self.assertRaisesRegex(rd.ReportError,
+                                            'name other locales'):
+                    self.refuses_by(change)
+
+    def refuses_by(self, change):
+        r = copy.deepcopy(self.good)
+        change(r)
+        p = os.path.join(self.d, 'changed.json')
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        rd.load(p)
+
+    def test_the_ctype_constants_are_locale_orders(self):
+        """The states, lines and classes the reader allows for the
+        character rules, and the lines each kind of group compares, are
+        those locale_order writes and prints by; and locale_order refuses
+        to write a value outside them: one it added and the reader did not
+        would refuse a real run."""
+        import locale_order as lo
+        for name in ('CTYPE_DATA_STATES', 'CTYPE_LINES', 'CTYPE_CLASSES',
+                     'CTYPE_COMPARED'):
+            with self.subTest(name=name):
+                self.assertEqual(getattr(rd, name), getattr(lo, name))
+        data = self.ctype_rich()[0]
+        self.assertIs(lo.ctype_held(data), data)
+        for change in (lambda d: d.update(state='same'),
+                       lambda d: d['lines'].update(C='odd'),
+                       lambda d: d['byte_groups'][0]['changes'][0][
+                           'classes'].update(new=['letter'])):
+            d = copy.deepcopy(data)
+            change(d)
+            with self.assertRaisesRegex(ValueError, 'outside their'):
+                lo.ctype_held(d)
 
     def test_a_value_outside_its_list(self):
         self.refuses(lambda r: r['run'].update(order='reversed'))
