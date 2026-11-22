@@ -1755,9 +1755,10 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     printed: parse_report of its report (`report`), and parse_summary of
     its summary (`summary`, None where it wrote none). Each count, each
     machine's name and number of locales, and the line of totals of both;
-    then the findings it wrote beside them (step11_groups_held), with
-    the characters file's text (`characters`, None where none was
-    written); and the checks beside the order (step11_checks_held),
+    then the findings it wrote beside them (step11_groups_held) and each
+    group's sort table (step11_table_held), with the characters file's
+    text (`characters`, None where none was written); and the checks
+    beside the order (step11_checks_held),
     upper(), lower() and ILIKE (step11_use_held) and the character rules
     (step11_ctype_held), read by report_data's
     reader too, against the run's `!!` (WARNINGS, as report.json holds
@@ -1765,7 +1766,10 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     A file that is not there is right only where no report was printed
     (a comparison refused). UNREAD is why the readers cannot read this
     report (a test whose locale names they cannot split): then the file
-    is only read, by report_data's reader."""
+    is only read, by report_data's reader. Its readers of each group's
+    sort table run in either case: _sort_table and _tables_held, and,
+    where the characters file was written, _table_rows_held against its
+    rows."""
     import report_data as rd
     printed = any(ln.startswith('Old machine: ')
                   for ln in report.split('\n'))
@@ -1781,6 +1785,17 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     # its own pairs: here on every comparison, the readers' or not.
     rd._checks(f'{where}: step11.checks', rd.step11_checks(path), c,
                warnings)
+    # report_data's reader of each group's sort table and of its rows in
+    # the characters file, on every comparison too.
+    fnd = rd.step11_findings(path)
+    for i, g in enumerate(fnd['groups']):
+        rd._sort_table(f'{where}: groups[{i}].sort_table', g['sort_table'],
+                       g['found_by'])
+    if characters is not None:
+        rows = [ln.split('\t') for ln in characters.split('\n')[2:]
+                if ln and not ln.startswith('# ')]
+        rd._table_rows_held(where, fnd['groups'], rows)
+    rd._tables_held(where, fnd['groups'], warnings)
     if unread is not None:
         if not (isinstance(unread, str) and unread):
             raise AssertionError(f'no reason why {where} is not read')
@@ -1825,9 +1840,10 @@ def step11_counts_held(report, summary, path, where, *, warnings,
                                  f'{got!r}, {path} holds {want!r}')
     files = (t.parse_characters(characters) if characters is not None
              else None)
-    step11_groups_held(r, s if summary is not None else None,
-                       rd.step11_findings(path), path, where, files,
-                       characters)
+    step11_groups_held(r, s if summary is not None else None, fnd, path,
+                       where, files, characters)
+    step11_table_held(r, s if summary is not None else None, fnd, path,
+                      where, files)
     step11_checks_held(r, s if summary is not None else None, files,
                        rd.step11_data(path)['checks'], path, where)
     step11_use_held(r, s if summary is not None else None, files,
@@ -2477,6 +2493,96 @@ def step11_levels_held(f, details, brief, rows, where):
 # write (locale_order.LOCALE_KINDS' rows), not those of its sort table.
 STEP11_ROWS = ('moved', 'sorts differently', 'pairs changed',
                'not compared', 'told apart differently', 'not decided')
+
+
+def _table_said(t):
+    """((why, said), named) as test_locale_order.table_phrase reads the
+    line of a group's sort table T, items left out; None where it prints
+    no line."""
+    import locale_order as lo
+    if t['state'] == 'no line':
+        return None
+    why = lo.NO_LEVELS_ONE if t['reason'] == 'no levels on one machine' \
+        else None
+    said = lo.TABLE_SAID[t['step11']]
+    nm = t.get('naming')
+    if nm is None:
+        return (why, said), None
+    if nm['state'] == 'named':
+        return (why, said), {'counts': nm['counts'], 'more': nm['more'],
+                             'unnamed': None}
+    unnamed = nm['state']
+    if nm['state'] == 'unread':
+        unnamed = '; '.join(nm['reasons'])
+    elif nm['state'] == 'levels':
+        unnamed = (nm['old'], nm['new'])
+    return (why, said), {'counts': None, 'more': 0, 'unnamed': unnamed}
+
+
+def step11_table_held(r, s, findings, path, where, files=None):
+    """Each group's sort_table, as step 11 wrote it to PATH
+    (change_groups), against the line the readers take from the report
+    (parse_details), the summary (parse_brief) and the characters file's
+    row of it (parse_characters): no line where the data says none, else
+    why, what step 11 said, and what the table names, its counts and how
+    many more than the report lists, or why it names nothing; and the
+    report's names among them, as many as the file's rows and in their
+    order."""
+    import test_locale_order as t
+    import locale_order as lo
+    by = t.by_name(r)
+    for g in findings['groups']:
+        names = sorted(g['locales'])
+        want = _table_said(g['sort_table'])
+        ch = by[names[0]]
+        got = None if ch.get('table') is None else (
+            ch['table'], ch.get('named') and {
+                k: v for k, v in ch['named'].items() if k != 'items'})
+        if got != want:
+            raise AssertionError(f'{where}: the report prints the sort table '
+                                 f'of {names} as {got!r}, {path} holds '
+                                 f'{want!r}')
+        if s is not None:
+            b = t.parse_brief(s['changes'][names[0]]['brief'])
+            sgot = None if b.get('table') is None else (
+                b['table'], b.get('named') and {
+                    k: v for k, v in b['named'].items() if k != 'items'})
+            if sgot != want:
+                raise AssertionError(f'{where}: the summary prints the sort '
+                                     f'table of {names} as {sgot!r}, {path} '
+                                     f'holds {want!r}')
+            if want and want[1] and b['named']['items'] != \
+                    ch['named']['items']:
+                raise AssertionError(f'{where}: the summary names otherwise '
+                                     f'than the report in the table of '
+                                     f'{names}')
+        if files is None:
+            continue
+        rows = [x for x in files.get(tuple(names), [])
+                if x['finding'] == 'sort table changed']
+        heads = [x for x in rows if 'table' in x]
+        fgot = None if not heads else (
+            heads[0]['table'], heads[0]['named'] and {
+                k: v for k, v in heads[0]['named'].items() if k != 'items'})
+        # The file's line counts and names nothing: its rows hold the
+        # names (held to the counts by report_data._table_rows_held).
+        fwant = want and (want[0], want[1] and dict(want[1], more=0))
+        if len(heads) > 1 or fgot != fwant:
+            raise AssertionError(f'{where}: the characters file holds the '
+                                 f'sort table of {names} as {fgot!r}, '
+                                 f'{path} holds {want!r}')
+        if want and want[1] and want[1]['counts'] is not None:
+            items = ch['named']['items']
+            listed = [x['chars'] for x in rows if 'kind' in x]
+            # A character the report prints by its glyph, as the file
+            # names it: by its code point (table_naming).
+            plain = [re.sub(r'^.+ \((U\+[0-9A-F]{4,6})\)$', r'\1', x)
+                     for x in items]
+            if plain != listed[:len(plain)] or \
+                    len(plain) != min(len(listed), lo.LIST_LIMIT):
+                raise AssertionError(f'{where}: the report lists {plain[:3]} '
+                                     f'... of the sort table of {names}, the '
+                                     f'file {listed[:3]} ...')
 
 
 def step11_groups_held(r, s, findings, path, where, files=None,

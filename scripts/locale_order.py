@@ -5500,12 +5500,6 @@ def locale_findings(old, new, o, n, naming):
     return found
 
 
-# What a part of step 11's data that is not written yet holds (today
-# only a group's sort table, change_groups).
-NOT_YET = {'state': 'not yet reported',
-           'why': 'today said only in the text of the run'}
-
-
 def change_data(found, naming, probes):
     """[{'kind', ...}]: the data of a locale's findings (locale_findings), in
     their order, each added to its finding as 'data', which its printers
@@ -9308,9 +9302,10 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured,
     firm: the unchanged locales whose table says so, for any text.
     by_table: {locale: (why, what step 11 said, named)} of the changed
     locales whose table changed, why None or the reason a line names, named
-    what TableNaming names in it where why is None. A change step 11 finds
-    under the same table, or under a table whose record keeps every order
-    (NAMED_RECORD, NAMED_NUMBERING), or the same six items on a route not
+    what TableNaming names in it where why is None (table_named). A change
+    step 11 finds under the same table, or under a table whose record keeps
+    every order (named 'record' or 'numbering'), or the same six items on a
+    route not
     compared, stands, and makes every other locale its table alone would
     clear 'not compared' (TABLE_CODE_DIFFERS); one under a table that could
     not be compared leaves the code question open, and those locales are
@@ -9361,13 +9356,14 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured,
     # changed, so whether it keeps every order is not known. One machine
     # comparing bytes and the other with rules is a change of order, which
     # step 11's change does not contradict.
-    alike = {name for name, got in named.items()
-             if got[0] in (NAMED_RECORD, NAMED_NUMBERING)}
+    state = {name: json.loads(got[0])['state'] for name, got in named.items()}
+    alike = {name for name, st in state.items()
+             if st in ('record', 'numbering')}
     same_items = {name for name, (route, why) in routes.items()
                   if route == 'not compared' and not whole
                   and table_same_items(old, new, name)}
-    unknown = {name for name, got in named.items()
-               if got[0].startswith((NAMED_UNREAD, NAMED_LEVELS))} | {
+    unknown = {name for name, st in state.items()
+               if st in ('unread', 'levels')} | {
         name for name, (route, why) in routes.items()
         if route == 'not compared' and not whole and name not in same_items}
     differs = any((route == 'identical' or name in alike
@@ -9412,18 +9408,95 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured,
             by_table, findings, naming)
 
 
-def table_change_lines(why, s11, named=None):
-    """(lines, phrase, counted) a changed locale gets from its table: WHY,
-    or NAMED, TableNaming's answer where the six items differ (what the
-    table names in it, or why it names nothing). phrase is the line for
-    the summary, with the names; counted the one for the characters file,
-    whose rows hold the names."""
-    said = {'changed': None, 'same': 'step 11 saw no change in the strings '
-            'it measured', 'unmeasured': 'step 11 could not measure it'}[s11]
-    head, shown_ = (named[0], named[1]) if named else ('', '')
-    text = 'its compiled sort table changed' + (f': {why}' if why else head)
+# What step 11 said of a locale whose table changed (TABLE_SAID), why a
+# changed table names nothing or what it names (TableNaming), and why it
+# changed: its data in change_groups' sort_table, closed sets.
+TABLE_STEP11 = ('changed', 'same', 'unmeasured')
+TABLE_REASONS = ('no levels on one machine', 'items differ')
+TABLE_NAMED = ('named', 'record', 'numbering', 'unread', 'levels')
+TABLE_SAID = {'changed': None,
+              'same': 'step 11 saw no change in the strings it measured',
+              'unmeasured': 'step 11 could not measure it'}
+
+
+def table_named(data, items=()):
+    """What TableNaming names in a changed table, as one hashable value:
+    (its data as JSON, its items [(kind, as printed, as the file names
+    it)]). The data: {'state': 'named', 'counts': {'marked', 'old', 'new',
+    'flip'}, 'more': how many items the report does not list, 'others':
+    whether one is named by its bytes}; {'state': 'record'} or
+    {'state': 'numbering'}, which name nothing; {'state': 'unread',
+    'reasons': [why a side's record cannot be had]}; {'state': 'levels',
+    'old', 'new': each side's number of levels}."""
+    if data['state'] not in TABLE_NAMED or \
+            bool(items) != (data['state'] == 'named'):
+        raise ValueError(f'a sort table named as {data!r}')
+    return json.dumps(data, sort_keys=True), tuple(items)
+
+
+def table_data(why, s11, named):
+    """The sort_table of a group whose table changed (change_groups), from
+    table_verdicts' (why, what step 11 said, named): {'state': 'changed',
+    'step11': TABLE_STEP11, 'reason': TABLE_REASONS, and, where the six
+    items differ, 'naming': table_named's data}."""
+    if s11 not in TABLE_STEP11:
+        raise ValueError(f'step 11 said {s11!r} of a changed table')
+    if why == NO_LEVELS_ONE and named is None:
+        return {'state': 'changed', 'step11': s11,
+                'reason': 'no levels on one machine'}
+    if why is None and named is not None:
+        return {'state': 'changed', 'step11': s11, 'reason': 'items differ',
+                'naming': json.loads(named[0])}
+    raise ValueError(f'a changed table with why {why!r}')
+
+
+def table_head(data):
+    """What table_change_lines prints after "its compiled sort table
+    changed", from DATA (table_data) alone."""
+    if data['reason'] == 'no levels on one machine':
+        return f': {NO_LEVELS_ONE}'
+    nm = data['naming']
+    if nm['state'] == 'record':
+        return NAMED_RECORD
+    if nm['state'] == 'numbering':
+        return NAMED_NUMBERING
+    if nm['state'] == 'unread':
+        return NAMED_UNREAD + '; '.join(nm['reasons'])
+    if nm['state'] == 'levels':
+        return (f'{NAMED_LEVELS}{nm["old"]} to {nm["new"]}), so its '
+                'sequences are not compared one by one')
+    c = nm['counts']
+    parts = []
+    if c['marked']:
+        parts.append(f'it marks {c["marked"]:,} sequence(s) as changed')
+    if c['new']:
+        parts.append(f'{c["new"]:,} appear only in the new machine\'s table')
+    if c['old']:
+        parts.append(f'{c["old"]:,} only in the old machine\'s'
+                     if c['new'] else
+                     f'{c["old"]:,} appear only in the old machine\'s table')
+    if c['flip']:
+        parts.append(f'{c["flip"]:,} more compare differently against one '
+                     'marked as changed')
+    return ': ' + (', '.join(parts[:-1]) + ' and ' + parts[-1]
+                   if len(parts) > 1 else parts[0])
+
+
+def table_change_lines(data, items=()):
+    """(lines, phrase, counted) a changed locale gets from its table, from
+    DATA (table_data) and the ITEMS it names (table_named): its first
+    LIST_LIMIT items "among them", with how many more the data says. phrase
+    is the line for the summary, with the names; counted the one for the
+    characters file, whose rows hold the names."""
+    said = TABLE_SAID[data['step11']]
+    text = 'its compiled sort table changed' + table_head(data)
     counted = text + (f'; {said}' if said else '')
-    text += shown_ + (f'; {said}' if said else '')
+    if data.get('naming', {}).get('state') == 'named':
+        more = data['naming']['more']
+        text += ('; among them: '
+                 + ', '.join(x[1] for x in items[:LIST_LIMIT])
+                 + (f', and {more:,} more' if more else ''))
+    text += f'; {said}' if said else ''
     # Printed four columns in, like the lines of the change under it; a name
     # of several words keeps its words on one line (NUL, as runs_text).
     return ([line.replace('\0', ' ') for line in wrap_columns(
@@ -9649,7 +9722,7 @@ class TableNaming:
         # only the controls.
         checks = [self.check(side, name) for side in (0, 1)]
         if a['table'] == b['table'] and not any(checks):
-            return NAMED_RECORD, '', (), False
+            return table_named({'state': 'record'})
         reasons, parsed = [], []
         for side in (0, 1):
             try:
@@ -9657,15 +9730,15 @@ class TableNaming:
             except CollateUnread as x:
                 reasons.append(str(x))
         if reasons:
-            return (NAMED_UNREAD + '; '.join(reasons), '', (), False)
+            return table_named({'state': 'unread', 'reasons': reasons})
         # The same record under two digests too: the digest hashes bytes
         # of the table the record does not keep.
         if self.records[0][a['table']] == self.records[1][b['table']]:
-            return NAMED_RECORD, '', (), False
+            return table_named({'state': 'record'})
         o, n = parsed
         if o['nrules'] != n['nrules']:
-            return (f'{NAMED_LEVELS}{o["nrules"]} to {n["nrules"]}), so its '
-                    'sequences are not compared one by one', '', (), False)
+            return table_named({'state': 'levels', 'old': o['nrules'],
+                                'new': n['nrules']})
         seqs = table_sequences(o, n)
         self.seqs[a['table'], a['nrules'], b['table'], b['nrules'],
                   (codeset,)] = (o, n, seqs)
@@ -9702,18 +9775,18 @@ def table_sequences(o, n):
 
 
 def table_naming(o, n, codeset, seqs=None, charmap=None):
-    """(head, shown, rows, others) of two parsed records of the same number
-    of rules: the counts, the first LIST_LIMIT names "among them", every
-    name as (characters, how) for the characters file, and whether a name
-    is bytes. Characters of consecutive code points are one run, as step
-    11 writes them; a string of several characters is named by its code
-    points, and one glibc reads as no character by its bytes (Names, with
-    CHARMAP, the old machine's table for codeset), those of one length that
-    follow one another as a range (byte_runs). seqs:
+    """table_named's value of two parsed records of the same number of
+    rules: the counts, how many names the report leaves out, whether a
+    name is bytes, and every name (kind, as the report prints it, as the
+    characters file names it). Characters of consecutive code points are
+    one run, as step 11 writes them; a string of several characters is
+    named by its code points, and one glibc reads as no character by its
+    bytes (Names, with CHARMAP, the old machine's table for codeset), those
+    of one length that follow one another as a range (byte_runs). seqs:
     table_sequences(o, n), when already worked out."""
     marked, only_old, only_new, flips = seqs or table_sequences(o, n)
     if not (marked or only_old or only_new):
-        return NAMED_NUMBERING, '', (), False
+        return table_named({'state': 'numbering'})
     names = Names([], codeset, charmap)
     items, others = [], False
     for kind, seqs in (('marked', marked), ('old', only_old),
@@ -9754,29 +9827,11 @@ def table_naming(o, n, codeset, seqs=None, charmap=None):
         for text in byte_runs(raw):
             others = True
             items.append((kind, text.replace(' ', '\0'), text))
-    parts = []
-    if marked:
-        parts.append(f'it marks {len(marked):,} sequence(s) as changed')
-    if only_new:
-        parts.append(f'{len(only_new):,} appear only in the new machine\'s '
-                     'table')
-    if only_old:
-        parts.append(f'{len(only_old):,} only in the old machine\'s'
-                     if only_new else
-                     f'{len(only_old):,} appear only in the old machine\'s '
-                     'table')
-    if flips:
-        parts.append(f'{len(flips):,} more compare differently against one '
-                     'marked as changed')
-    head = ': ' + (', '.join(parts[:-1]) + ' and ' + parts[-1]
-                   if len(parts) > 1 else parts[0])
-    shown_ = ('; among them: '
-              + ', '.join(x[1] for x in items[:LIST_LIMIT])
-              + (f', and {len(items) - LIST_LIMIT:,} more'
-                 if len(items) > LIST_LIMIT else ''))
-    rows = tuple((tok.translate(TSV_ESCAPES), NAMED_HOW[kind])
-                 for kind, _, tok in items)
-    return head, shown_, rows, others
+    return table_named({'state': 'named',
+                        'counts': {'marked': len(marked), 'old': len(only_old),
+                                   'new': len(only_new), 'flip': len(flips)},
+                        'more': max(len(items) - LIST_LIMIT, 0),
+                        'others': others}, items)
 
 
 class TableKeys:
@@ -11283,12 +11338,15 @@ def change_groups(measured, groups, entries):
     (printed_under: its place among GROUPS, the changes as the report
     prints them, where groups that read alike share one), whether step 11
     found it or its sort table alone, its findings (change_data), whether
-    they name a string by its bytes (names_bytes), and its sort table,
-    not yet reported. MEASURED is [(names, names_bytes, data or None for
-    a change its sort table alone found, the lines it prints)]."""
+    they name a string by its bytes (names_bytes), and its sort table
+    (sort_table): table_data where its table changed, else {'state': 'no
+    line'}, its table the same or not compared, as the tables' `!!` say.
+    MEASURED is [(names, names_bytes, data or None for a change its sort
+    table alone found, the lines it prints, its sort_table)]."""
     printed = {lines: k for k, (lines, names) in enumerate(groups)}
     out = []
-    for names, named, data, lines in sorted(measured, key=lambda m: m[0]):
+    for names, named, data, lines, table in sorted(measured,
+                                                   key=lambda m: m[0]):
         locales = {}
         for x in names:
             (before, now), (cs, alias, spelling, reach) = (
@@ -11302,7 +11360,7 @@ def change_groups(measured, groups, entries):
                     'found_by': ('step 11' if data is not None
                                  else 'its sort table alone'),
                     'findings': data if data is not None else [],
-                    'names_bytes': named, 'sort_table': dict(NOT_YET)})
+                    'names_bytes': named, 'sort_table': table})
     return {'state': 'reported', 'groups': out}
 
 
@@ -11627,7 +11685,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     confirm = []     # (names, encoding, what the SQL files get)
     others = False   # whether a string is named by its bytes
     several = False  # whether a sort table names a string of several characters
-    measured = []    # (names, step 11's names_bytes, its data or None, lines)
+    measured = []    # (names, step 11's names_bytes, its data or None, lines,
+    #                   its sort table's data)
     for names in measured_alike.values():
         table = by_table.get(names[0])
         if table and table[1] != 'changed':
@@ -11637,9 +11696,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             lines, brief, found, named, sql, data = describe_change(
                 old, new, o[names[0]], n[names[0]], machines[0])
         step11_named = named
+        sort_table = {'state': 'no line'}
         if table:
-            more, phrase, counted = table_change_lines(*table)
-            if sql_to and table[2] and table[2][2]:
+            sort_table = table_data(*table)
+            items = table[2][1] if table[2] else ()
+            more, phrase, counted = table_change_lines(sort_table, items)
+            if sql_to and items:
                 # A string of several characters the table names gets a
                 # test pair from the two records; every other sequence it
                 # names is counted, one by one (a run of the characters
@@ -11659,19 +11721,20 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                 found = [('sort table changed', '-',
                           counted.translate(TEXT_ESCAPES), '-', '-', '-',
                           '-')] + [
-                    ('sort table changed', chars, how, '-', '-', '-',
-                     'compiled table')
-                    for chars, how in (table[2][2] if table[2] else ())
+                    ('sort table changed', tok.translate(TSV_ESCAPES),
+                     NAMED_HOW[kind], '-', '-', '-', 'compiled table')
+                    for kind, _, tok in items
                 ] + found
             # A name in bytes from the table needs the report's explanation
             # of bytes names, as one from step 11 does.
-            named = named or bool(table[2] and table[2][3])
+            named = named or sort_table.get('naming', {}).get('others',
+                                                               False)
             several = several or any(
-                chars.startswith('U+') and ' ' in chars
-                for chars, how in (table[2][2] if table[2] else ()))
+                tok.startswith('U+') and ' ' in tok for _, _, tok in items)
         others = others or named
         reads_alike.setdefault(tuple(lines), []).extend(names)
-        measured.append((sorted(names), step11_named, data, tuple(lines)))
+        measured.append((sorted(names), step11_named, data, tuple(lines),
+                         sort_table))
         briefs[tuple(lines)] = brief
         rows.append((sorted(names), found))
         confirm.append((sorted(names), o[names[0]].get('codeset'), sql))
