@@ -35,7 +35,10 @@ on either machine, which audit.sh sets beside step 11's verdict:
 rules_by_name), and step2_rules.<pair>.json (what it prints of its
 rules: the totals, the groups whose rules differ, the files only one side
 has, the entries of a machine's sources not read and the notes under its
-list, which it prints from that record: write_rules). Under audit.sh,
+list, which it prints from that record: write_rules), and
+step2_character_sets.<pair>.json (what it prints of the character sets,
+not of the transliterations, printed from that record where the check
+ran: node_charmaps.charmap_record, write_character_sets). Under audit.sh,
 each `!!` it prints is also written as
 data to the file PG_GLIBC_AUDIT_WARNINGS names
 (glibc_locale_data.record_warning).
@@ -308,7 +311,7 @@ class CharmapReads:
 
 
 def check_charmaps(reads, repo, side_old, side_new, sup, already,
-                   words=None, builds=None):
+                   words=None, builds=None, record=None):
     """Run collation_keys.compare over the two sides, print what it found,
     and return the source names it lists for the summary, each with what it
     settled of it (collation_keys.listed_sources: a charmap or a
@@ -326,7 +329,10 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
     them already (`already`) or, for a transliteration, because it lists
     the build already (listed_sources(skipped=True), each source in its
     strongest state); step 11's cross says it beside each locale
-    (rules_by_name, 16.322). The first stays what the check lists."""
+    (rules_by_name, 16.322). The first stays what the check lists.
+    RECORD, a dict, is given what the check printed, as data
+    (node_charmaps.charmap_record)."""
+    record = {} if record is None else record
     old, new = side_old.tag, side_new.tag
     # The charmaps read ahead of time (CharmapReads.prefetch) are back by
     # now: the verdicts above took far longer than one `git cat-file`.
@@ -343,11 +349,13 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
                           if sup[new] is not None else None)
         except ck.Unsettled as e:
             _charmaps_not_run(str(e))
+            record.update(state='not run', why=str(e), not_compared=[])
             return {}, str(e), {}
     if builds_old is None or builds_new is None:
         where = ' and '.join(t for t in (old, new) if sup[t] is None)
         why = f"{g.SUPPORTED} does not exist at {where}"
         _charmaps_not_run(why)
+        record.update(state='not run', why=why, not_compared=[])
         return {}, why, {}
     by_entry = {b.entry: b.charmap for b in builds_old}
     cross = {(by_entry[b.entry], b.charmap) for b in builds_new
@@ -385,7 +393,7 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
                         already_listed, read_more, fresh=False,
                         search_unbuilt=builds is None)
     words = words or STEP2_WORDS
-    print_charmap_report(report, old, new, words)
+    record.update(print_charmap_report(report, old, new, words))
     # The two NOT RUN print_charmap_report says of the report itself.
     why = (report.not_run if report.not_run
            else _said(words, 'none_compared', old, new)
@@ -500,7 +508,9 @@ def write_rules_by_name(slug, noun, names, machine, charmaps, sides=(),
     commit' and 'one tree' (nothing to compare; the same tree holds the
     same charmaps), 'not read' (one tree of two machines' files that hold
     no charmaps this reads; why: each file's reason). A state outside the
-    set, or a why that does not go with it, is refused here."""
+    set, or a why that does not go with it, is refused here. Written
+    through named(), as the screen: a reason that names a build side
+    names it as step2_character_sets does."""
     import json
     import locale_order as lo
     state, why = charmaps.get('state'), charmaps.get('why')
@@ -517,7 +527,7 @@ def write_rules_by_name(slug, noun, names, machine, charmaps, sides=(),
             if machine else None,
             'charmaps': charmaps, 'locales': locales}
     g.write_list(f"step2_rules_by_name.{slug}.json",
-                 [json.dumps(data, sort_keys=True)])
+                 [g.named(json.dumps(data, sort_keys=True))])
 
 
 def not_compared_names(names, listed, unread, keyed, differs, aliases):
@@ -899,6 +909,18 @@ def write_rules(slug, record):
                  [g.named(json.dumps(dict(record, step=2), sort_keys=True))])
 
 
+def write_character_sets(slug, record):
+    """Write step2_character_sets.<pair>.json, what step 2 prints of its
+    character set check (node_charmaps.charmap_record, or a NOT RUN in its
+    shape where the check stopped before compare()), or, where it
+    compared nothing, what became of the check (its state, with its
+    reason where it has one, as step2_rules_by_name says it). Written on
+    every route, through named(), as the screen."""
+    import json
+    g.write_list(f"step2_character_sets.{slug}.json",
+                 [g.named(json.dumps(dict(record, step=2), sort_keys=True))])
+
+
 def print_listed(got, listed):
     if not listed:
         return
@@ -1039,6 +1061,8 @@ def _main(opts):
         write_rules_by_name(slug, noun, (old_name, new_name), machine,
                             charmaps, (old_side, new_side), nothing, what)
         write_rules(slug, {'state': 'not compared', 'why': what})
+        write_character_sets(
+            slug, {k: v for k, v in charmaps.items() if v is not None})
     else:
         early = (predates_lr_getc_fix(repo, old),
                  predates_lr_getc_fix(repo, new))
@@ -1160,14 +1184,20 @@ def _main(opts):
             if why:
                 _charmaps_not_run(why)
                 keyed, cm_why, settled = {}, why, {}
+                cs = {'state': 'not run', 'why': why, 'not_compared': []}
             else:
+                cs = {}
                 keyed, cm_why, settled = check_charmaps(
                     charmap_reads, repo, side_old, side_new, sup, already,
-                    step2_words(noun, machines=True), builds=measured)
+                    step2_words(noun, machines=True), builds=measured,
+                    record=cs)
         else:
+            cs = {}
             keyed, cm_why, settled = check_charmaps(
                 charmap_reads, repo, side_old, side_new, sup, already,
-                step2_words(g.pair_word(repo, old_side, new_side)))
+                step2_words(g.pair_word(repo, old_side, new_side)),
+                record=cs)
+        write_character_sets(slug, cs)
         # Untested at this call site: on two machines' files the check's
         # own two NOT RUN (the report's, no build in common) were reached by
         # no file here; check_charmaps' test holds each reason, and

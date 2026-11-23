@@ -6,11 +6,13 @@ change.
 Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
-only inside a sentence (step 2's character sets and the provenance of
-each side) is 'not yet reported': a later step of the work turns each
-one into data (branch 24 of the plan). What step 2 prints of its rules
-is data: step2_rules.<pair>.json, read into step2.rules and tied to the
-other facts of the run (_rules).
+only inside a sentence (step 2's transliterations and the provenance
+of each side) is 'not yet reported': a later step of the work turns
+each one into data (branch 24 of the plan). What step 2 prints of its
+rules is data: step2_rules.<pair>.json, read into step2.rules and tied
+to the other facts of the run (_rules); and so is what it prints of its
+character set check: step2_character_sets.<pair>.json, read into
+step2.character_sets (_character_sets).
 The `!!` notices of steps 0, 1, 2 and 11
 are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
@@ -297,6 +299,41 @@ def step2_rules(path, nothing):
     return out
 
 
+# What step2_character_sets says (in node_charmaps.charmap_record's shape
+# where the check ran or stopped, else what became of it:
+# write_character_sets), its 'compared' given as 'reported'.
+CS_STATES = ('reported', 'not run', 'one commit', 'one tree', 'not read')
+CS_KEYS = {'compared': ['anyway', 'basis', 'builds', 'changed', 'charmaps',
+                        'distro', 'listed', 'not_compared', 'state', 'step',
+                        'unsearched', 'unsettled'],
+           'not run': ['not_compared', 'state', 'step', 'why'],
+           'one commit': ['state', 'step'], 'one tree': ['state', 'step'],
+           'not read': ['state', 'step', 'why']}
+CS_BASES = ('SUPPORTED', 'measured')
+CS_PAIR_STATES = ('compared', 'not compared')
+CS_ANYWAY_STATES = ('named', 'not compared')
+
+
+def step2_character_sets(path):
+    """Step 2's record of its character set check, read as written, its
+    state 'compared' given as 'reported'; load() checks it."""
+    if not os.path.isfile(path):
+        return not_reported(path)
+    lines = _lines(path)
+    if len(lines) != 1:
+        raise ReportError(f'{path} is not one line')
+    data = json.loads(lines[0])
+    if not isinstance(data, dict) or data.get('step') != 2 or \
+            data.get('state') not in CS_KEYS:
+        raise ReportError(f'{path} is not what step 2 writes')
+    if sorted(data) != CS_KEYS[data['state']]:
+        raise ReportError(f'{path} has the keys {sorted(data)}')
+    out = {k: v for k, v in data.items() if k != 'step'}
+    if out['state'] == 'compared':
+        out['state'] = 'reported'
+    return out
+
+
 def step2_section(a, run):
     d = a.out_dir
     by_name = rules_by_name(_file(d, f'step2_rules_by_name.{a.pair}.json'))
@@ -346,7 +383,9 @@ def step2_section(a, run):
         'rules_characters': chars_s,
         'rules': step2_rules(_file(d, f'step2_rules.{a.pair}.json'),
                              nothing),
-        'character_sets': NOT_YET,
+        'character_sets': step2_character_sets(
+            _file(d, f'step2_character_sets.{a.pair}.json')),
+        'transliteration': NOT_YET,
     }
 
 
@@ -2772,6 +2811,227 @@ def _rules(where, s2, some, run, pair, w, step11):
                                   f'among the names not ASCII')
 
 
+def _character_sets(where, s2, some, w):
+    """step2.character_sets: its shape, then each fact tied to the others
+    of the same run: its state and reason are step2_rules_by_name's; NOT
+    RUN is the `!!` that says so; every build it names is of a pair that
+    changed, and a pair not compared names no character; the builds it
+    could not settle, those a distro can build, the charmaps the search
+    skipped and the entries not compared are the `!!` of each; the builds
+    it lists are in step 2's list and not among the names whose rules
+    differ or were not compared, those the summary lists anyway are among
+    them; on two machines each build is a measured name whose rules by
+    name carry what the check found."""
+    import glibc_locale_data as g
+    o = s2['character_sets']
+    if o['state'] == 'not reported':
+        _keys(where, o, ['state', 'why'])
+        return
+    _one_of(f'{where}.state', o['state'], CS_STATES)
+    rb = s2['rules_by_name']
+    if rb['state'] == 'reported':
+        cm = rb['charmaps']
+        if (cm['state'] == 'compared') != (o['state'] == 'reported') or \
+                (o['state'] != 'reported' and (cm['state'] != o['state']
+                                               or cm.get('why')
+                                               != o.get('why'))):
+            raise ReportError(f'{where} is {o["state"]!r} '
+                              f'({o.get("why")!r}), step 2\'s rules by name '
+                              f'{cm!r}')
+    if (o['state'] in ('reported', 'not run')) != some:
+        raise ReportError(f'{where} is {o["state"]!r} where step 2 compared '
+                          f'{"something" if some else "nothing"}')
+    if o['state'] in ('one commit', 'one tree'):
+        _keys(where, o, ['state'])
+        return
+    if o['state'] == 'not read':
+        _keys(where, o, ['state', 'why'])
+        _strs(f'{where}.why', o['why'])
+        return
+    _strs(f'{where}.not_compared', o['not_compared'])
+    not_run = _warnings_of(w, 'step2', 'charmaps_not_run')
+    missing = _warnings_of(w, 'step2', 'charmap_sources_missing')
+    if not_run is not None:
+        want = [{'why': o['why']}] if o['state'] == 'not run' else []
+        if not_run != want:
+            raise ReportError(f'{where} is {o["state"]!r}, the `!!` of the '
+                              f'check not run {not_run!r}')
+    if missing is not None:
+        got = [d['entries'] for d in missing]
+        if got != ([o['not_compared']] if o['not_compared'] else []):
+            raise ReportError(f'{where}.not_compared {o["not_compared"]!r}, '
+                              f'the `!!` {got!r}')
+    if o['state'] == 'not run':
+        _keys(where, o, ['state', 'why', 'not_compared'])
+        if not _is_str(o['why']):
+            raise ReportError(f'{where}.why is {o["why"]!r}')
+        return
+    _one_of(f'{where}.basis', o['basis'], CS_BASES)
+    machines = rb['state'] == 'reported' and rb['machines']
+    if rb['state'] == 'reported' and (o['basis'] == 'measured') != machines:
+        raise ReportError(f'{where}.basis is {o["basis"]!r} with '
+                          f'machines={machines}')
+    for d in missing or ():
+        if d['basis'] != o['basis']:
+            raise ReportError(f'{where}.basis {o["basis"]!r}, the `!!` of '
+                              f'entries not compared {d["basis"]!r}')
+    _strs(f'{where}.charmaps', o['charmaps'])
+    if not (_is_positive(o['builds']) and o['charmaps'] and
+            o['charmaps'] == sorted(set(o['charmaps']))):
+        raise ReportError(f'{where}: {o["builds"]!r} builds, the charmaps '
+                          f'{o["charmaps"]!r}')
+    used = set(o['charmaps'])
+    # The pairs that changed.
+    pairs = {}
+    if not isinstance(o['changed'], list):
+        raise ReportError(f'{where}.changed is not a list')
+    for i, x in enumerate(o['changed']):
+        at = f'{where}.changed[{i}]'
+        _stated(at, x, CS_PAIR_STATES,
+                {'compared': ['old', 'new', 'added', 'removed', 'other'],
+                 'not compared': ['old', 'new']})
+        if not (_is_str(x['old']) and _is_str(x['new'])):
+            raise ReportError(f'{at} is {x!r}')
+        if x['state'] == 'compared' and not all(
+                _is_count(x[k]) for k in ('added', 'removed', 'other')):
+            raise ReportError(f'{at} is {x!r}')
+        if (x['old'], x['new']) in pairs:
+            raise ReportError(f'{at}: the pair twice')
+        if not {x['old'], x['new']} <= used:
+            raise ReportError(f'{at}: {x["old"]} -> {x["new"]}, not among '
+                              f'the charmaps the builds use')
+        pairs[(x['old'], x['new'])] = x['state']
+    # Every build it names.
+    keys = ['entry', 'source', 'old', 'new']
+    shapes = {'listed': keys + ['codepoints', 'via'],
+              'unsettled': keys + ['why'],
+              'distro': keys + ['codepoints', 'via']}
+    rows = []
+    for part in ('listed', 'anyway', 'unsettled', 'distro'):
+        if not isinstance(o[part], list):
+            raise ReportError(f'{where}.{part} is not a list')
+        for i, x in enumerate(o[part]):
+            at = f'{where}.{part}[{i}]'
+            if part == 'anyway':
+                _stated(at, x, CS_ANYWAY_STATES,
+                        {'named': keys + ['count', 'via'],
+                         'not compared': keys + ['why']})
+            else:
+                _keys(at, x, shapes[part])
+            if not all(_is_str(x[k]) for k in keys):
+                raise ReportError(f'{at} is {x!r}')
+            if (x['old'], x['new']) not in pairs:
+                raise ReportError(f'{at}: {x["old"]} -> {x["new"]} is no '
+                                  f'pair that changed')
+            if 'via' in x:
+                _strs(f'{at}.via', x['via'])
+            if 'codepoints' in x and not (
+                    x['codepoints'] and all(map(_is_count, x['codepoints']))
+                    and x['codepoints'] == sorted(set(x['codepoints']))):
+                raise ReportError(f'{at}.codepoints is {x["codepoints"]!r}')
+            if 'count' in x and not _is_positive(x['count']):
+                raise ReportError(f'{at}.count is {x["count"]!r}')
+            # Point 5 searches a charmap whose name stays.
+            if part == 'distro' and x['old'] != x['new']:
+                raise ReportError(f'{at}: {x["old"]} -> {x["new"]}')
+            if 'why' in x and not _is_str(x['why']):
+                raise ReportError(f'{at}.why is {x["why"]!r}')
+            if (x['entry'] == '-') != (part == 'distro') and \
+                    part != 'unsettled' and part != 'anyway':
+                raise ReportError(f'{at}: entry {x["entry"]!r}')
+            # A SUPPORTED entry builds from the file its name names
+            # (collation_keys.supported_builds).
+            if o['basis'] == 'SUPPORTED' and x['entry'] != '-' and \
+                    x['source'] != g.locale_source(x['entry']):
+                raise ReportError(f'{at}: {x["entry"]} built from '
+                                  f'{x["source"]}')
+            rows.append((part, x))
+    # A build names characters of its pair's changes (collation_keys.K):
+    # no more than changed in it.
+    size = {(x['old'], x['new']): x['added'] + x['removed'] + x['other']
+            for x in o['changed'] if x['state'] == 'compared'}
+    for part, x in rows:
+        n = len(x['codepoints']) if 'codepoints' in x else x.get('count', 0)
+        if n > size.get((x['old'], x['new']), n):
+            raise ReportError(f'{where}.{part}: {x["entry"]} names {n} '
+                              f'character(s), more than changed in '
+                              f'{x["old"]} -> {x["new"]}')
+    # A pair not compared names no character: each of its builds says why,
+    # one and the same reason (a pair has a build at least: compare() takes
+    # its pairs from the builds compared).
+    for p, state in pairs.items():
+        mine = [(part, x) for part, x in rows if (x['old'], x['new']) == p]
+        if state == 'not compared':
+            whys = {x.get('why') for part, x in mine}
+            if None in whys or len(whys) != 1:
+                raise ReportError(f'{where}: {p[0]} -> {p[1]} not compared, '
+                                  f'its builds {mine!r}')
+    # The `!!` of each.
+    for part, kind, want in (
+            ('unsettled', 'charmap_builds_unsettled',
+             lambda xs: {'builds': [
+                 {'build': x['entry'] if x['entry'] != '-' else x['source'],
+                  'charmap': x['new'], 'why': x['why']} for x in xs]}),
+            ('distro', 'charmap_distro_buildable',
+             lambda xs: {'locales': [{'source': x['source'],
+                                      'charmap': x['new']} for x in xs]}),
+            ('unsearched', 'charmap_search_not_run',
+             lambda xs: {'charmaps': xs})):
+        got = _warnings_of(w, 'step2', kind)
+        if got is not None and got != ([want(o[part])] if o[part] else []):
+            raise ReportError(f'{where}.{part} {o[part]!r}, the `!!` {got!r}')
+    # The search is skipped for a charmap whose name stays and that could
+    # not be compared (collation_keys.compare), for that same reason.
+    for i, x in enumerate(o['unsearched']):
+        _keys(f'{where}.unsearched[{i}]', x, ['charmap', 'why'])
+        if not (_is_str(x['charmap']) and _is_str(x['why'])):
+            raise ReportError(f'{where}.unsearched[{i}] is {x!r}')
+        p = (x['charmap'], x['charmap'])
+        whys = {y.get('why') for part, y in rows
+                if (y['old'], y['new']) == p}
+        if pairs.get(p) != 'not compared' or whys != {x['why']}:
+            raise ReportError(f'{where}.unsearched[{i}]: {x!r}, its pair '
+                              f'{pairs.get(p)!r} with the reasons '
+                              f'{sorted(map(str, whys))!r}')
+    if machines and (o['distro'] or o['unsearched']):
+        raise ReportError(f'{where}: the search of point 5 on two machines')
+    # Against step 2's list: what the summary lists anyway is a name whose
+    # rules differ or were not compared; what the check lists is neither,
+    # and is in the list.
+    shown = lambda n: 'C.UTF-8' if n == 'C' else g.shown(n)
+    ru, ls = s2['rules'], s2['listed']
+    if ru['state'] == 'reported':
+        lw = _warnings_of(w, 'step2', 'rules_not_compared')
+        already = {n for x in ru['differ'] for n in x['names']}
+        already |= {n for d in lw or () for g_ in d['groups']
+                    for n in g_['names']}
+        for part, x in rows:
+            if (shown(x['source']) in already) != (part == 'anyway'):
+                raise ReportError(
+                    f'{where}.{part}: {x["source"]} '
+                    f'{"is not" if part == "anyway" else "is"} among the '
+                    f'names whose rules differ or were not compared')
+    if ls['state'] == 'reported':
+        names = {shown(n) for n in ls['compared'] + ls['not_compared']}
+        names |= set(ru.get('not_ascii', []))
+        for part, x in rows:
+            if part != 'anyway' and shown(x['source']) not in names:
+                raise ReportError(f'{where}.{part}: {x["source"]} is not in '
+                                  f'step 2\'s list')
+    # On two machines, each build is a name measured on the new one, whose
+    # rules by name carry what the check found of its file.
+    if machines and rb['locales']['state'] == 'reported':
+        bn = rb['locales']['by_name']
+        for part, x in rows:
+            v = bn.get(x['entry'], {}).get('charmap')
+            ok = (v == 'changed' if part == 'listed' or
+                  (part == 'anyway' and x['state'] == 'named') else
+                  v in ('changed', 'transliteration', 'not compared'))
+            if not ok:
+                raise ReportError(f'{where}.{part}: {x["entry"]} is '
+                                  f'{v!r} in step 2\'s rules by name')
+
+
 def _not_yet(where, obj):
     _keys(where, obj, ['state', 'why'])
     if obj != NOT_YET:
@@ -3481,7 +3741,8 @@ def load(path):
 
     s2 = r['step2']
     _keys('step2', s2, ['listed', 'removed', 'rules_by_name',
-                        'rules_characters', 'rules', 'character_sets'])
+                        'rules_characters', 'rules', 'character_sets',
+                        'transliteration'])
     nr = {'not reported': ['why']}
 
     def listed(where, o):
@@ -3577,7 +3838,8 @@ def load(path):
             raise ReportError('step2.rules_by_name.measurements does not go '
                               'with machines')
     _rules('step2.rules', s2, some, run, r['pair'], w, r['step11'])
-    _not_yet('step2.character_sets', s2['character_sets'])
+    _character_sets('step2.character_sets', s2, some, w)
+    _not_yet('step2.transliteration', s2['transliteration'])
 
     def s11_not_run(where, o):
         _keys(where, o, ['state', 'why', 'not_done'])

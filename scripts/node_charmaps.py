@@ -479,53 +479,111 @@ def _warn_block(head, items, kind, data):
 _CHANGED_IN_CHARMAP = 'characters its character set changed'
 
 
-def _chars_phrase(f):
-    via = ', '.join(f.via) if f.via else '?'
-    n = len(f.chars)
-    return f"{n} character{'s' if n != 1 else ''}, named in {via}"
+def _phrase(n, via):
+    """`n characters, named in VIA`, as a row of the record says it."""
+    return (f"{n} character{'s' if n != 1 else ''}, named in "
+            f"{', '.join(via) if via else '?'}")
 
 
-def _print_chars(f, indent='      '):
-    """f's characters, in code point order; one beyond U+10FFFF, which a
-    `<U........>` name can spell, as its number."""
-    print('\n'.join(_chars_lines(f, indent)))
-
-
-def _chars_lines(f, indent):
-    """The lines _print_chars prints."""
-    cps = sorted(f.chars)
+def _cps_lines(cps, indent):
+    """Code points CPS, in their order, as characters_lines prints them;
+    one beyond U+10FFFF, which a `<U........>` name can spell, as its
+    number."""
     return characters_lines([chr(c) if c < 0x110000 else c for c in cps],
                             indent=indent, label=_CHANGED_IN_CHARMAP)
 
 
-def print_charmap_report(report, old, new, words=STEP2_WORDS):
-    """The character set check's lines in step 2's output."""
-    w = lambda field, **more: _said(words, field, old, new, **more)
+def charmap_record(report, old, new, words=STEP2_WORDS):
+    """What print_charmap_report prints of the check, as data: 'not run'
+    with its reason (the report's own, or no build compared) and the
+    entries not compared it prints then; else 'compared': how many builds
+    and the charmaps they use, each pair that changed with what changed in it, or not
+    compared; the builds it lists, those the summary lists anyway, those
+    it could not settle, those a distro can build, the charmaps the search
+    skipped and the entries not compared. Each build keeps its source and
+    its old charmap, which are not printed (entry '-' where no
+    SUPPORTED entry builds it in that charmap), so that the run's data file
+    can tie it to the list and to the pairs."""
+    w = lambda field: _said(words, field, old, new)
     if report.not_run:
-        _charmaps_not_run(report.not_run, w('subject'), w('label'))
-        return
-    print()
-    changed = report.changed
+        return {'state': 'not run', 'why': report.not_run,
+                'not_compared': []}
     if not report.builds:
+        return {'state': 'not run', 'why': w('none_compared'),
+                'not_compared': list(report.not_compared)}
+
+    def build(f):
+        return {'entry': f.entry or '-', 'source': f.source, 'old': f.charmaps[0],
+                'new': f.charmaps[1]}
+    changed = []
+    for p in report.changed:
+        size = report.sizes[p]
+        changed.append(
+            {'old': p[0], 'new': p[1], 'state': 'not compared'}
+            if size is None else
+            {'old': p[0], 'new': p[1], 'state': 'compared',
+             'added': size[1], 'removed': size[2],
+             'other': size[0] - size[1] - size[2]})
+    return {
+        'state': 'compared',
+        'basis': 'measured' if words.builds.startswith('measured')
+        else 'SUPPORTED',
+        'builds': report.builds, 'charmaps': list(report.charmaps),
+        'changed': changed,
+        'listed': [dict(build(f), codepoints=sorted(f.chars),
+                        via=list(f.via))
+                   for f in report.found if f.entry and not f.reason],
+        'anyway': [dict(build(f), state='not compared', why=f.reason)
+                   if f.reason else
+                   dict(build(f), state='named', count=len(f.chars),
+                        via=list(f.via)) for f in report.skipped],
+        'unsettled': [dict(build(f), why=f.reason)
+                      for f in report.found if f.reason],
+        'distro': [dict(build(f), codepoints=sorted(f.chars),
+                        via=list(f.via))
+                   for f in report.found if not f.entry and not f.reason],
+        'unsearched': [{'charmap': name, 'why': why}
+                       for name, why in report.unsearched],
+        'not_compared': list(report.not_compared)}
+
+
+def _build(x):
+    """A build of the record as its `!!` names it: its entry, else (a
+    source no SUPPORTED entry builds in that charmap) its source."""
+    return x['entry'] if x['entry'] != '-' else x['source']
+
+
+def print_charmap_report(report, old, new, words=STEP2_WORDS):
+    """The character set check's lines in step 2's output, printed from
+    its record (charmap_record), which it returns; the transliteration's
+    lines (print_translit_report) are printed from REPORT, and are not in
+    the record."""
+    w = lambda field, **more: _said(words, field, old, new, **more)
+    rec = charmap_record(report, old, new, words)
+    if report.not_run:
+        _charmaps_not_run(rec['why'], w('subject'), w('label'))
+        return rec
+    print()
+    changed = rec.get('changed', [])
+    if rec['state'] == 'not run':
         _warn_block(f"NOT RUN: the comparison of {w('subject')}, and of the "
                     f"collating elements they build out of "
-                    f"transliterations. {w('none_compared')}", [],
-                    'charmaps_not_run', {'why': w('none_compared')})
+                    f"transliterations. {rec['why']}", [],
+                    'charmaps_not_run', {'why': rec['why']})
     elif not changed:
         print(textwrap.fill(
             f"Character sets ({w('label')}): the "
-            f"{len(report.charmaps)} that the {report.builds} locale builds "
+            f"{len(rec['charmaps'])} that the {rec['builds']} locale builds "
             f"{w('builds')} use {w('identical')}.", width=78))
     else:
-        def size(p):
-            name = p[1] if p[0] == p[1] else f"{p[0]} -> {p[1]}"
-            if report.sizes[p] is None:
+        def size(x):
+            name = (x['new'] if x['old'] == x['new']
+                    else f"{x['old']} -> {x['new']}")
+            if x['state'] == 'not compared':
                 return f"{name}: could not be compared (see below)."
-            n, added, removed = report.sizes[p]
-            other = n - added - removed
-            parts = [f"{added} added"] * bool(added) + \
-                [f"{removed} removed"] * bool(removed) + \
-                [f"{other} given other bytes"] * bool(other)
+            parts = [f"{x['added']} added"] * bool(x['added']) + \
+                [f"{x['removed']} removed"] * bool(x['removed']) + \
+                [f"{x['other']} given other bytes"] * bool(x['other'])
             if not parts:
                 # The file changed and no character's bytes did: a comment,
                 # a WIDTH line, the order of two lines.
@@ -537,79 +595,80 @@ def print_charmap_report(report, old, new, words=STEP2_WORDS):
         n = len(changed)
         print(textwrap.fill(
             f"Character sets ({w('label')}): {n} of the "
-            f"{len(report.charmaps)} that the {report.builds} locale builds "
-            f"{w('builds')} use {'differs' if n == 1 else 'differ'}"
+            f"{len(rec['charmaps'])} that the {rec['builds']} locale "
+            f"builds {w('builds')} use {'differs' if n == 1 else 'differ'}"
             f" {w('between')}.", width=78))
-        print(textwrap.fill(' '.join(size(p) for p in changed), width=78))
-        if not report.found and not report.skipped:
-            print(f"No {'compared ' if report.not_compared else ''}build's "
+        print(textwrap.fill(' '.join(size(x) for x in changed), width=78))
+        if not (rec['listed'] or rec['anyway'] or rec['unsettled']
+                or rec['distro']):
+            print(f"No {'compared ' if rec['not_compared'] else ''}build's "
                   f"LC_COLLATE names one of those characters.")
-    plain = [f for f in report.found if f.entry and not f.reason]
-    if plain:
+    if rec.get('listed'):
         print(textwrap.fill(
             f"Locale builds whose LC_COLLATE names one of those characters "
-            f"({len(plain)}), {w('listed_for')}:", width=78))
-        for f in plain:
-            print(f"  {f.entry} ({f.charmaps[1]}): {_chars_phrase(f)}")
-            _print_chars(f)
-    if report.skipped:
+            f"({len(rec['listed'])}), {w('listed_for')}:", width=78))
+        for x in rec['listed']:
+            print(f"  {x['entry']} ({x['new']}): "
+                  f"{_phrase(len(x['codepoints']), x['via'])}")
+            print('\n'.join(_cps_lines(x['codepoints'], '      ')))
+    if rec.get('anyway'):
         print(textwrap.fill(
             f"Locale builds {w('lists_anyway')}, whose LC_COLLATE names one "
             f"of those characters or could not be compared "
-            f"({len(report.skipped)}):", width=78))
-        for f in report.skipped:
-            what = f.entry or f"{f.source} (not in SUPPORTED in this charmap)"
-            print(f"  {what} ({f.charmaps[1]}): "
-                  + (f"could not be compared: {f.reason}" if f.reason
-                     else _chars_phrase(f)))
-    unsettled = [f for f in report.found if f.reason]
-    if unsettled:
-        _warn_block(f"{len(unsettled)} locale build(s) could not be compared "
-                    f"for what their character set does to the characters "
-                    f"their LC_COLLATE names, so they are "
+            f"({len(rec['anyway'])}):", width=78))
+        for x in rec['anyway']:
+            what = (x['entry'] if x['entry'] != '-' else
+                    f"{x['source']} (not in SUPPORTED in this charmap)")
+            print(f"  {what} ({x['new']}): "
+                  + (f"could not be compared: {x['why']}"
+                     if x['state'] == 'not compared'
+                     else _phrase(x['count'], x['via'])))
+    if rec.get('unsettled'):
+        _warn_block(f"{len(rec['unsettled'])} locale build(s) could not be "
+                    f"compared for what their character set does to the "
+                    f"characters their LC_COLLATE names, so they are "
                     f"{w('listed_for')}:",
-                    [f"{f.entry or f.source} ({f.charmaps[1]}): {f.reason}"
-                     for f in unsettled],
+                    [f"{_build(x)} ({x['new']}): {x['why']}"
+                     for x in rec['unsettled']],
                     'charmap_builds_unsettled',
-                    {'builds': [{'build': f.entry or f.source,
-                                 'charmap': f.charmaps[1], 'why': f.reason}
-                                for f in unsettled]})
-    distro = [f for f in report.found if not f.entry and not f.reason]
-    if distro:
+                    {'builds': [{'build': _build(x),
+                                 'charmap': x['new'], 'why': x['why']}
+                                for x in rec['unsettled']]})
+    if rec.get('distro'):
         lines = [textwrap.fill(
-            f"!! {len(distro)} locale(s) that SUPPORTED never builds in a "
-            f"charmap that changed name one of the characters it changed. A "
-            f"distro can build them in it (Red Hat builds en_US in "
-            f"ISO-8859-15), so they are {w('listed_for')}:",
+            f"!! {len(rec['distro'])} locale(s) that SUPPORTED never builds "
+            f"in a charmap that changed name one of the characters it "
+            f"changed. A distro can build them in it (Red Hat builds en_US "
+            f"in ISO-8859-15), so they are {w('listed_for')}:",
             width=78, subsequent_indent='   ')]
-        for f in distro:
-            lines.append(f"     {f.source} ({f.charmaps[1]}): "
-                         f"{_chars_phrase(f)}")
-            lines += _chars_lines(f, '       ')
+        for x in rec['distro']:
+            lines.append(f"     {x['source']} ({x['new']}): "
+                         f"{_phrase(len(x['codepoints']), x['via'])}")
+            lines += _cps_lines(x['codepoints'], '       ')
         _bang('charmap_distro_buildable',
-              {'locales': [{'source': f.source, 'charmap': f.charmaps[1]}
-                           for f in distro]}, lines)
-    if report.unsearched:
+              {'locales': [{'source': x['source'], 'charmap': x['new']}
+                           for x in rec['distro']]}, lines)
+    if rec.get('unsearched'):
         _warn_block("The search for locales a distro can build in a changed "
                     "charmap, which SUPPORTED does not build in it, did not "
                     "run for these charmaps, so no such locale is listed for "
-                    "them:", [f"{name}: {why}"
-                              for name, why in report.unsearched],
+                    "them:", [f"{x['charmap']}: {x['why']}"
+                              for x in rec['unsearched']],
                     'charmap_search_not_run',
-                    {'charmaps': [{'charmap': name, 'why': why}
-                                  for name, why in report.unsearched]})
+                    {'charmaps': [dict(x) for x in rec['unsearched']]})
     print_translit_report(report, new, words, old)
-    if report.not_compared:
-        n = len(report.not_compared)
+    if rec['not_compared']:
+        n = len(rec['not_compared'])
         one = n == 1
         _warn_block(w('not_compared', n=n, y_ies='y' if one else 'ies',
                       s='' if one else 's', is_are='is' if one else 'are',
                       its_their='its' if one else 'their'),
-                    [', '.join(report.not_compared)],
+                    [', '.join(rec['not_compared'])],
                     'charmap_sources_missing',
-                    {'entries': list(report.not_compared),
+                    {'entries': list(rec['not_compared']),
                      'basis': ('measured' if words.builds.startswith(
                          'measured') else 'SUPPORTED')})
+    return rec
 
 
 def print_translit_report(report, new, words=STEP2_WORDS, old=None):
