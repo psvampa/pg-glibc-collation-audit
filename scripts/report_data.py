@@ -193,9 +193,13 @@ def rules_by_name(path):
                    'why': "step 2 names them only for two machines' own "
                           'locale sources'}
     else:
-        # step 2 writes no key (None) for a locale built into glibc.
+        # step 2 writes no key and no source (None) for a locale built
+        # into glibc.
+        for name, v in locales.items():
+            if not (isinstance(v, list) and len(v) == 5):
+                raise ReportError(f'{path}: the rules of {name!r} are {v!r}')
         locales = {'state': 'reported', 'by_name': {
-            name: dict(zip(('key', 'rules', 'why', 'charmap'),
+            name: dict(zip(('key', 'rules', 'why', 'charmap', 'source'),
                            ['none' if x is None else x for x in v]))
             for name, v in sorted(locales.items())}}
     return {
@@ -314,6 +318,11 @@ CS_KEYS = {'compared': ['anyway', 'basis', 'builds', 'changed', 'charmaps',
 CS_BASES = ('SUPPORTED', 'measured')
 CS_PAIR_STATES = ('compared', 'not compared')
 CS_ANYWAY_STATES = ('named', 'not compared')
+# What the check settled of a file it found something of, strongest first
+# (collation_keys.LISTED_STATES): step 2's rules by name carry it for each
+# measured name built from that file.
+LISTED_STATES = ('changed', 'transliteration', 'not compared',
+                 'transliteration not compared')
 
 
 def step2_character_sets(path):
@@ -3286,6 +3295,69 @@ def _transliteration(where, s2, w):
                                   f'{v!r} in step 2\'s rules by name')
 
 
+def _charmap_by_name(where, s2, w):
+    """On two machines, what step 2's rules by name carry of its character
+    set check for each measured name, held to the check's rows of the same
+    run in both directions (rules_by_name, collation_keys.listed_sources):
+    each file the check found something of takes the strongest of it, a
+    row with a reason being not compared (of a charmap, or of its
+    transliterations); a name takes that of its key,
+    else of its source; one of neither is not compared where a machine
+    could not trace it to its charmap (step 2's `!!` names_untraced), else
+    '-'. So a name marked with no row behind it, and a row whose names are
+    not marked, are refused alike. C and POSIX are built in: no key, no
+    source, no character set. Where the key is not the name itself it is
+    the source (a name compare_rules does not have goes to its file).
+    Where step 2's `!!` are not reported, a name not compared with no row
+    behind it is not checked."""
+    rb = s2['rules_by_name']
+    if rb['state'] != 'reported' or rb['locales']['state'] != 'reported':
+        return
+    found = {}
+    rows = []
+    cs, tr = s2['character_sets'], s2['transliteration']
+    if cs['state'] == 'reported':
+        rows += [(x, 'not compared' if 'why' in x else 'changed')
+                 for part in ('listed', 'anyway', 'unsettled', 'distro')
+                 for x in cs[part]]
+    if tr['state'] == 'reported':
+        rows += [(x, 'transliteration not compared' if 'why' in x
+                  else 'transliteration')
+                 for part in ('listed', 'unsettled', 'skipped')
+                 for x in tr[part]]
+    for x, state in rows:
+        s = x['source']
+        if s not in found or \
+                LISTED_STATES.index(state) < LISTED_STATES.index(found[s]):
+            found[s] = state
+    untraced = _warnings_of(w, 'step2', 'names_untraced')
+    if untraced is not None:
+        untraced = {x['name'] for d in untraced for x in d['names']}
+    for name, x in sorted(rb['locales']['by_name'].items()):
+        at = f'{where}.by_name[{name!r}]'
+        if x['rules'] == 'built in':
+            if (x['key'], x['source'], x['charmap']) != ('none', 'none', '-'):
+                raise ReportError(f'{at} is {x!r}, built into glibc')
+            continue
+        if not (_is_str(x['source']) and x['source'] != 'none'):
+            raise ReportError(f'{at}.source is {x["source"]!r}')
+        if x['key'] != name and x['key'] != x['source']:
+            raise ReportError(f'{at}: the key {x["key"]!r}, the source '
+                              f'{x["source"]!r}')
+        want = found.get(x['key']) or found.get(x['source'])
+        if want is None:
+            if untraced is None:
+                if x['charmap'] == 'not compared':
+                    continue
+                want = '-'
+            else:
+                want = 'not compared' if name in untraced else '-'
+        if x['charmap'] != want:
+            raise ReportError(f'{at}.charmap is {x["charmap"]!r}, the '
+                              f'character set check of its file '
+                              f'{want!r}')
+
+
 def _not_yet(where, obj):
     _keys(where, obj, ['state', 'why'])
     if obj != NOT_YET:
@@ -4059,7 +4131,7 @@ def load(path):
             _keys(w, lo, ['state', 'by_name'])
             for name, x in lo['by_name'].items():
                 _keys(f'{w}.by_name[{name!r}]', x,
-                      ['key', 'rules', 'why', 'charmap'])
+                      ['key', 'rules', 'why', 'charmap', 'source'])
         _stated(f'{where}.locales', o['locales'],
                 ('reported', 'not applicable'),
                 {'reported': locs, 'not applicable': ['why']})
@@ -4094,6 +4166,7 @@ def load(path):
     _rules('step2.rules', s2, some, run, r['pair'], w, r['step11'])
     _character_sets('step2.character_sets', s2, some, w)
     _transliteration('step2.transliteration', s2, w)
+    _charmap_by_name('step2.rules_by_name.locales', s2, w)
 
     def s11_not_run(where, o):
         _keys(where, o, ['state', 'why', 'not_done'])

@@ -17553,10 +17553,10 @@ class RulesBesideTheVerdicts(unittest.TestCase):
             {'or_IN': ['changed', 'the order changes'],
              'ko_KR.utf8': ['changed', 'the order changes'],
              'mine': ['changed', 'the order changes']},
-            {'or_IN': ['or_IN', 'differs', '', '-'],
-             'ko_KR.utf8': ['ko_KR', 'same', '', '-'],
+            {'or_IN': ['or_IN', 'differs', '', '-', 'or_IN'],
+             'ko_KR.utf8': ['ko_KR', 'same', '', '-', 'ko_KR'],
              'mine': ['mine', 'not compared',
-                      'no locale file of that name', '-']})
+                      'no locale file of that name', '-', 'mine']})
         self.assertEqual(got, {
             ('ko_KR.utf8',): 'the order changes; its rules (step 2) do not',
             ('mine',): 'the order changes; rules (step 2): not compared, no '
@@ -17581,7 +17581,7 @@ class RulesBesideTheVerdicts(unittest.TestCase):
                     got, _ = self.lines(
                         {'x': [state, said]},
                         {'x': ['x', rule, 'no file x on the new side'
-                               if rule == 'not compared' else '', '-']})
+                               if rule == 'not compared' else '', '-', 'x']})
                     self.assertEqual(got, {('x',): f'{said}; {known}; this '
                                            'does not show the order'})
 
@@ -17591,10 +17591,11 @@ class RulesBesideTheVerdicts(unittest.TestCase):
              'b': ['firm', 'unchanged by its compiled sort table'],
              'c': ['firm', 'unchanged by its compiled sort table'],
              'C': ['firm', 'built into glibc']},
-            {'a': ['a', 'differs', '', '-'], 'b': ['b', 'same', '', '-'],
-             'c': ['c', 'not compared', 'why', '-'],
+            {'a': ['a', 'differs', '', '-', 'a'],
+             'b': ['b', 'same', '', '-', 'b'],
+             'c': ['c', 'not compared', 'why', '-', 'c'],
              'C': [None, 'built in', 'built into glibc, no locale file',
-                   '-']})
+                   '-', None]})
         self.assertEqual(got, {('a',): 'unchanged by its compiled sort '
                                        'table; its rules (step 2) differ'})
 
@@ -17602,8 +17603,9 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         got, alone = self.lines(
             {'b': ['firm', 'unchanged by its compiled sort table'],
              'n': ['only new', 'only on the new machine']},
-            {'b': ['b', 'same', '', '-'],
-             'n': ['n', 'not compared', 'no file n on the old side', '-']})
+            {'b': ['b', 'same', '', '-', 'b'],
+             'n': ['n', 'not compared', 'no file n on the old side', '-',
+                   'n']})
         self.assertEqual(got, {})
         self.assertEqual(alone, [m.RULES_NONE])
 
@@ -17611,10 +17613,10 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         got, _ = self.lines(
             {x: ['changed', 'the order changes']
              for x in ('sv_SE', 'swedish', 'sv_FI', 'ko_KR.utf8')},
-            {'sv_SE': ['sv_SE', 'differs', '', '-'],
-             'swedish': ['swedish', 'differs', '', '-'],
-             'sv_FI': ['sv_FI', 'differs', '', 'changed'],
-             'ko_KR.utf8': ['ko_KR', 'same', '', '-']})
+            {'sv_SE': ['sv_SE', 'differs', '', '-', 'sv_SE'],
+             'swedish': ['swedish', 'differs', '', '-', 'sv_SE'],
+             'sv_FI': ['sv_FI', 'differs', '', 'changed', 'sv_FI'],
+             'ko_KR.utf8': ['ko_KR', 'same', '', '-', 'ko_KR']})
         self.assertEqual(got, {
             ('ko_KR.utf8',): 'the order changes; its rules (step 2) do not',
             ('sv_FI',): "the order changes, and so do its rules (step 2); a "
@@ -17626,7 +17628,7 @@ class RulesBesideTheVerdicts(unittest.TestCase):
     def test_the_character_set_where_step_2_could_not_look(self):
         got, alone = self.lines(
             {'x': ['changed', 'the order changes']},
-            {'x': ['x', 'same', '', 'not compared']},
+            {'x': ['x', 'same', '', 'not compared', 'x']},
             charmaps={'state': 'not run',
                       'why': 'The file of the machine holds none.'})
         self.assertEqual(got, {('x',): 'the order changes; its rules (step '
@@ -17657,8 +17659,8 @@ class RulesBesideTheVerdicts(unittest.TestCase):
                     {'x': ['changed', 'the order changes'],
                      'y': ['far', 'unchanged only as far as step 11 '
                            'measured it']},
-                    {'x': ['x', 'same', '', state],
-                     'y': ['y', 'same', '', state]})
+                    {'x': ['x', 'same', '', state, 'x'],
+                     'y': ['y', 'same', '', state, 'y']})
                 self.assertEqual(got, {
                     ('x',): 'the order changes; its rules (step 2) do not'
                             + tail,
@@ -17718,7 +17720,7 @@ class RulesBesideTheVerdicts(unittest.TestCase):
                          {'state': 'one tree', 'why': None}):
             with self.subTest(charmaps=charmaps):
                 self.refused({'x': ['changed', 'the order changes']},
-                             {'x': ['x', 'same', '', '-']},
+                             {'x': ['x', 'same', '', '-', 'x']},
                              "step 2's character set check ended in",
                              charmaps=charmaps)
         self.refused({'x': ['changed', 'the order changes']}, {},
@@ -17728,7 +17730,7 @@ class RulesBesideTheVerdicts(unittest.TestCase):
 
     def test_two_runs_are_refused(self):
         self.refused({'x': ['changed', 'the order changes']},
-                     {'x': ['x', 'same', '', '-']},
+                     {'x': ['x', 'same', '', '-', 'x']},
                      'are of different measurements',
                      measurements=['c' * 64, 'b' * 64])
 
@@ -17736,18 +17738,26 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         self.refused({'x': ['changed', 'the order changes']}, {},
                      'step 2 gave no rules for x')
         self.refused({'x': ['changed', 'the order changes']},
-                     {'x': ['x', 'same', '', '-'],
-                      'y': ['y', 'same', '', '-']},
+                     {'x': ['x', 'same', '', '-', 'x'],
+                      'y': ['y', 'same', '', '-', 'y']},
                      'step 2 gave rules for y')
+
+    def test_rules_of_five_fields_only(self):
+        """Step 2's rules by name are [key, rules, why, charmap, source]:
+        four or six are refused, never unpacked."""
+        for v in (['x', 'same', '', '-'], ['x', 'same', '', '-', 'x', 'y']):
+            with self.subTest(v=v):
+                self.refused({'x': ['changed', 'the order changes']},
+                             {'x': v}, 'step 2 gave x the rules')
 
     def test_a_state_it_does_not_know_is_refused(self):
         self.refused({'x': ['moved', 'it moved']},
-                     {'x': ['x', 'same', '', '-']}, "the verdict 'moved'")
+                     {'x': ['x', 'same', '', '-', 'x']}, "the verdict 'moved'")
         self.refused({'x': ['changed', 'the order changes']},
-                     {'x': ['x', 'similar', '', '-']},
+                     {'x': ['x', 'similar', '', '-', 'x']},
                      "the rules state 'similar'")
         self.refused({'x': ['changed', 'the order changes']},
-                     {'x': ['x', 'same', '', 'maybe']},
+                     {'x': ['x', 'same', '', 'maybe', 'x']},
                      "the charmap state 'maybe'")
 
     def test_a_file_of_another_step_is_refused(self):

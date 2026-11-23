@@ -445,7 +445,7 @@ RULES_STATES = (glibc_tree.SAME, glibc_tree.DIFFERS, glibc_tree.NOT_COMPARED,
 
 
 def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
-    """{measured name: [key, state, why, charmap]}: step 2's rules for
+    """{measured name: [key, state, why, charmap, source]}: step 2's rules for
     every locale name measured on either machine, for the cross with step
     11's verdict (locale_order.rules_beside), which takes it from here and
     never works it out again.
@@ -466,7 +466,10 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
     as swedish is built from sv_SE, as step 2's list adds it): 'changed',
     'not compared', 'transliteration' or 'transliteration not compared'
     (16.147, 16.316); else 'not compared' where it could not trace the
-    name to its charmap (UNMAPPED); else '-'."""
+    name to its charmap (UNMAPPED); else '-'. source is the file the name
+    is built from, which charmap was looked up under after key (None for
+    C and POSIX): the run's data file finds the check's rows of a name
+    through it (report_data._charmap_by_name)."""
     import node_charmaps as nc
     untraced = {n for who, names_ in unmapped or () for n, w in names_}
     out = {}
@@ -476,7 +479,7 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
                 continue
             if name in nc.BUILTIN:
                 out[name] = [None, BUILT_IN,
-                             'built into glibc, no locale file', '-']
+                             'built into glibc, no locale file', '-', None]
                 continue
             source = g.locale_source(al.get(name, name))
             key = name if name in got else source
@@ -494,7 +497,7 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
                       f"is none of {', '.join(RULES_STATES)}")
             charmap = (keyed.get(key) or keyed.get(source)
                        or ('not compared' if name in untraced else '-'))
-            out[name] = [key, state, why, charmap]
+            out[name] = [key, state, why, charmap, source]
     return out
 
 
