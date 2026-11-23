@@ -38,6 +38,7 @@ import time
 import unittest
 from unittest import mock
 
+import _harness
 from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       STEP2_C, SUMMARY_STEP2,
                       Step2Report, after_compared, step2_characters_file, before_compared,
@@ -3196,6 +3197,9 @@ class _StepsOnBuilds:
         p = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, script), *args,
              '--repo', self.repo], capture_output=True, env=env, cwd=self.tmp)
+        if script == 'filter_lc_collate_changes.py':
+            _harness.step2_ran(p.stdout.decode('utf-8', 'replace'), out,
+                               list(args))
         return (p.returncode, p.stdout.decode('utf-8', 'replace'),
                 p.stderr.decode('utf-8', 'replace'), out)
 
@@ -3233,7 +3237,8 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
                 'step2_changed_collate',
                 'step2_not_compared', 'step2_removed_locales')]
             + ['step2_rules_characters.%s..%s.tsv' % (B275, B283),
-               'step2_rules_by_name.%s..%s.json' % (B275, B283)]))
+               'step2_rules_by_name.%s..%s.json' % (B275, B283),
+               'step2_rules.%s..%s.json' % (B275, B283)]))
         # An added file: the old build's own sources are the answer.
         self.assertIn("%s's own locale sources do not have these files, so "
                       "that build ships none of these locales." % B275,
@@ -3370,6 +3375,8 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
                 os.path.join(SCRIPTS_DIR, 'filter_lc_collate_changes.py'),
                 old, new), capture_output=True,
             env=self.step2_environ(env), cwd=self.tmp)
+        _harness.step2_ran(p.stdout.decode('utf-8', 'replace'), out,
+                           [old, new])
         self.assertEqual(p.returncode, 0, p.stderr.decode()[-2000:])
 
         def lines(kind):

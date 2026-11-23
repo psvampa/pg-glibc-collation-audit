@@ -1872,7 +1872,9 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         later9 = b9.replace('-275.', '-283.')
         assert later9 != b9
         files = {
-            'link': (cls.machine_file('old.tar', few8, OLD),
+            'link': (cls.machine_file('old.tar', few8, OLD,
+                                      links=(('de_IT', 'de_DE'),
+                                             ('it_CH', 'it_IT'))),
                      cls.machine_file('new.tar', few9, MID,
                                       links=(('de_IT', 'de_DE'),
                                              ('zz_LINK', 'de_DE')),
@@ -1918,28 +1920,48 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertTrue(end, n)
         return body
 
+    def test_links_on_both_machines_each_with_its_reasons(self):
+        """An entry skipped on both machines, one on the old machine only
+        that the new one holds as a file, one on the new machine only: the
+        report loads (check_report ran on it), and step2.rules names each
+        with its reasons, old first, and whether the totals count it."""
+        import report_data
+        out_dir = self.runs['link'][0]
+        [path] = glob.glob(os.path.join(out_dir, 'report.*.json'))
+        unread = report_data.load(path)['step2']['rules']['unread']
+        self.assertEqual(unread, [
+            {'name': 'de_IT', 'counted': False,
+             'why': ['symlink on the old machine',
+                     'symlink on the new machine']},
+            {'name': 'it_CH', 'counted': True,
+             'why': ['symlink on the old machine']},
+            {'name': 'zz_LINK', 'counted': False,
+             'why': ['symlink on the new machine']}])
+
     def test_a_link_is_named_not_compared_never_added_or_removed(self):
         out = self.out('link')
         step2 = flat(self.step(out, 2))
         self.assertIn("Not compared, not read among a machine's locale "
-                      "sources (2): de_IT (symlink on the new machine), "
-                      "zz_LINK (symlink on the new machine)", step2)
+                      "sources (3): de_IT (symlink on the old machine; "
+                      "symlink on the new machine), it_CH (symlink on the "
+                      "old machine), zz_LINK (symlink on the new machine)",
+                      step2)
         listed = re.search(
             r'Listed in the summary \(\d+\): ([^.]*?)(?: Not |$)', step2)
         self.assertTrue(listed, step2)
         names = listed.group(1).replace(',', ' ').split()
-        for name in ('de_IT', 'zz_LINK'):
+        for name in ('de_IT', 'it_CH', 'zz_LINK'):
             with self.subTest(name=name):
                 self.assertIn(name, names)
         # Step 2's own list of what is gone, which the summary's Removed
-        # prints: neither link is in it, nor among the files added.
+        # prints: no link is in it, nor among the files added.
         out_dir = self.runs['link'][0]
         lists = glob.glob(os.path.join(out_dir, 'step2_removed_locales.*.txt'))
         self.assertEqual(len(lists), 1, lists)
         with open(lists[0], encoding='utf-8') as f:
             gone = f.read()
-        self.assertNotIn('de_IT', gone)
-        self.assertNotIn('zz_LINK', gone)
+        for name in ('de_IT', 'it_CH', 'zz_LINK'):
+            self.assertNotIn(name, gone)
         unread_line = 'Not compared, not read among'
         self.assertEqual(step2.count(unread_line), 1, step2)
         self.assertNotIn('de_IT', step2.split('Not compared, no file at')[-1]
@@ -1950,9 +1972,14 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                    "locale that is, or copies, one of them is not "
                    "compared: de_IT (symlink), zz_LINK (symlink).")
         self.assertIn(skipped, flat(compared_text(out)))
-        # As data: the two entries and why, of the machine the text names.
-        [data] = [d for k, d in warnings_data(self.runs['link'][0], 'step1')
-                  if k == 'machine_entries_skipped']
+        # As data: each machine's entries and why, old first; `data` is
+        # the new machine's, the one `skipped` names.
+        [old, data] = [d for k, d in warnings_data(self.runs['link'][0],
+                                                   'step1')
+                       if k == 'machine_entries_skipped']
+        self.assertEqual(old['entries'], [
+            {'entry': 'de_IT', 'why': 'symlink'},
+            {'entry': 'it_CH', 'why': 'symlink'}])
         self.assertEqual(data['entries'], [
             {'entry': 'de_IT', 'why': 'symlink'},
             {'entry': 'zz_LINK', 'why': 'symlink'}])
@@ -2081,7 +2108,7 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertEqual(len(state['same_no_charmaps']['why']), 2)
 
     def test_the_names_step_2_could_not_compare_come_apart(self):
-        """13.31: the two links step 2 did not read are listed apart,
+        """13.31: the links step 2 did not read are listed apart,
         under the line that says why, and the rest above it; the count is
         the whole list's."""
         out = self.out('link')
@@ -2095,9 +2122,10 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         above, below = body[:at[0]], body[at[0] + 2:]
         apart = below[:below.index(next(x for x in below
                                         if x.startswith('(')))]
-        self.assertEqual(apart, ['de_IT', 'zz_LINK'])
+        self.assertEqual(apart, ['de_IT', 'it_CH', 'zz_LINK'])
         self.assertTrue(above, body)
-        self.assertFalse({'de_IT', 'zz_LINK'} & set(above), body)
+        self.assertFalse({'de_IT', 'it_CH', 'zz_LINK'} & set(above),
+                         body)
         self.assertRegex(next(x for x in below if x.startswith('(')),
                          r'^\(%d name\(s\); full list: ' %
                          (len(above) + len(apart)))

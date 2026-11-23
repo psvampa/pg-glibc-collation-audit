@@ -28,11 +28,15 @@ names listed, which the summary prints), step2_not_compared.<pair>.txt
 (those of them it could not compare, which the summary sets apart),
 step2_removed_locales.<pair>.txt (files of the old side not on the new
 one), step2_rules_characters.<pair>.tsv (each name whose rules differ, and
-the characters named) and step2_rules_by_name.<pair>.json (what was
+the characters named), step2_rules_by_name.<pair>.json (what was
 compared, what became of the character set check, and, for two machines'
 files whose sources it compared, the rules of every locale name measured
 on either machine, which audit.sh sets beside step 11's verdict:
-rules_by_name). Under audit.sh, each `!!` it prints is also written as
+rules_by_name), and step2_rules.<pair>.json (what it prints of its
+rules: the totals, the groups whose rules differ, the files only one side
+has, the entries of a machine's sources not read and the notes under its
+list, which it prints from that record: write_rules). Under audit.sh,
+each `!!` it prints is also written as
 data to the file PG_GLIBC_AUDIT_WARNINGS names
 (glibc_locale_data.record_warning).
 
@@ -667,33 +671,64 @@ def sort_out(got, old_tree, new_tree):
     return differs, added, removed, listed
 
 
-def print_differs(got, differs, tsv_path):
-    """Each group of names with the same answer, and what it names. Every
-    rule can change: the count, and the characters in `tsv_path`; a
-    count of characters is never printed where it is not known, and an
-    empty list is said in words."""
-    print()
-    if not differs:
-        print("Rules differ: none.")
-        return
-    print(f"Rules differ ({len(differs)}):")
+# What a group whose rules differ says of its characters (differ_groups).
+CHARACTER_STATES = ('listed', 'counted', 'none named', 'not known')
+
+
+def differ_groups(got, differs):
+    """Each group of names with the same answer, as print_differs prints
+    it: the names, whether every rule can change, and its characters:
+    'listed' (printed, every_rule false), 'counted' (their count, every
+    rule can change; the code points are in the characters file),
+    'none named', or 'not known' with why."""
     groups = collections.OrderedDict()
     for name in differs:
         r = got[name]
         groups.setdefault((r.chars, r.every_rule, r.why), []).append(name)
+    out = []
     for (chars, every, why), names in groups.items():
-        print(_fill(', '.join(shown_name(n) for n in names), '  '))
         if chars is None:
-            print(_fill(f"which characters is not known: {why}"))
+            if not isinstance(why, str):
+                raise ValueError(f'characters not known, with why {why!r}')
+            c = {'state': 'not known', 'why': why}
         elif not chars:
-            print(_fill("the lines that count name no character"))
+            c = {'state': 'none named'}
         elif every:
-            print(_fill(f"{len(chars)} character(s) named by the lines that "
+            c = {'state': 'counted', 'count': len(chars)}
+        else:
+            c = {'state': 'listed', 'codepoints': list(chars)}
+        out.append({'names': [shown_name(n) for n in names],
+                    'every_rule': bool(every), 'characters': c})
+    return out
+
+
+def print_differs(groups, tsv_path):
+    """Each group of differ_groups, and what it names. Every rule can
+    change: the count, and the characters in `tsv_path`; a count of
+    characters is never printed where it is not known, and an empty list
+    is said in words."""
+    print()
+    if not groups:
+        print("Rules differ: none.")
+        return
+    print(f"Rules differ ({sum(len(x['names']) for x in groups)}):")
+    for x in groups:
+        print(_fill(', '.join(x['names']), '  '))
+        c = x['characters']
+        if c['state'] == 'not known':
+            print(_fill(f"which characters is not known: {c['why']}"))
+        elif c['state'] == 'none named':
+            print(_fill("the lines that count name no character"))
+        elif c['state'] == 'counted':
+            print(_fill(f"{c['count']} character(s) named by the lines that "
                         f"changed or are read otherwise; listed in "
                         f"{tsv_path}"))
+        elif c['state'] == 'listed':
+            print_characters([chr(v) if v < 0x110000 else v
+                              for v in c['codepoints']])
         else:
-            print_characters([chr(c) if c < 0x110000 else c for c in chars])
-        if every:
+            raise ValueError(f"characters {c!r}")
+        if x['every_rule']:
             print(_fill("a changed line decides how other lines are read or "
                         "where other rules sort, so every rule can change"))
 
@@ -722,15 +757,23 @@ def print_added(added, renamed_from, supported, old_side, old_name,
     them is not known, so the list is a `!!` the summary repeats (16.123);
     C is left to print_c_utf8's `!!`, which a tag without the file always
     prints, so that the fact is said once."""
+    record = {'state': 'none', 'rows': []}
     if not added:
-        return
-    lines = []
+        return record
+    notice = g._is_tag(old_side)
     for name in added:
         spelt = supported.get(name)
-        tail = ', '.join(spelt) if spelt else missing
-        if name in renamed_from:
-            tail += f"; renamed from {shown_name(renamed_from[name])}"
-        lines.append((name, f"{shown_name(name)} -> {tail}"))
+        record['rows'].append({
+            'name': shown_name(name),
+            # Under an old tag, C is said by the C.UTF-8 `!!` alone.
+            'spellings': {'state': C_NOTICE}
+            if notice and name == 'C' else list(spelt) if spelt else
+            {'state': MISSING_STATES[missing]},
+            'renamed_from': shown_name(renamed_from[name])
+            if name in renamed_from else '-'})
+    record['state'] = 'notice' if notice else 'plain'
+    lines = [(name, added_line(row))
+             for name, row in zip(added, record['rows'])]
     if g._is_tag(old_side):
         rest = [(name, line) for name, line in lines if name != 'C']
         if rest:
@@ -766,6 +809,32 @@ def print_added(added, renamed_from, supported, old_side, old_name,
             {'old': old_name, 'new': new_name,
              'locales': [{'name': shown_name(n), 'why': unread[n]}
                          for n in added if n in unread]})
+    return record
+
+
+def added_line(row):
+    """A file only the new side has, as print_added prints it, from its
+    record."""
+    sp = row['spellings']
+    if sp == {'state': C_NOTICE}:
+        return None     # never printed: the C.UTF-8 `!!` says it
+    tail = (', '.join(sp) if isinstance(sp, list) else
+            {v: k for k, v in MISSING_STATES.items()}[sp['state']])
+    if row['renamed_from'] != '-':
+        tail += f"; renamed from {row['renamed_from']}"
+    return f"{row['name']} -> {tail}"
+
+
+# The words print_added puts where a file only the new side has is in no
+# list of the builds, and the state its record gives them.
+MISSING_STATES = {'(not in SUPPORTED)': 'not in SUPPORTED',
+                  '(not measured on that machine)':
+                  'not measured on that machine'}
+# C under an old tag: its line is the C.UTF-8 `!!`'s (print_c_utf8).
+C_NOTICE = 'in the C.UTF-8 notice'
+# How the files only the new side has are said: none, a plain block (the
+# old side is a build), or a `!!` (the old side is a tag or a commit).
+ADDED_STATES = ('none', 'plain', 'notice')
 
 
 def print_c_utf8(sides, differs):
@@ -791,15 +860,20 @@ def print_c_utf8(sides, differs):
 
 
 def print_removed(removed, renamed_to, new_side, new_name, named='tag'):
+    """The not-compared files only the old side has, as printed: [{name,
+    renamed_to or '-'}]."""
+    record = [{'name': shown_name(name),
+               'renamed_to': shown_name(renamed_to[name])
+               if name in renamed_to else '-'} for name in removed]
     if not removed:
-        return
+        return record
     print()
     print(_fill(f"Not compared, no file at {new_name} ({len(removed)}), "
                 f"listed under Removed in the summary:", '', '   '))
-    for name in removed:
-        extra = (f" (renamed to {shown_name(renamed_to[name])})"
-                 if name in renamed_to else '')
-        print(f"  {shown_name(name)}{extra}")
+    for x in record:
+        extra = (f" (renamed to {x['renamed_to']})"
+                 if x['renamed_to'] != '-' else '')
+        print(f"  {x['name']}{extra}")
     if g._is_tag(new_side):
         print(_fill("Unless its distro ships the file anyway, which an "
                     f"upstream {named} cannot show, on the new system a "
@@ -810,6 +884,19 @@ def print_removed(removed, renamed_to, new_side, new_name, named='tag'):
         print(_fill("On the new system, a database whose locale is one "
                     "of these does not connect, and a collation of one "
                     "gives an error when it is used.", '   '))
+    return record
+
+
+def write_rules(slug, record):
+    """Write step2_rules.<pair>.json, what step 2 prints of its rules:
+    {'state': 'not compared', 'why': ...} where it compared nothing, else
+    its totals, the groups whose rules differ, the files only one side
+    has, the entries of a machine's sources not read, and the two notes
+    under its list. Written on every route, so that a missing file means
+    step 2 did not get there; through named(), as the screen."""
+    import json
+    g.write_list(f"step2_rules.{slug}.json",
+                 [g.named(json.dumps(dict(record, step=2), sort_keys=True))])
 
 
 def print_listed(got, listed):
@@ -951,6 +1038,7 @@ def _main(opts):
                      characters_rows({}, []))
         write_rules_by_name(slug, noun, (old_name, new_name), machine,
                             charmaps, (old_side, new_side), nothing, what)
+        write_rules(slug, {'state': 'not compared', 'why': what})
     else:
         early = (predates_lr_getc_fix(repo, old),
                  predates_lr_getc_fix(repo, new))
@@ -993,29 +1081,39 @@ def _main(opts):
         print(_fill(f"The sort rules localedef builds for each locale at "
                     f"{old_name} and at {new_name}, every `copy` followed, "
                     f"compared statement by statement:", ''))
-        print(_fill(f"{len(got)} name(s), locale files and locale.alias "
-                    f"aliases: {n_same} the same, {len(differs)} differ, "
-                    f"{len(got) - n_same - len(differs)} not compared.",
-                    '  '))
+        totals = {'names': len(got), 'same': n_same,
+                  'differ': len(differs),
+                  'not_compared': len(got) - n_same - len(differs)}
+        print(_fill(f"{totals['names']} name(s), locale files and "
+                    f"locale.alias aliases: {totals['same']} the same, "
+                    f"{totals['differ']} differ, "
+                    f"{totals['not_compared']} not compared.", '  '))
         print(_fill(NOT_COMPARED_HERE, '  '))
-        print_differs(got, differs, tsv)
+        groups = differ_groups(got, differs)
+        print_differs(groups, tsv)
         g.write_list(f"step2_rules_characters.{slug}.tsv",
-                     characters_rows(got, differs))
+                     [g.named(x) for x in characters_rows(got, differs)])
         unresolved = new_tree.unresolved()
-        print_added(added, renamed_from, supported[1], old_side, old_name,
+        added_rec = print_added(
+                    added, renamed_from, supported[1], old_side, old_name,
                     '(not measured on that machine)' if machine
                     else '(not in SUPPORTED)',
                     {n: unresolved[n] for n in added if n in unresolved},
                     new_name, g.side_class(repo, old_side))
-        print_removed(removed, renamed_to, new_side, new_name,
-                      g.side_class(repo, new_side))
+        removed_rec = print_removed(removed, renamed_to, new_side,
+                                    new_name, g.side_class(repo, new_side))
         print_listed(got, listed)
-        if unread:
+        # counted: whether the totals count it among the names not
+        # compared (compare_rules has it: the other side's tree holds it).
+        unread_rec = [{'name': shown_name(n), 'why': list(w),
+                       'counted': n in got}
+                      for n, w in sorted(unread.items())]
+        if unread_rec:
             print()
             print(_fill(f"Not compared, not read among a machine's locale "
-                        f"sources ({len(unread)}): "
-                        + ', '.join(f"{shown_name(n)} ({'; '.join(w)})"
-                                    for n, w in sorted(unread.items())),
+                        f"sources ({len(unread_rec)}): "
+                        + ', '.join(f"{x['name']} ({'; '.join(x['why'])})"
+                                    for x in unread_rec),
                         '', '  '))
         print_c_utf8(((old_side, old_tree, old_name),
                       (new_side, new_tree, new_name)), differs)
@@ -1105,17 +1203,25 @@ def _main(opts):
         # SUPPORTED's note: a machine's file holds no SUPPORTED, and what a
         # machine builds is what was measured on it (step 11).
         unbuilt = [] if machine else [
-            n for n in names if n in sources
+            shown_name(n) for n in names if n in sources
             and n not in supported[0] and n not in supported[1]]
         if unbuilt:
             print(_fill("Not listed in localedata/SUPPORTED (not built by "
                         "default, so normally absent from `locale -a`): "
-                        + ', '.join(shown_name(n) for n in unbuilt), '  '))
-        if not_ascii:
+                        + ', '.join(unbuilt), '  '))
+        shown_ascii = [g.shown(n) for n in not_ascii]
+        if shown_ascii:
             print(_fill("Not listed: alias(es) whose name is not ASCII; "
                         "PostgreSQL never imports such a name as a "
-                        "collation: "
-                        + ', '.join(g.shown(n) for n in not_ascii), '  '))
+                        "collation: " + ', '.join(shown_ascii), '  '))
+        write_rules(slug, {
+            'state': 'compared', 'totals': totals, 'differ': groups,
+            'added': added_rec, 'removed': removed_rec, 'unread': unread_rec,
+            'unbuilt': ({'state': 'not applicable',
+                         'why': "a machine's file holds no SUPPORTED"}
+                        if machine else {'state': 'listed',
+                                         'names': unbuilt}),
+            'not_ascii': shown_ascii})
 
     # Written whether or not they are empty, and named after the pair: an
     # empty file for THIS pair is a different fact from a leftover one.

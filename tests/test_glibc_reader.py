@@ -1757,6 +1757,8 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
             _harness.SCRIPTS_DIR, script)] + list(args),
             cwd=_harness.SCRIPTS_DIR, env=env, capture_output=True)
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        if script == 'filter_lc_collate_changes.py':
+            _harness.step2_ran(out, self.out, list(args))
         self.assertEqual(0, p.returncode, out)
         return out
 
@@ -2703,6 +2705,7 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
             env=dict(os.environ, PG_GLIBC_AUDIT_OUT=cls.out))
         cls.rc = p.returncode
         cls.text = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        _harness.step2_ran(cls.text, cls.out, [cls.old, cls.new])
 
     @classmethod
     def tearDownClass(cls):
@@ -2896,6 +2899,7 @@ class _StepTwoNames(object):
             env=dict(os.environ, PG_GLIBC_AUDIT_OUT=cls.out))
         cls.rc = p.returncode
         cls.text = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        _harness.step2_ran(cls.text, cls.out, [cls.old, cls.new])
 
     @classmethod
     def tearDownClass(cls):
