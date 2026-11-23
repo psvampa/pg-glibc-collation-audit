@@ -6,13 +6,15 @@ change.
 Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
-only inside a sentence (step 2's transliterations and the provenance
-of each side) is 'not yet reported': a later step of the work turns
-each one into data (branch 24 of the plan). What step 2 prints of its
-rules is data: step2_rules.<pair>.json, read into step2.rules and tied
-to the other facts of the run (_rules); and so is what it prints of its
-character set check: step2_character_sets.<pair>.json, read into
-step2.character_sets (_character_sets).
+only inside a sentence (the provenance of each side) is 'not yet
+reported': a later step of the work turns it into data (branch 24 of
+the plan). What step 2 prints of its rules is data:
+step2_rules.<pair>.json, read into step2.rules and tied to the other
+facts of the run (_rules); and so is what it prints of its character
+set check: step2_character_sets.<pair>.json, read into
+step2.character_sets (_character_sets), and of the collating elements
+built out of transliterations: step2_transliteration.<pair>.json, read
+into step2.transliteration (_transliteration).
 The `!!` notices of steps 0, 1, 2 and 11
 are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
@@ -334,6 +336,49 @@ def step2_character_sets(path):
     return out
 
 
+# What step2_transliteration says (node_charmaps.translit_record where the
+# character set check compared builds, else what became of that check:
+# write_transliteration), its 'compared' given as 'reported'; the line it
+# opens with (node_charmaps.TRANSLIT_LINES) and the counts each line says.
+TR_KEYS = {'compared': ['line', 'listed', 'skipped', 'state', 'step',
+                        'unsettled'],
+           'no change': ['state', 'step'],
+           'not run': ['state', 'step', 'why'],
+           'one commit': ['state', 'step'], 'one tree': ['state', 'step'],
+           'not read': ['state', 'step', 'why']}
+TR_STATES = ('reported', 'no change', 'not run', 'one commit', 'one tree',
+             'not read')
+TR_SKIPPED_STATES = ('built differently', 'not compared')
+TR_LINES = {'elements': ['elements', 'builds', 'changed'],
+            'unmoved': ['unmoved'], 'none': [], 'listed already': [],
+            'no line': []}
+
+
+def step2_transliteration(path):
+    """Step 2's record of its transliterations, read as written, its state
+    'compared' given as 'reported'; load() checks it."""
+    if not os.path.isfile(path):
+        return not_reported(path)
+    lines = _lines(path)
+    if len(lines) != 1:
+        raise ReportError(f'{path} is not one line')
+    data = json.loads(lines[0])
+    if not isinstance(data, dict) or data.get('step') != 2 or \
+            data.get('state') not in TR_KEYS:
+        raise ReportError(f'{path} is not what step 2 writes')
+    keys = TR_KEYS[data['state']]
+    if data['state'] == 'compared':
+        if data.get('line') not in TR_LINES:
+            raise ReportError(f'{path} has the line {data.get("line")!r}')
+        keys = sorted(keys + TR_LINES[data['line']])
+    if sorted(data) != keys:
+        raise ReportError(f'{path} has the keys {sorted(data)}')
+    out = {k: v for k, v in data.items() if k != 'step'}
+    if out['state'] == 'compared':
+        out['state'] = 'reported'
+    return out
+
+
 def step2_section(a, run):
     d = a.out_dir
     by_name = rules_by_name(_file(d, f'step2_rules_by_name.{a.pair}.json'))
@@ -385,7 +430,8 @@ def step2_section(a, run):
                              nothing),
         'character_sets': step2_character_sets(
             _file(d, f'step2_character_sets.{a.pair}.json')),
-        'transliteration': NOT_YET,
+        'transliteration': step2_transliteration(
+            _file(d, f'step2_transliteration.{a.pair}.json')),
     }
 
 
@@ -3032,6 +3078,214 @@ def _character_sets(where, s2, some, w):
                                   f'{v!r} in step 2\'s rules by name')
 
 
+def _transliteration(where, s2, w):
+    """step2.transliteration: its shape, then each fact tied to the others
+    of the same run: where the character set check compared no build, the
+    same state and reason as step2.character_sets; 'no change' only where
+    no charmap changed; the line it opens with is the one its counts and
+    lists give; the elements it counts are no fewer than the builds and
+    than those built differently, which are those its list counts where
+    it leaves none to step 2's list; each build is of the charmaps the
+    check read, not one the character set check lists, in step 2's list
+    and not among the names whose rules differ or were not compared, and
+    on two machines a measured name whose rules by name carry it; the
+    builds it could not compare are its `!!`."""
+    import glibc_locale_data as g
+    o, cs = s2['transliteration'], s2['character_sets']
+    if (o['state'] == 'not reported') != (cs['state'] == 'not reported'):
+        raise ReportError(f'{where} is {o["state"]!r}, step2.character_sets '
+                          f'{cs["state"]!r}')
+    if o['state'] == 'not reported':
+        _keys(where, o, ['state', 'why'])
+        return
+    _one_of(f'{where}.state', o['state'], TR_STATES)
+    unsettled_w = _warnings_of(w, 'step2', 'translit_unsettled')
+    if cs['state'] != 'reported':
+        # The character set check compared no build: what it says covers
+        # the transliterations too.
+        want = {k: cs[k] for k in ('state', 'why') if k in cs}
+        if o != want:
+            raise ReportError(f'{where} is {o!r}, step2.character_sets '
+                              f'{want!r}')
+        if unsettled_w:
+            raise ReportError(f'{where}: the `!!` {unsettled_w!r} with no '
+                              f'build compared')
+        return
+    if o['state'] not in ('reported', 'no change'):
+        raise ReportError(f'{where} is {o["state"]!r} where the character '
+                          f'set check compared {cs["builds"]} build(s)')
+    if o['state'] == 'no change':
+        _keys(where, o, ['state'])
+        # Point 6 runs on every pair a charmap changed in
+        # (collation_keys.compare).
+        if cs['changed']:
+            raise ReportError(f'{where} is {o["state"]!r} with '
+                              f'{len(cs["changed"])} charmap(s) changed')
+        if unsettled_w:
+            raise ReportError(f'{where}: the `!!` {unsettled_w!r}')
+        return
+    line = o.get('line')
+    _one_of(f'{where}.line', line, TR_LINES)
+    _keys(where, o, ['state', 'line', 'listed', 'unsettled', 'skipped']
+          + TR_LINES[line])
+    keys = ['entry', 'source', 'old', 'new']
+    rows = []
+    for part, more in (('listed', ['count', 'codepoints', 'via']),
+                       ('unsettled', ['why']), ('skipped', None)):
+        if not isinstance(o[part], list):
+            raise ReportError(f'{where}.{part} is not a list')
+        for i, x in enumerate(o[part]):
+            at = f'{where}.{part}[{i}]'
+            if more is None:
+                _stated(at, x, TR_SKIPPED_STATES,
+                        {'built differently': keys + ['count'],
+                         'not compared': keys + ['why']})
+                if x['state'] == 'built differently' and \
+                        not _is_positive(x['count']):
+                    raise ReportError(f'{at}.count is {x["count"]!r}')
+            else:
+                _keys(at, x, keys + more)
+            if not all(_is_str(x[k]) for k in keys):
+                raise ReportError(f'{at} is {x!r}')
+            if not {x['old'], x['new']} <= set(cs['charmaps']):
+                raise ReportError(f'{at}: {x["old"]} -> {x["new"]}, not '
+                                  f'among the charmaps the builds use')
+            if part == 'skipped':
+                pass
+            elif part == 'listed':
+                if not _is_positive(x['count']):
+                    raise ReportError(f'{at}.count is {x["count"]!r}')
+                if not (isinstance(x['codepoints'], list)
+                        and all(map(_is_count, x['codepoints']))
+                        and x['codepoints'] == sorted(set(x['codepoints']))):
+                    raise ReportError(f'{at}.codepoints is '
+                                      f'{x["codepoints"]!r}')
+                if not _is_strs(x['via']):
+                    raise ReportError(f'{at}.via is {x["via"]!r}')
+            if 'why' in x and not _is_str(x['why']):
+                raise ReportError(f'{at}.why is {x["why"]!r}')
+            # A SUPPORTED entry builds from the file its name names
+            # (collation_keys.supported_builds).
+            if cs['basis'] == 'SUPPORTED' and \
+                    x['source'] != g.locale_source(x['entry']):
+                raise ReportError(f'{at}: {x["entry"]} built from '
+                                  f'{x["source"]}')
+            rows.append((part, x))
+    # The line it opens with, from what it found (print_translit_report).
+    listed, unsettled, skipped = o['listed'], o['unsettled'], o['skipped']
+    # A build compared and built differently is listed, or left to step
+    # 2's list; one not compared says why, either way; every other build
+    # counted is a build compared (collation_keys.compare_translit: each
+    # build of the check ends in one of these, once).
+    sk_built = [x for x in skipped if x['state'] == 'built differently']
+    sk_not = [x for x in skipped if x['state'] == 'not compared']
+    if len(listed) + len(unsettled) + len(skipped) > cs['builds']:
+        raise ReportError(f'{where}: {len(listed)} listed, {len(unsettled)} '
+                          f'not compared and {len(skipped)} left to the '
+                          f'list, of {cs["builds"]} build(s) compared')
+    if line == 'elements':
+        for k in ('elements', 'builds'):
+            if not _is_positive(o[k]):
+                raise ReportError(f'{where}.{k} is {o[k]!r}')
+        if not _is_count(o['changed']):
+            raise ReportError(f'{where}.changed is {o["changed"]!r}')
+        # A build is counted with each element it built at both sides
+        # (collation_keys.compare_translit), and every build it lists was
+        # counted.
+        if not (o['builds'] <= o['elements'] and o['changed'] <= o['elements']
+                and o['builds'] + len(unsettled) + len(sk_not)
+                <= cs['builds']
+                and len(listed) + len(sk_built) <= o['builds']):
+            raise ReportError(f'{where}: {o["elements"]} element(s) of '
+                              f'{o["builds"]} build(s), {o["changed"]} '
+                              f'built differently, {len(listed)} listed, '
+                              f'{cs["builds"]} compared')
+        # Counted before the builds step 2 lists anyway are taken out.
+        n = sum(x['count'] for x in listed + sk_built)
+        if o['changed'] != n:
+            raise ReportError(f'{where}: {o["changed"]} built differently, '
+                              f'its list and those left to the list {n}')
+    else:
+        if listed or sk_built:
+            raise ReportError(f'{where}: {len(listed + sk_built)} build(s) '
+                              f'built differently with the line {line!r}')
+        if line == 'unmoved':
+            if not (_is_positive(o['unmoved'])
+                    and o['unmoved'] + len(unsettled) + len(sk_not)
+                    <= cs['builds']):
+                raise ReportError(f'{where}.unmoved is {o["unmoved"]!r} of '
+                                  f'{cs["builds"]} build(s)')
+        elif line == 'no line':
+            if not unsettled:
+                raise ReportError(f'{where}: no line, and no build it could '
+                                  f'not compare')
+        elif unsettled or (line == 'listed already') != bool(skipped):
+            raise ReportError(f'{where}: the line {line!r} with '
+                              f'{len(unsettled)} build(s) not compared and '
+                              f'{len(skipped)} left to the list')
+    # The `!!` of the builds it could not compare.
+    if unsettled_w is not None:
+        want = [{'builds': [{'build': x['entry'], 'charmap': x['new'],
+                             'why': x['why']} for x in unsettled]}] \
+            if unsettled else []
+        if unsettled_w != want:
+            raise ReportError(f'{where}.unsettled {unsettled!r}, the `!!` '
+                              f'{unsettled_w!r}')
+    # Not a build the character set check lists (collation_keys.left_out).
+    theirs = {x['entry'] for k in ('listed', 'unsettled', 'distro')
+              for x in cs[k] if x['entry'] != '-'}
+    for part, x in rows:
+        if part != 'skipped' and x['entry'] in theirs:
+            raise ReportError(f'{where}.{part}: {x["entry"]}, which the '
+                              f'character set check lists')
+    # Against step 2's list: not among the names whose rules differ or
+    # were not compared, and in the list.
+    shown = lambda n: 'C.UTF-8' if n == 'C' else g.shown(n)
+    ru, ls = s2['rules'], s2['listed']
+    if ru['state'] == 'reported':
+        lw = _warnings_of(w, 'step2', 'rules_not_compared')
+        already = {n for x in ru['differ'] for n in x['names']}
+        already |= {n for d in lw or () for g_ in d['groups']
+                    for n in g_['names']}
+        for part, x in rows:
+            # What it leaves to the list is a name whose rules differ or
+            # were not compared, or a build the character set check lists
+            # (collation_keys.left_out); what it lists is neither.
+            if part == 'skipped':
+                if shown(x['source']) not in already and \
+                        x['entry'] not in theirs:
+                    raise ReportError(f'{where}.skipped: {x["entry"]} is '
+                                      f'listed by nothing else')
+            elif shown(x['source']) in already:
+                raise ReportError(f'{where}.{part}: {x["source"]} is among '
+                                  f'the names whose rules differ or were not '
+                                  f'compared')
+    if ls['state'] == 'reported':
+        names = {shown(n) for n in ls['compared'] + ls['not_compared']}
+        names |= set(ru.get('not_ascii', []))
+        for part, x in rows:
+            if shown(x['source']) not in names:
+                raise ReportError(f'{where}.{part}: {x["source"]} is not in '
+                                  f'step 2\'s list')
+    # On two machines, each build is a name measured on the new one, whose
+    # rules by name carry what the check found of its file, the strongest
+    # of it (collation_keys.listed_sources).
+    rb = s2['rules_by_name']
+    if rb['state'] == 'reported' and rb['machines'] and \
+            rb['locales']['state'] == 'reported':
+        bn = rb['locales']['by_name']
+        for part, x in rows:
+            v = bn.get(x['entry'], {}).get('charmap')
+            built = part == 'listed' or \
+                x.get('state') == 'built differently'
+            ok = (v in ('changed', 'transliteration') if built else
+                  v in ('changed', 'transliteration', 'not compared',
+                        'transliteration not compared'))
+            if not ok:
+                raise ReportError(f'{where}.{part}: {x["entry"]} is '
+                                  f'{v!r} in step 2\'s rules by name')
+
+
 def _not_yet(where, obj):
     _keys(where, obj, ['state', 'why'])
     if obj != NOT_YET:
@@ -3839,7 +4093,7 @@ def load(path):
                               'with machines')
     _rules('step2.rules', s2, some, run, r['pair'], w, r['step11'])
     _character_sets('step2.character_sets', s2, some, w)
-    _not_yet('step2.transliteration', s2['transliteration'])
+    _transliteration('step2.transliteration', s2, w)
 
     def s11_not_run(where, o):
         _keys(where, o, ['state', 'why', 'not_done'])

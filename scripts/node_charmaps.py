@@ -553,15 +553,18 @@ def _build(x):
     return x['entry'] if x['entry'] != '-' else x['source']
 
 
-def print_charmap_report(report, old, new, words=STEP2_WORDS):
+def print_charmap_report(report, old, new, words=STEP2_WORDS,
+                         translit=None):
     """The character set check's lines in step 2's output, printed from
     its record (charmap_record), which it returns; the transliteration's
-    lines (print_translit_report) are printed from REPORT, and are not in
-    the record."""
+    lines are printed from theirs (print_translit_report), which TRANSLIT,
+    a dict, is given."""
     w = lambda field, **more: _said(words, field, old, new, **more)
+    translit = {} if translit is None else translit
     rec = charmap_record(report, old, new, words)
     if report.not_run:
         _charmaps_not_run(rec['why'], w('subject'), w('label'))
+        translit.update(translit_record(report, old, new, words))
         return rec
     print()
     changed = rec.get('changed', [])
@@ -656,7 +659,7 @@ def print_charmap_report(report, old, new, words=STEP2_WORDS):
                               for x in rec['unsearched']],
                     'charmap_search_not_run',
                     {'charmaps': [dict(x) for x in rec['unsearched']]})
-    print_translit_report(report, new, words, old)
+    translit.update(print_translit_report(report, new, words, old))
     if rec['not_compared']:
         n = len(rec['not_compared'])
         one = n == 1
@@ -671,43 +674,103 @@ def print_charmap_report(report, old, new, words=STEP2_WORDS):
     return rec
 
 
+def translit_record(report, old, new, words=STEP2_WORDS):
+    """What print_translit_report prints of point 6 of collation_keys (the
+    collating elements built out of transliterations), as data: 'not run'
+    with the character set check's reason where that check compared no
+    build (print_charmap_report's NOT RUN says the transliterations are
+    not covered); 'no change' where nothing they read changed (no
+    TranslitReport); else 'compared', with the line it prints, which
+    of five (TRANSLIT_LINES) and the counts that line says, the builds
+    it lists, those it could not compare, and how many more it leaves
+    to what step 2 lists already (Report.translit_skipped), each with
+    what it found of it, which is not printed: built differently (how
+    many elements, counted in the line's total) or not compared (why).
+    Each build keeps its source and its old charmap, which are not
+    printed, so that the run's data file can tie it to the list and to
+    the charmaps."""
+    if report.not_run or not report.builds:
+        return {'state': 'not run',
+                'why': charmap_record(report, old, new, words)['why']}
+    t = report.translit
+    if t is None:
+        return {'state': 'no change'}
+
+    def build(f):
+        return {'entry': f.entry, 'source': f.source, 'old': f.charmaps[0],
+                'new': f.charmaps[1]}
+    plain = [f for f in t.found if not f.reason]
+    unsettled = [f for f in t.found if f.reason]
+    skipped = [dict(build(f), state='not compared', why=f.reason)
+               if f.reason else
+               dict(build(f), state='built differently', count=f.changed)
+               for f in report.translit_skipped]
+    rec = {'state': 'compared',
+           'listed': [dict(build(f), count=f.changed,
+                           codepoints=sorted(f.chars), via=list(f.via))
+                      for f in plain],
+           'unsettled': [dict(build(f), why=f.reason) for f in unsettled],
+           'skipped': skipped}
+    if t.elements:
+        rec.update(line='elements', elements=t.elements, builds=t.builds,
+                   changed=t.changed if t.changed is not None
+                   else sum(f.changed for f in plain))
+    elif t.unmoved:
+        rec.update(line='unmoved', unmoved=t.unmoved)
+    elif not unsettled:
+        rec.update(line='none' if not skipped else 'listed already')
+    else:
+        rec.update(line='no line')
+    return rec
+
+
+# The line print_translit_report opens with, by what point 6 found: some
+# elements compared ('elements'), builds not compared because nothing they
+# read changed ('unmoved'), no build that builds one ('none'), every such
+# build listed already ('listed already'), and none ('no line'), where it
+# compared no build and could not compare some: their `!!` says it, under
+# the line on those listed already where there are any.
+TRANSLIT_LINES = ('elements', 'unmoved', 'none', 'listed already',
+                  'no line')
+
+
 def print_translit_report(report, new, words=STEP2_WORDS, old=None):
     """Point 6 of collation_keys: the collating elements built out of
-    transliterations."""
+    transliterations, printed from their record (translit_record), which
+    it returns. Nothing where the character set check compared no build:
+    its NOT RUN says the transliterations are not covered."""
     w = lambda field: _said(words, field, old, new)
-    t = report.translit
-    if not report.builds:
-        return
-    if t is None:
+    rec = translit_record(report, old, new, words)
+    if rec['state'] == 'not run':
+        return rec
+    if rec['state'] == 'no change':
         print(textwrap.fill(
             f"Transliteration (LC_CTYPE): no character set and no locale "
             f"file's LC_CTYPE changed {w('changed_between')}, so no "
             f"collating element is built differently.", width=78))
-        return
-    plain = [f for f in t.found if not f.reason]
-    unsettled = [f for f in t.found if f.reason]
-    if t.elements:
-        n = t.changed if t.changed is not None else sum(
-            f.changed for f in plain)
-        line = (f"Transliteration (LC_CTYPE): {t.elements} collating "
-                f"element{'s' if t.elements != 1 else ''} of {t.builds} "
-                f"locale build{'s' if t.builds != 1 else ''} "
-                f"depend{'' if t.elements != 1 else 's'} on a "
+        return rec
+    plain, unsettled = rec['listed'], rec['unsettled']
+    if rec['line'] == 'elements':
+        e, b, n = rec['elements'], rec['builds'], rec['changed']
+        line = (f"Transliteration (LC_CTYPE): {e} collating "
+                f"element{'s' if e != 1 else ''} of {b} "
+                f"locale build{'s' if b != 1 else ''} "
+                f"depend{'' if e != 1 else 's'} on a "
                 f"transliteration; "
                 + (f"{n or 'none'} {'is' if n < 2 else 'are'} built "
                    f"differently {w('at_new')}."))
-    elif t.unmoved:
-        u = t.unmoved
+    elif rec['line'] == 'unmoved':
+        u = rec['unmoved']
         line = (f"Transliteration (LC_CTYPE): {u} locale build"
                 f"{'s' if u != 1 else ''} may build a collating element out "
                 f"of a transliteration, and nothing "
                 f"{'they read' if u != 1 else 'it reads'} changed "
                 f"{w('changed_between')}.")
-    elif not unsettled and not report.translit_skipped:
+    elif rec['line'] == 'none':
         line = ("Transliteration (LC_CTYPE): no compared locale build "
                 "builds a collating element out of a transliteration.")
-    elif not unsettled:
-        k = len(report.translit_skipped)
+    elif rec['line'] == 'listed already':
+        k = len(rec['skipped'])
         line = (f"Transliteration (LC_CTYPE): the {k} locale build"
                 f"{'s' if k != 1 else ''} that may build a collating "
                 f"element out of a transliteration "
@@ -721,15 +784,15 @@ def print_translit_report(report, new, words=STEP2_WORDS, old=None):
         print(textwrap.fill(
             f"Locale builds whose collating elements are built differently "
             f"({len(plain)}), {w('listed_for')}:", width=78))
-        for f in plain:
-            print(f"  {f.entry} ({f.charmaps[1]}): {f.changed} "
-                  f"element{'s' if f.changed != 1 else ''}, defined in "
-                  f"{', '.join(f.via)}")
+        for x in plain:
+            print(f"  {x['entry']} ({x['new']}): {x['count']} "
+                  f"element{'s' if x['count'] != 1 else ''}, defined in "
+                  f"{', '.join(x['via'])}")
             print_characters([chr(c) if c < 0x110000 else c
-                              for c in sorted(f.chars)],
+                              for c in x['codepoints']],
                              indent='      ', label='transliterated characters')
-    if report.translit_skipped and (t.elements or t.unmoved or unsettled):
-        n = len(report.translit_skipped)
+    if rec['skipped'] and rec['line'] in ('elements', 'unmoved', 'no line'):
+        n = len(rec['skipped'])
         print(textwrap.fill(
             f"{n} more locale build{'s' if n != 1 else ''} with collating "
             f"elements built differently, or not compared, "
@@ -738,11 +801,12 @@ def print_translit_report(report, new, words=STEP2_WORDS, old=None):
         _warn_block(f"{len(unsettled)} locale build(s) could not be compared "
                     f"for the collating elements they build out of "
                     f"transliterations, so they are {w('listed_for')}:",
-                    [f"{f.entry} ({f.charmaps[1]}): {f.reason}"
-                     for f in unsettled],
+                    [f"{x['entry']} ({x['new']}): {x['why']}"
+                     for x in unsettled],
                     'translit_unsettled',
-                    {'builds': [{'build': f.entry, 'charmap': f.charmaps[1],
-                                 'why': f.reason} for f in unsettled]})
+                    {'builds': [{'build': x['entry'], 'charmap': x['new'],
+                                 'why': x['why']} for x in unsettled]})
+    return rec
 
 
 def _tag_charmaps(repo, tag):

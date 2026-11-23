@@ -81,6 +81,12 @@ def step2_files(d, removed='en_US@ampm (deleted)\nxx (renamed to yy)\n',
         dict({k: v for k, v in cm.items() if v is not None}, step=2,
              **({'not_compared': []} if cm['state'] == 'not run'
                 else {}))) + '\n')
+    write(d, f'step2_transliteration.{PAIR}.json', json.dumps(
+        {'step': 2, 'state': 'compared', 'line': 'none', 'listed': [],
+         'unsettled': [], 'skipped': []}
+        if cm['state'] == 'compared' else
+        dict({k: v for k, v in cm.items() if v is not None}, step=2))
+        + '\n')
 
 
 MACHINES = dict(
@@ -617,8 +623,10 @@ class EveryFileWritten(_Folder):
         self.assertEqual(r['run']['machines']['state'], 'not given')
         self.assertEqual(r['step2']['character_sets']['state'],
                          'reported')
-        for part in (r['compared'], r['step2']['transliteration']):
-            self.assertEqual(part['state'], 'not yet reported')
+        self.assertEqual(r['compared']['state'], 'not yet reported')
+        self.assertEqual(r['step2']['transliteration'], {
+            'state': 'reported', 'line': 'none', 'listed': [],
+            'unsettled': [], 'skipped': []})
         self.assertEqual(r['step2']['rules']['totals'], {
             'names': 13, 'same': 10, 'differ': 1, 'not_compared': 2})
         self.assertEqual(r['warnings']['step11'], {
@@ -3529,6 +3537,7 @@ class TheReaderIsStrict(_Folder):
             for part in ('listed', 'rules_characters', 'rules'):
                 r['step2'][part] = {'state': 'not compared', 'why': 'x'}
             r['step2']['character_sets'] = {'state': 'one commit'}
+            r['step2']['transliteration'] = {'state': 'one commit'}
         r = copy.deepcopy(self.good)
         all_three_kept(r)
         p = os.path.join(self.d, 'kept.json')
@@ -3842,6 +3851,259 @@ class StepTwosRulesHangTogether(_Folder):
         self.assertEqual(rd.MISSING_STATES,
                          tuple(f.MISSING_STATES.values()) + (f.C_NOTICE,))
         self.assertEqual(rd.ADDED_STATES, f.ADDED_STATES)
+
+
+class StepTwosTransliterationHangsTogether(_Folder):
+    """step2.transliteration (step 2's step2_transliteration), each fact
+    written wrong alone, refused by load() for the reason named, on two
+    tags, on two machines and where the character set check did not run;
+    and the controls that a right change is read."""
+
+    read = StepTwosRulesHangTogether.read
+    check = StepTwosRulesHangTogether.check
+
+    def files(self, **by_name):
+        """The check compared 3 builds in GB18030 and UTF-8, of which UTF-8
+        changed; the
+        transliterations: 5 elements of 2 builds, sv_SE listed with 3
+        built differently, C not compared, and its `!!`."""
+        step2_files(self.d, **by_name)
+        machines = by_name.get('machines')
+        write(self.d, f'step2_character_sets.{PAIR}.json', json.dumps(
+            {'step': 2, 'state': 'compared',
+             'basis': 'measured' if machines else 'SUPPORTED', 'builds': 3,
+             'charmaps': ['GB18030', 'UTF-8'],
+             'changed': [{'old': 'UTF-8', 'new': 'UTF-8',
+                          'state': 'compared', 'added': 2, 'removed': 0,
+                          'other': 0}],
+             'listed': [], 'anyway': [], 'unsettled': [], 'distro': [],
+             'unsearched': [], 'not_compared': []}) + '\n')
+        sv, c = (('sv_SE', 'C') if machines else ('sv_SE.UTF-8', 'C.UTF-8'))
+        write(self.d, f'step2_transliteration.{PAIR}.json', json.dumps(
+            {'step': 2, 'state': 'compared', 'line': 'elements',
+             'elements': 5, 'builds': 2, 'changed': 3, 'skipped': [],
+             'listed': [{'entry': sv, 'source': 'sv_SE', 'old': 'UTF-8',
+                         'new': 'UTF-8', 'count': 3, 'codepoints': [699],
+                         'via': ['sv_SE']}],
+             'unsettled': [{'entry': c, 'source': 'C', 'old': 'UTF-8',
+                            'new': 'UTF-8', 'why': 'bad'}]}) + '\n')
+        write(self.d, f'step2.{PAIR}.warnings.jsonl', json.dumps(
+            {'kind': 'translit_unsettled', 'text': '!! translit_unsettled',
+             'data': {'builds': [{'build': c, 'charmap': 'UTF-8',
+                                  'why': 'bad'}]}}) + '\n')
+
+    @staticmethod
+    def T(r):
+        return r['step2']['transliteration']
+
+    def test_on_two_tags(self):
+        self.files()
+        warnings_file(self.d, 1, [])
+        good = self.written()
+        T = self.T
+        self.assertEqual(T(good)['line'], 'elements')
+
+        def at(part, i=0):
+            return lambda r, **k: T(r)[part][i].update(**k)
+
+        def line(name, **more):
+            def change(r):
+                for k in ('elements', 'builds', 'changed', 'unmoved'):
+                    T(r).pop(k, None)
+                T(r).update(line=name, **more)
+            return change
+        cases = [
+            ("'not run' where the character set check compared",
+             lambda r: r['step2'].update(transliteration={
+                 'state': 'not run', 'why': 'x'})),
+            ("'not reported', step2.character_sets", lambda r: r[
+                'step2'].update(transliteration=rd.not_reported('x'))),
+            ('with 1 charmap', lambda r: r['step2'].update(
+                transliteration={'state': 'no change'})),
+            ('has the keys', lambda r: T(r).update(unmoved=1)),
+            ('line is', lambda r: T(r).update(line='other')),
+            ('element.*of .* build', lambda r: T(r).update(builds=6)),
+            ('element.*of .* build', lambda r: T(r).update(builds=4)),
+            ('element.*of .* build', lambda r: T(r).update(changed=6)),
+            ('its list', lambda r: T(r).update(changed=2)),
+            ('its list', lambda r: T(r).update(changed=4)),
+            ('builds is', lambda r: T(r).update(builds=0)),
+            ('built differently with the line', line('unmoved',
+                                                     unmoved=1)),
+            ('unmoved is', lambda r: (T(r).update(listed=[]),
+                                      line('unmoved', unmoved=4)(r))),
+            ("the line 'none'", lambda r: (T(r).update(listed=[]),
+                                           line('none')(r))),
+            ("the line 'listed already'", lambda r: (
+                T(r).update(listed=[], unsettled=[]),
+                r['warnings']['step2']['items'].clear(),
+                line('listed already')(r))),
+            ('no line, and no build', lambda r: (
+                T(r).update(listed=[], unsettled=[]),
+                r['warnings']['step2']['items'].clear(),
+                line('no line')(r))),
+            ('skipped is not a list', lambda r: T(r).update(skipped=1)),
+            # Each bound alone.
+            ('element.*of .* build', lambda r: (
+                at('listed')(r, count=1), T(r).update(elements=1, changed=1))),
+            ('element.*of .* build', lambda r: (
+                T(r).update(builds=1, changed=5), T(r)['skipped'].append(
+                    {'entry': 'or_IN.UTF-8', 'source': 'or_IN',
+                     'old': 'UTF-8', 'new': 'UTF-8',
+                     'state': 'built differently', 'count': 2}))),
+            ('left to the list, of 3 build', lambda r: (
+                line('listed already')(r),
+                T(r).update(listed=[], unsettled=[], skipped=[
+                    {'entry': e, 'source': 'or_IN', 'old': 'UTF-8',
+                     'new': 'UTF-8', 'state': 'not compared', 'why': 'w'}
+                    for e in ('or_IN', 'or_IN.UTF-8', 'or_IN.GB18030',
+                              'or_IN.ISO-8859-1')]),
+                r['warnings']['step2']['items'].clear())),
+            ('the `!!`', lambda r: (
+                r['step2']['character_sets'].update(changed=[]),
+                r['step2'].update(transliteration={'state': 'no change'}))),
+            ('listed by nothing else', lambda r: (
+                T(r).update(unsettled=[]),
+                r['warnings']['step2']['items'].clear(),
+                T(r)['skipped'].append(
+                    {'entry': 'sv_SE.UTF-8', 'source': 'sv_SE',
+                     'old': 'UTF-8', 'new': 'UTF-8', 'state': 'not compared',
+                     'why': 'w'}))),
+            ('its list and those left', lambda r: T(r)['skipped'].append(
+                {'entry': 'or_IN.UTF-8', 'source': 'or_IN', 'old': 'UTF-8',
+                 'new': 'UTF-8', 'state': 'built differently', 'count': 2})),
+            ('element.*of .* build', lambda r: T(r)['skipped'].append(
+                {'entry': 'or_IN.UTF-8', 'source': 'or_IN', 'old': 'UTF-8',
+                 'new': 'UTF-8', 'state': 'not compared', 'why': 'w'})),
+            ('built differently with the line', lambda r: (
+                T(r).update(listed=[], changed=0),
+                T(r)['skipped'].append(
+                    {'entry': 'or_IN.UTF-8', 'source': 'or_IN',
+                     'old': 'UTF-8', 'new': 'UTF-8',
+                     'state': 'built differently', 'count': 3}),
+                line('unmoved', unmoved=1)(r))),
+            ('skipped.*count is', lambda r: T(r)['skipped'].append(
+                {'entry': 'or_IN.UTF-8', 'source': 'or_IN', 'old': 'UTF-8',
+                 'new': 'UTF-8', 'state': 'built differently', 'count': 0})),
+            ('unsettled .*the `!!`', lambda r: at('unsettled')(
+                r, old='GB18030', new='GB18030')),
+            ('unsettled .*the `!!`', lambda r: at('unsettled')(r, why='x')),
+            ('built from', lambda r: at('listed')(r, source='zz')),
+            ('built from', lambda r: at('unsettled')(r, entry='zz.UTF-8')),
+            ('not among the charmaps', lambda r: at('listed')(
+                r, old='KOI8-R')),
+            ('count is', lambda r: at('listed')(r, count=0)),
+            ('codepoints is', lambda r: at('listed')(r, codepoints=[2, 1])),
+            ('via is', lambda r: at('listed')(r, via=[])),
+            ('among the names whose rules', lambda r: at('listed')(
+                r, entry='or_IN.UTF-8', source='or_IN')),
+            ("not in step 2's list", lambda r: at('listed')(
+                r, entry='zz_ZZ.UTF-8', source='zz_ZZ')),
+            ('which the character set check lists', lambda r: r['step2'][
+                'character_sets']['listed'].append(
+                    {'entry': 'sv_SE.UTF-8', 'source': 'sv_SE',
+                     'old': 'UTF-8', 'new': 'UTF-8', 'codepoints': [65],
+                     'via': ['sv_SE']})),
+        ]
+        controls = [
+            # Some built differently in builds step 2 lists already.
+            lambda r: (T(r).update(changed=5), T(r)['skipped'].append(
+                {'entry': 'or_IN.UTF-8', 'source': 'or_IN', 'old': 'UTF-8',
+                 'new': 'UTF-8', 'state': 'built differently', 'count': 2})),
+        ]
+        self.check(good, cases, controls)
+
+    def test_on_two_machines(self):
+        locales = dict(MACHINES['locales'],
+                       sv_SE=['sv_SE', 'same', '', 'transliteration'],
+                       C=[None, 'built in', 'built into glibc, no locale '
+                          'file', 'transliteration not compared'])
+        self.files(**dict(MACHINES, locales=locales))
+        step11_files(self.d)
+        warnings_file(self.d, 0, [])
+        warnings_file(self.d, 1, [])
+        warnings_file(self.d, 11, ['same_build', 'other_encoding',
+                                   'closing'])
+        good = self.written(**ON_MACHINES)
+        bn = lambda r: r['step2']['rules_by_name']['locales']['by_name']
+        cases = [
+            ("rules by name", lambda r: bn(r)['sv_SE'].update(charmap='-')),
+            ("rules by name", lambda r: bn(r)['sv_SE'].update(
+                charmap='transliteration not compared')),
+            ("rules by name", lambda r: bn(r)['C'].update(charmap='-')),
+        ]
+        controls = [lambda r: bn(r)['sv_SE'].update(charmap='changed'),
+                    lambda r: bn(r)['C'].update(charmap='not compared')]
+        self.check(good, cases, controls)
+
+    def test_where_the_check_did_not_run(self):
+        step2_files(self.d, charmaps={'state': 'not run', 'why': 'no file'})
+        warnings_file(self.d, 1, [])
+        write(self.d, f'step2.{PAIR}.warnings.jsonl', json.dumps(
+            {'kind': 'charmaps_not_run', 'text': '!! charmaps_not_run',
+             'data': {'why': 'no file'}}) + '\n')
+        good = self.written()
+        self.assertEqual(self.T(good), {'state': 'not run', 'why': 'no file'})
+        T = self.T
+        cases = [
+            ('step2.character_sets', lambda r: T(r).update(why='other')),
+            ('step2.character_sets', lambda r: r['step2'].update(
+                transliteration={'state': 'no change'})),
+            ('with no build compared', lambda r: r['warnings']['step2'][
+                'items'].append(rd.warning_item(
+                    'x', 'translit_unsettled',
+                    {'builds': [{'build': 'a', 'charmap': 'b', 'why': 'c'}]},
+                    '!! translit_unsettled'))),
+        ]
+        self.check(good, cases)
+
+    def test_the_states_are_the_records(self):
+        """The states, lines and keys the reader takes are those
+        translit_record writes, for every one it writes (each of its five
+        lines, a build left to the list built differently and one not
+        compared, nothing changed, the check not run for its two
+        reasons), and, where the check compared nothing, step 2's own
+        states of it (locale_order.CHARMAPS_STATES)."""
+        import collation_keys as ck
+        import locale_order as lo
+        import node_charmaps as nc
+        P = ('UTF-8', 'UTF-8')
+        a = ck.Translit('aa', 'aa.UTF-8', P, 2, {65}, ['aa'], None)
+        u = ck.Translit('bb', 'bb.UTF-8', P, 0, set(), [], 'w')
+        report = ck.Report(None, 3, ['UTF-8'], [P], {P: (1, 1, 0)}, [], [],
+                           [], [], ck.TranslitReport(4, 2, 0, [a], 2),
+                           [a, u])
+        seen = set()
+        for t in (ck.TranslitReport(4, 2, 0, [a], 2),
+                  ck.TranslitReport(0, 0, 1, [], 0),
+                  ck.TranslitReport(0, 0, 0, [], 0),
+                  ck.TranslitReport(0, 0, 0, [u], 0)):
+            for skipped in ([], [a, u]):
+                rec = nc.translit_record(report._replace(
+                    translit=t, translit_skipped=skipped), 't1', 't2')
+                seen.add(rec['line'])
+                self.assertEqual(
+                    sorted(list(rec) + ['step']),
+                    sorted(rd.TR_KEYS['compared'] + rd.TR_LINES[rec['line']]))
+                if skipped:
+                    self.assertEqual(
+                        [x['state'] for x in rec['skipped']],
+                        list(rd.TR_SKIPPED_STATES))
+        self.assertEqual(seen, set(nc.TRANSLIT_LINES))
+        self.assertEqual(tuple(rd.TR_LINES), nc.TRANSLIT_LINES)
+        rec = nc.translit_record(report._replace(translit=None), 't1', 't2')
+        self.assertEqual(sorted(list(rec) + ['step']),
+                         sorted(rd.TR_KEYS['no change']))
+        for r in (report._replace(not_run='w'), report._replace(builds=0)):
+            got = nc.translit_record(r, 't1', 't2')
+            self.assertEqual(sorted(list(got) + ['step']),
+                             sorted(rd.TR_KEYS['not run']))
+            self.assertEqual(got['state'], 'not run')
+        self.assertEqual(set(rd.TR_KEYS) - {'no change'},
+                         set(lo.CHARMAPS_STATES))
+        self.assertEqual(
+            set(rd.TR_STATES),
+            {'reported' if s == 'compared' else s for s in rd.TR_KEYS})
 
 
 class StepTwosCharacterSetsHangTogether(_Folder):
