@@ -746,7 +746,8 @@ def check_report(returncode, out, out_dir):
     (check_step11_counts); and what step 2 printed of its rules, as
     Step2Report reads it, against the report's step2.rules, kept in
     STEP2_RUNS for a test that cuts the step's text out of the run its own
-    way. A run that
+    way; and what it printed of its character set check against the
+    report's step2.character_sets (charmaps_held). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -848,6 +849,13 @@ def check_report(returncode, out, out_dir):
                if lines[j].startswith('== '))
     Step2Report('\n'.join(lines[at[0] + 2:end - 1]), data=rules)
     STEP2_RUNS.append((out, rules))
+    # What it printed of its character set check against the report's
+    # step2.character_sets.
+    cs = s2['character_sets']
+    if cs['state'] == 'not reported':
+        raise AssertionError(f'{path}: step 2 character sets {cs!r}')
+    charmaps_held('\n'.join(lines[at[0] + 2:end - 1]), cs, path,
+                  (r['pair']['old'], r['pair']['new']), r['run']['word'])
     # Two machines' own sources read: the route the summary names.
     machines = (r['run']['machines']['state'] == 'given'
                 and r['run']['route'] == 'builds')
@@ -3360,7 +3368,9 @@ def step2_ran(text, out_dir, args):
     """Keep the record step 2 wrote to OUT_DIR for the run whose output is
     TEXT and whose arguments are ARGS (its two sides the first two that
     are not options or --repo's value); nothing when it wrote none (it
-    stopped first)."""
+    stopped first). And hold what TEXT says of the character set check
+    to the record of it the same run wrote (charmaps_held), which must be
+    there where TEXT prints the check."""
     import glibc_locale_data as g
     sides = [a for a in args if not a.startswith('-')]
     if len(sides) < 2 or not out_dir:
@@ -3373,6 +3383,230 @@ def step2_ran(text, out_dir, args):
     if os.path.isfile(path):
         with open(path, encoding='utf-8') as f:
             STEP2_DATA[text] = json.load(f)
+    path = os.path.join(out_dir, 'step2_character_sets.%s.json'
+                        % g.pair_slug(sides[0], sides[1]))
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8') as f:
+            charmaps_held(text, json.load(f), 'step2_ran', sides[:2])
+    elif _cs_block(text) is not None:
+        raise AssertionError(f'step 2 printed its character set check and '
+                             f'wrote no {path}')
+
+
+CS_HEAD = re.compile(
+    r"Character sets \((?P<label>[^)]*)\): (?:the (?P<n>\d+) that the "
+    r"(?P<b>\d+) locale builds (?P<words>.+?) use are identical at "
+    r"(?P<o>\S+) and (?P<w>\S+?)\.|(?P<k>\d+) of the (?P<n2>\d+) that "
+    r"the (?P<b2>\d+) locale builds (?P<words2>.+?) use "
+    r"(?P<verb>differs|differ) between (?P<o2>\S+) and (?P<w2>\S+?)\.)"
+    r"(?: |$)")
+CS_SIZE = re.compile(
+    r"(?P<name>\S+(?: -> \S+)?): (?:(?P<none>no character changed)|"
+    r"(?P<bad>could not be compared \(see below\))|(?P<parts>\d+ "
+    r"characters? (?:added|removed|given other bytes)(?:, \d+ "
+    r"(?:added|removed|given other bytes))*))\.(?: |$)")
+CS_NONE = re.compile(r"No (?P<c>compared )?build's LC_COLLATE names one of "
+                     r"those characters\.(?: |$)")
+CS_LISTED = ("Locale builds whose LC_COLLATE names one of those characters "
+             "({n}), listed in the summary:")
+CS_ANYWAY = ("Locale builds the summary lists anyway, whose LC_COLLATE "
+             "names one of those characters or could not be compared ({n}):")
+CS_PHRASE = re.compile(r"(?P<n>\d+) characters?, named in (?P<via>.+)")
+
+
+def _cs_block(text):
+    """The lines of the character set check's paragraph without `!!`, from
+    its "Character sets (" line to a blank line, a `!!` or the
+    transliteration's line; None where there is none."""
+    lines = text.split('\n')
+    at = [i for i, x in enumerate(lines) if x.startswith('Character sets (')]
+    if not at:
+        return None
+    if len(at) > 1:
+        raise AssertionError('step 2 printed "Character sets (" twice')
+    out = []
+    for x in lines[at[0]:]:
+        if not x.strip() or x.startswith('!!') or \
+                x.startswith('Transliteration (LC_CTYPE)') or \
+                x.startswith('Locale builds whose collating elements') or \
+                re.match(r'\d+ more locale build', x):
+            break
+        out.append(x)
+    return out
+
+
+def charmaps_read(text):
+    """What step 2 printed of its character set check without `!!`, read
+    strictly: None where it printed no "Character sets (" line, else
+    {'n', 'builds', 'words', 'changed': [(name, state, added, removed,
+    other)], 'none': None or 'compared ' or '', 'listed': [(entry,
+    charmap, count, via, codepoints)], 'anyway': [(what, charmap, state,
+    why or (count, via))]}. A line it cannot place raises."""
+    block = _cs_block(text)
+    if block is None:
+        return None
+    segs = []        # [prose, [rows]]
+    for x in block:
+        if x.startswith('      '):
+            if not segs or not segs[-1][1]:
+                raise AssertionError(f'characters with no build: {x!r}')
+            segs[-1][1][-1].append(x.strip())
+        elif x.startswith('  ') and not x.startswith('   '):
+            if not segs:
+                raise AssertionError(f'a build with no heading: {x!r}')
+            segs[-1][1].append([x[2:]])
+        elif x.startswith(' '):
+            raise AssertionError(f'unexpected line: {x!r}')
+        elif segs and not segs[-1][1]:
+            # textwrap breaks a name at its hyphen (EUC-JP): the line then
+            # ends in the hyphen, and goes on with no blank.
+            segs[-1][0] += ('' if segs[-1][0].endswith('-') else ' ') + x
+        else:
+            segs.append([x, []])
+    got = {'changed': [], 'none': None, 'listed': [], 'anyway': []}
+    t = segs[0][0]
+    m = CS_HEAD.match(t)
+    if not m:
+        raise AssertionError(f'unreadable "Character sets" line: {t!r}')
+    if m['n'] is not None:
+        got.update(n=int(m['n']), builds=int(m['b']), words=m['words'],
+                   k=0, sides=(m['o'], m['w']))
+    else:
+        got.update(n=int(m['n2']), builds=int(m['b2']), words=m['words2'],
+                   k=int(m['k']), sides=(m['o2'], m['w2']))
+        if (m['verb'] == 'differs') != (got['k'] == 1):
+            raise AssertionError(f'{m["verb"]} with {got["k"]}')
+    t = t[m.end():]
+    while True:
+        m = CS_SIZE.match(t)
+        if not m:
+            break
+        if m['none']:
+            x = (m['name'], 'compared', 0, 0, 0)
+        elif m['bad']:
+            x = (m['name'], 'not compared', None, None, None)
+        else:
+            parts = m['parts'].split(', ')
+            parts[0] = re.sub(r' characters? ', ' ', parts[0], count=1)
+            v = {'added': 0, 'removed': 0, 'given other bytes': 0}
+            for part in parts:
+                n, what = part.split(' ', 1)
+                v[what] = int(n)
+            x = (m['name'], 'compared', v['added'], v['removed'],
+                 v['given other bytes'])
+        got['changed'].append(x)
+        t = t[m.end():]
+    if len(got['changed']) != got['k']:
+        raise AssertionError(f'{got["k"]} differ and {len(got["changed"])} '
+                             f'said: {segs[0][0]!r}')
+    m = CS_NONE.match(t)
+    if m:
+        got['none'] = m['c'] or ''
+        t = t[m.end():]
+    heads = [t] + [x for x, _ in segs[1:]]
+    rowss = [r for _, r in segs]
+    for head, rows in zip(heads, rowss):
+        if head == '' and not rows:
+            continue
+        for kind, form in (('listed', CS_LISTED), ('anyway', CS_ANYWAY)):
+            n = len(rows)
+            if head == form.format(n=n):
+                break
+        else:
+            raise AssertionError(f'unreadable heading {head!r} over {rows!r}')
+        if got[kind]:
+            raise AssertionError(f'{kind} printed twice')
+        for row in rows:
+            if kind == 'listed':
+                m = re.fullmatch(r'(\S+) \((\S+)\): (.+)', row[0])
+                ph = CS_PHRASE.fullmatch(m[3]) if m else None
+                if not ph or len(row) < 2:
+                    raise AssertionError(f'unreadable build {row!r}')
+                chars = ' '.join(row[1:])
+                c = re.fullmatch(r'characters its character set changed '
+                                 r'\((\d+)\): (.+)', chars)
+                cps = ([int(h, 16) for h in
+                        re.findall(r'U\+([0-9A-F]{4,6})', c[2])]
+                       if c else None)
+                if not c or len(cps) != int(c[1]) or \
+                        len(cps) != int(ph['n']):
+                    raise AssertionError(f'unreadable characters {row!r}')
+                got['listed'].append((m[1], m[2], int(ph['n']), ph['via'],
+                                      cps))
+            else:
+                if len(row) != 1:
+                    raise AssertionError(f'unreadable build {row!r}')
+                m = re.fullmatch(r'(.+?) \((\S+)\): (?:could not be '
+                                 r'compared: (.+)|(.+))', row[0])
+                if not m:
+                    raise AssertionError(f'unreadable build {row!r}')
+                if m[3] is not None:
+                    got['anyway'].append((m[1], m[2], 'not compared', m[3]))
+                else:
+                    ph = CS_PHRASE.fullmatch(m[4])
+                    if not ph:
+                        raise AssertionError(f'unreadable build {row!r}')
+                    got['anyway'].append((m[1], m[2], 'named',
+                                          (int(ph['n']), ph['via'])))
+    return got
+
+
+def charmaps_held(text, rec, where, sides=None, word=None):
+    """What step 2 printed of its character set check without `!!`
+    (charmaps_read) against REC, the record the same run wrote
+    (step2_character_sets) or the report's step2.character_sets: none of
+    its lines where the check did not compare, else each line field by
+    field; SIDES, the two sides' names, and WORD, what the builds are
+    said at both of (tags, builds or sides), where the caller has them.
+    Its `!!` are held to the run's warnings elsewhere
+    (check_report), and report_data ties them to the record."""
+    def no(what, a, b):
+        raise AssertionError(f'{where}: step 2 printed {what} {a!r}, its '
+                             f'record says {b!r}')
+    got = charmaps_read(text)
+    if rec['state'] not in ('compared', 'reported'):
+        if got is not None:
+            no('"Character sets ("', got, rec)
+        return
+    if got is None:
+        no('no "Character sets (" line', None, rec)
+    measured = rec['basis'] == 'measured'
+    if (got['words'] == 'measured on both machines') != measured or \
+            (not measured and not got['words'].startswith(
+                'in SUPPORTED at both ')):
+        no('the builds as', got['words'], rec['basis'])
+    if word is not None and not measured and \
+            got['words'] != f'in SUPPORTED at both {word}':
+        no('the builds as', got['words'], word)
+    if sides is not None and got['sides'] != tuple(sides):
+        no('the sides', got['sides'], sides)
+    if (got['n'], got['builds']) != (len(rec['charmaps']), rec['builds']):
+        no('the counts', (got['n'], got['builds']),
+           (len(rec['charmaps']), rec['builds']))
+    changed = [(x['new'] if x['old'] == x['new']
+                else f"{x['old']} -> {x['new']}", x['state'],
+                x.get('added'), x.get('removed'), x.get('other'))
+               for x in rec['changed']]
+    if got['changed'] != changed:
+        no('the charmaps that changed', got['changed'], changed)
+    rows = any(rec[k] for k in ('listed', 'anyway', 'unsettled', 'distro'))
+    none = (None if not changed or rows else
+            'compared ' if rec['not_compared'] else '')
+    if got['none'] != none:
+        no('"No build\'s LC_COLLATE"', got['none'], none)
+    listed = [(x['entry'], x['new'], len(x['codepoints']),
+               ', '.join(x['via']) or '?', x['codepoints'])
+              for x in rec['listed']]
+    if got['listed'] != listed:
+        no('the builds it lists', got['listed'], listed)
+    anyway = [(x['entry'] if x['entry'] != '-' else
+               f"{x['source']} (not in SUPPORTED in this charmap)",
+               x['new'], x['state'],
+               x['why'] if x['state'] == 'not compared' else
+               (x['count'], ', '.join(x['via']) or '?'))
+              for x in rec['anyway']]
+    if got['anyway'] != anyway:
+        no('the builds the summary lists anyway', got['anyway'], anyway)
 
 
 MISSING_WORDS = {'not in SUPPORTED': '(not in SUPPORTED)',

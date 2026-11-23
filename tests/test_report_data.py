@@ -69,6 +69,18 @@ def step2_files(d, removed='en_US@ampm (deleted)\nxx (renamed to yy)\n',
                      if data['machines'] else
                      {'state': 'listed', 'names': []}),
          'not_ascii': []}) + '\n')
+    cm = data['charmaps']
+    write(d, f'step2_character_sets.{PAIR}.json', json.dumps(
+        {'step': 2, 'state': 'compared',
+         'basis': 'measured' if data['machines'] else 'SUPPORTED',
+         'builds': 1, 'charmaps': ['UTF-8'], 'changed': [],
+         'listed': [],
+         'anyway': [], 'unsettled': [], 'distro': [],
+         'unsearched': [], 'not_compared': []}
+        if cm['state'] == 'compared' else
+        dict({k: v for k, v in cm.items() if v is not None}, step=2,
+             **({'not_compared': []} if cm['state'] == 'not run'
+                else {}))) + '\n')
 
 
 MACHINES = dict(
@@ -603,7 +615,9 @@ class EveryFileWritten(_Folder):
             'state': 'not run', 'why': "no machines' files",
             'not_done': list(rd.STEP11_NOT_DONE)})
         self.assertEqual(r['run']['machines']['state'], 'not given')
-        for part in (r['compared'], r['step2']['character_sets']):
+        self.assertEqual(r['step2']['character_sets']['state'],
+                         'reported')
+        for part in (r['compared'], r['step2']['transliteration']):
             self.assertEqual(part['state'], 'not yet reported')
         self.assertEqual(r['step2']['rules']['totals'], {
             'names': 13, 'same': 10, 'differ': 1, 'not_compared': 2})
@@ -3514,6 +3528,7 @@ class TheReaderIsStrict(_Folder):
             lists_where_nothing_was_compared(r)
             for part in ('listed', 'rules_characters', 'rules'):
                 r['step2'][part] = {'state': 'not compared', 'why': 'x'}
+            r['step2']['character_sets'] = {'state': 'one commit'}
         r = copy.deepcopy(self.good)
         all_three_kept(r)
         p = os.path.join(self.d, 'kept.json')
@@ -3827,6 +3842,335 @@ class StepTwosRulesHangTogether(_Folder):
         self.assertEqual(rd.MISSING_STATES,
                          tuple(f.MISSING_STATES.values()) + (f.C_NOTICE,))
         self.assertEqual(rd.ADDED_STATES, f.ADDED_STATES)
+
+
+class StepTwosCharacterSetsHangTogether(_Folder):
+    """step2.character_sets (step 2's step2_character_sets), each fact
+    written wrong alone, refused by load() for the reason named, on two
+    tags, on two machines and where the check did not run; and the
+    controls that a right change is read."""
+
+    read = StepTwosRulesHangTogether.read
+    check = StepTwosRulesHangTogether.check
+
+    def cs(self, **over):
+        """A record of the check that compared: UTF-8 changed and
+        compared, GB18030 changed and not compared; sv_SE listed, or_IN
+        (whose rules differ) listed anyway, C not settled in GB18030."""
+        rec = {'step': 2, 'state': 'compared', 'basis': 'SUPPORTED',
+               'builds': 3, 'charmaps': ['GB18030', 'UTF-8'],
+               'changed': [
+                   {'old': 'UTF-8', 'new': 'UTF-8', 'state': 'compared',
+                    'added': 2, 'removed': 0, 'other': 0},
+                   {'old': 'GB18030', 'new': 'GB18030',
+                    'state': 'not compared'}],
+               'listed': [{'entry': 'sv_SE.UTF-8', 'source': 'sv_SE',
+                           'old': 'UTF-8', 'new': 'UTF-8',
+                           'codepoints': [65], 'via': ['sv_SE']}],
+               'anyway': [{'entry': 'or_IN', 'source': 'or_IN',
+                           'old': 'UTF-8', 'new': 'UTF-8', 'state': 'named',
+                           'count': 2, 'via': ['or_IN']}],
+               'unsettled': [{'entry': 'C.GB18030', 'source': 'C',
+                              'old': 'GB18030', 'new': 'GB18030',
+                              'why': 'bad gb'}],
+               'distro': [], 'unsearched': [], 'not_compared': []}
+        rec.update(over)
+        write(self.d, f'step2_character_sets.{PAIR}.json',
+              json.dumps(rec) + '\n')
+        write(self.d, f'step2.{PAIR}.warnings.jsonl', json.dumps(
+            {'kind': 'charmap_builds_unsettled',
+             'text': '!! charmap_builds_unsettled',
+             'data': {'builds': [{'build': 'C.GB18030',
+                                  'charmap': 'GB18030', 'why': 'bad gb'}]}})
+            + '\n')
+
+    @staticmethod
+    def C(r):
+        return r['step2']['character_sets']
+
+    @staticmethod
+    def warning(r, kind, data):
+        r['warnings']['step2']['items'].append(
+            rd.warning_item('x', kind, data, f'!! {kind}'))
+
+    def test_on_two_tags(self):
+        step2_files(self.d)
+        warnings_file(self.d, 1, [])
+        self.cs()
+        good = self.written()
+        self.assertEqual(self.C(good)['state'], 'reported')
+        C, warning = self.C, self.warning
+
+        def at(part, i=0):
+            return lambda r, **k: C(r)[part][i].update(**k)
+
+        def distro(r):
+            C(r)['distro'].append(
+                {'entry': '-', 'source': 'sv_SE', 'old': 'UTF-8',
+                 'new': 'UTF-8', 'codepoints': [66], 'via': ['sv_SE']})
+        cases = [
+            ("rules by name", lambda r: C(r).update(
+                state='not run', why='x', not_compared=[])),
+            ('basis is', lambda r: C(r).update(basis='measured')),
+            ('the charmaps', lambda r: C(r).update(
+                charmaps=['UTF-8', 'GB18030'])),
+            ('not among the charmaps', lambda r: at('changed')(
+                r, old='KOI8-R', new='KOI8-R')),
+            ('the pair twice', lambda r: C(r)['changed'].append(
+                dict(C(r)['changed'][0]))),
+            ('is no pair that changed', lambda r: at('listed')(
+                r, new='GB18030')),
+            ('not compared, its builds', lambda r: C(r)['changed'].__setitem__(
+                0, {'old': 'UTF-8', 'new': 'UTF-8', 'state': 'not compared'})),
+            ('not compared, its builds', lambda r: C(r)['anyway'].append(
+                {'entry': 'or_IN.GB18030', 'source': 'or_IN',
+                 'old': 'GB18030', 'new': 'GB18030', 'state': 'not compared',
+                 'why': 'another reason'})),
+            ('unsettled .*the `!!`', lambda r: at('unsettled')(r, why='x')),
+            ('built from', lambda r: at('unsettled')(r, source='zz')),
+            ('built from', lambda r: at('listed')(r, source='zz')),
+            ('is not among the names whose rules', lambda r: at('anyway')(
+                r, entry='sv_SE', source='sv_SE')),
+            ('is among the names whose rules', lambda r: at('listed')(
+                r, entry='or_IN', source='or_IN')),
+            ("not in step 2's list", lambda r: at('listed')(
+                r, entry='zz_ZZ', source='zz_ZZ')),
+            (r'listed\[0\]: entry', lambda r: at('listed')(r, entry='-')),
+            ('codepoints is', lambda r: at('listed')(r, codepoints=[66, 65])),
+            ('count is', lambda r: at('anyway')(r, count=0)),
+            ('distro .*the `!!`', distro),
+            ('unsearched .*the `!!`', lambda r: C(r)['unsearched'].append(
+                {'charmap': 'UTF-8', 'why': 'w'})),
+            ('unsearched', lambda r: (
+                C(r)['unsearched'].append({'charmap': 'KOI8-R', 'why': 'w'}),
+                warning(r, 'charmap_search_not_run',
+                        {'charmaps': [{'charmap': 'KOI8-R', 'why': 'w'}]}))),
+            # UTF-8 was compared: the search ran for it.
+            ('its pair', lambda r: (
+                C(r)['unsearched'].append({'charmap': 'UTF-8', 'why': 'w'}),
+                warning(r, 'charmap_search_not_run',
+                        {'charmaps': [{'charmap': 'UTF-8', 'why': 'w'}]}))),
+            # KOI8-R compared, its one build not compared for the same
+            # reason as the search.
+            ('its pair', lambda r: (
+                C(r).update(charmaps=['GB18030', 'KOI8-R', 'UTF-8']),
+                C(r)['changed'].append(
+                    {'old': 'KOI8-R', 'new': 'KOI8-R', 'state': 'compared',
+                     'added': 1, 'removed': 0, 'other': 0}),
+                C(r)['anyway'].append(
+                    {'entry': 'or_IN.KOI8-R', 'source': 'or_IN',
+                     'old': 'KOI8-R', 'new': 'KOI8-R',
+                     'state': 'not compared', 'why': 'w'}),
+                C(r)['unsearched'].append({'charmap': 'KOI8-R', 'why': 'w'}),
+                warning(r, 'charmap_search_not_run',
+                        {'charmaps': [{'charmap': 'KOI8-R', 'why': 'w'}]}))),
+            # GB18030, for a reason its builds do not give.
+            ('its pair', lambda r: (
+                C(r)['unsearched'].append({'charmap': 'GB18030',
+                                           'why': 'other'}),
+                warning(r, 'charmap_search_not_run',
+                        {'charmaps': [{'charmap': 'GB18030',
+                                       'why': 'other'}]}))),
+            # A distro row of a pair whose charmap changes name.
+            (r'distro\[0\]: UTF-8 -> GB18030', lambda r: (
+                C(r)['changed'].append(
+                    {'old': 'UTF-8', 'new': 'GB18030', 'state': 'compared',
+                     'added': 1, 'removed': 0, 'other': 0}),
+                C(r)['distro'].append(
+                    {'entry': '-', 'source': 'sv_SE', 'old': 'UTF-8',
+                     'new': 'GB18030', 'codepoints': [66],
+                     'via': ['sv_SE']}),
+                warning(r, 'charmap_distro_buildable',
+                        {'locales': [{'source': 'sv_SE',
+                                      'charmap': 'GB18030'}]}))),
+            # More characters than changed in the pair.
+            ('more than changed', lambda r: at('changed')(r, added=1)),
+            ('more than changed', lambda r: at('anyway')(r, count=3)),
+            ('not_compared .*the `!!`', lambda r: C(r)['not_compared'].append(
+                'zz.UTF-8')),
+            ('the `!!` of the check not run', lambda r: warning(
+                r, 'charmaps_not_run', {'why': 'x'})),
+            ('the `!!` of entries not compared', lambda r: (
+                C(r)['not_compared'].append('zz.UTF-8'),
+                warning(r, 'charmap_sources_missing',
+                        {'entries': ['zz.UTF-8'], 'basis': 'measured'}))),
+            # Step 2's rules by name says not run, the check's record
+            # compared.
+            ("rules by name", lambda r: r['step2']['rules_by_name'].update(
+                charmaps={'state': 'not run', 'why': 'x'})),
+            # No rules by name: the run's own answer that step 2 compared
+            # something.
+            ('where step 2 compared something', lambda r: (
+                r['step2'].update(rules_by_name={'state': 'not reported',
+                                                 'why': 'x'}),
+                C(r).clear(), C(r).update(state='one commit'))),
+            # GB18030, not compared, with no build and no `!!` left.
+            ('not compared, its builds', lambda r: (
+                C(r)['unsettled'].clear(),
+                r['warnings']['step2']['items'].clear())),
+        ]
+        self.check(good, cases, controls=[
+            # A locale a distro can build, with its `!!`.
+            lambda r: (distro(r), warning(
+                r, 'charmap_distro_buildable',
+                {'locales': [{'source': 'sv_SE', 'charmap': 'UTF-8'}]})),
+            # The search not run for GB18030, not compared, for the
+            # reason its builds give.
+            lambda r: (C(r)['unsearched'].append(
+                {'charmap': 'GB18030', 'why': 'bad gb'}), warning(
+                r, 'charmap_search_not_run',
+                {'charmaps': [{'charmap': 'GB18030', 'why': 'bad gb'}]})),
+            # Entries not compared, with their `!!`.
+            lambda r: (C(r)['not_compared'].append('zz.UTF-8'), warning(
+                r, 'charmap_sources_missing',
+                {'entries': ['zz.UTF-8'], 'basis': 'SUPPORTED'})),
+            # A source no SUPPORTED entry builds in the charmap, listed
+            # anyway and not settled by the check.
+            lambda r: C(r)['anyway'].append(
+                {'entry': '-', 'source': 'or_IN', 'old': 'UTF-8',
+                 'new': 'UTF-8', 'state': 'not compared', 'why': 'w'}),
+        ])
+
+    def test_on_two_machines(self):
+        step2_files(self.d, **dict(MACHINES, locales={
+            'C': [None, 'built in', 'built into glibc, no locale file', '-'],
+            'sv_SE': ['sv_SE', 'differs', '', 'changed']}))
+        step11_files(self.d)
+        for step in (0, 1):
+            warnings_file(self.d, step, [])
+        warnings_file(self.d, 11, ['same_build', 'other_encoding',
+                                   'closing'])
+        anyway = {'entry': 'sv_SE', 'source': 'sv_SE', 'old': 'UTF-8',
+                  'new': 'UTF-8', 'state': 'named', 'count': 2,
+                  'via': ['sv_SE']}
+        self.cs(basis='measured', changed=[
+            {'old': 'UTF-8', 'new': 'UTF-8', 'state': 'compared',
+             'added': 2, 'removed': 0, 'other': 0}],
+                listed=[], anyway=[anyway], unsettled=[])
+        write(self.d, f'step2.{PAIR}.warnings.jsonl', '')
+        # sv_SE's rules differ: the rules' record names it.
+        with open(os.path.join(self.d, f'step2_rules.{PAIR}.json'),
+                  encoding='utf-8') as f:
+            rules = json.load(f)
+        rules['differ'][0]['names'].append('sv_SE')
+        rules['totals']['differ'] += 1
+        rules['totals']['names'] += 1
+        write(self.d, f'step2_rules.{PAIR}.json', json.dumps(rules) + '\n')
+        with open(os.path.join(self.d, f'step2_rules_characters.{PAIR}.tsv'),
+                  'a', encoding='utf-8') as f:
+            f.write('sv_SE\tdiffers\tyes\tU+0000 U+0001\n')
+        good = self.written(**ON_MACHINES)
+        C = self.C
+        rb = lambda r: r['step2']['rules_by_name']['locales']['by_name']  # noqa: E731
+        self.check(good, [
+            ('basis is', lambda r: C(r).update(basis='SUPPORTED')),
+            ("in step 2's rules by name", lambda r: rb(r)['sv_SE'].update(
+                charmap='-')),
+            ("in step 2's rules by name", lambda r: rb(r)['sv_SE'].update(
+                charmap='not compared')),
+            ("in step 2's rules by name", lambda r: C(r)['anyway'][0].update(
+                entry='zz_ZZ')),
+            # A locale a distro can build, which two machines never
+            # search for.
+            ('point 5', lambda r: (C(r)['distro'].append(
+                {'entry': '-', 'source': 'sv_SE', 'old': 'UTF-8',
+                 'new': 'UTF-8', 'codepoints': [65], 'via': ['sv_SE']}),
+                self.warning(r, 'charmap_distro_buildable',
+                             {'locales': [{'source': 'sv_SE',
+                                           'charmap': 'UTF-8'}]}))),
+        ], controls=[
+            # A build listed anyway that was not settled: its file is
+            # 'not compared' in step 2's rules by name, or stronger.
+            lambda r: (C(r)['anyway'].__setitem__(0, dict(
+                {k: v for k, v in anyway.items()
+                 if k not in ('count', 'via')},
+                state='not compared', why='w')),
+                rb(r)['sv_SE'].update(charmap='not compared')),
+        ])
+
+    def test_where_the_check_did_not_run(self):
+        step2_files(self.d, charmaps={'state': 'not run', 'why': 'no builds'})
+        warnings_file(self.d, 1, [])
+        write(self.d, f'step2_character_sets.{PAIR}.json', json.dumps(
+            {'step': 2, 'state': 'not run', 'why': 'no builds',
+             'not_compared': ['zz.UTF-8']}) + '\n')
+        write(self.d, f'step2.{PAIR}.warnings.jsonl', ''.join(
+            json.dumps({'kind': k, 'text': f'!! {k}', 'data': d}) + '\n'
+            for k, d in (('charmaps_not_run', {'why': 'no builds'}),
+                         ('charmap_sources_missing',
+                          {'entries': ['zz.UTF-8'], 'basis': 'SUPPORTED'}))))
+        good = self.written()
+        self.assertEqual(self.C(good), {'state': 'not run', 'why': 'no builds',
+                                        'not_compared': ['zz.UTF-8']})
+        self.check(good, [
+            ("rules by name", lambda r: self.C(r).update(why='x')),
+            ('not_compared .*the `!!`', lambda r: self.C(r).update(
+                not_compared=[])),
+            ('the `!!` of the check not run',
+             lambda r: r['warnings']['step2']['items'].pop(0)),
+        ])
+
+    def test_a_reason_that_names_a_build(self):
+        """A NOT RUN whose reason names a build side by its commit (step
+        2 reads a build by its commit) is written by the build's name in
+        both records, as the screen prints it, and the two agree
+        (false-negative-reviewer, final review of 24.3b-1)."""
+        import filter_lc_collate_changes as f
+        import glibc_locale_data as g
+        sha, name = 'a' * 40, 'glibc-2.34-100.el9'
+        why = f"{g.SUPPORTED} does not exist at {sha}"
+        with mock.patch.dict(g._NAMES, {sha: name}), \
+                mock.patch.object(g, 'OUT_DIR', self.d):
+            f.write_rules_by_name('p', 'builds', ('o', 'n'), False,
+                                  {'state': 'not run', 'why': why})
+            f.write_character_sets('p', {'state': 'not run', 'why': why,
+                                         'not_compared': []})
+        rb = rd.rules_by_name(os.path.join(self.d,
+                                           'step2_rules_by_name.p.json'))
+        cs = rd.step2_character_sets(
+            os.path.join(self.d, 'step2_character_sets.p.json'))
+        named = why.replace(sha, name)
+        self.assertEqual((rb['charmaps']['why'], cs['why']), (named, named))
+        rd._character_sets('x', {'character_sets': cs, 'rules_by_name': rb},
+                           True, {'step2': {'state': 'reported',
+                                            'items': [{'kind':
+                                                       'charmaps_not_run',
+                                                       'data': {'why':
+                                                                named}}]}})
+
+    def test_the_states_are_the_records(self):
+        """The states and keys the reader takes are those charmap_record
+        writes, for every state it writes (a pair compared and one not, a
+        build listed anyway with its characters and one not compared, the
+        check run and not run, for its two reasons), and, where nothing
+        was compared, step 2's own states of the check
+        (locale_order.CHARMAPS_STATES)."""
+        import collation_keys as ck
+        import locale_order as lo
+        import node_charmaps as nc
+        P, Q = ('UTF-8', 'UTF-8'), ('GB18030', 'GB18030')
+        report = ck.Report(
+            None, 2, ['GB18030', 'UTF-8'], [P, Q], {P: (1, 1, 0), Q: None},
+            [], [ck.Found('aa', 'aa.UTF-8', P, {65}, ['aa'], None),
+                 ck.Found('bb', 'bb.GB18030', Q, set(), [], 'w')],
+            [], [], None, [])
+        rec = nc.charmap_record(report, 't1', 't2')
+        self.assertEqual(sorted(x['state'] for x in rec['changed']),
+                         sorted(rd.CS_PAIR_STATES))
+        self.assertEqual(sorted(x['state'] for x in rec['anyway']),
+                         sorted(rd.CS_ANYWAY_STATES))
+        self.assertEqual(sorted(list(rec) + ['step']),
+                         sorted(rd.CS_KEYS['compared']))
+        self.assertIn(rec['basis'], rd.CS_BASES)
+        for r in (report._replace(not_run='w'), report._replace(builds=0)):
+            got = nc.charmap_record(r, 't1', 't2')
+            self.assertEqual(sorted(list(got) + ['step']),
+                             sorted(rd.CS_KEYS['not run']))
+            self.assertEqual(got['state'], 'not run')
+        self.assertEqual(
+            tuple('reported' if s == 'compared' else s
+                  for s in lo.CHARMAPS_STATES), rd.CS_STATES)
+        self.assertEqual(set(rd.CS_KEYS), set(lo.CHARMAPS_STATES))
 
 
 if __name__ == '__main__':

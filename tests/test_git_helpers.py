@@ -3112,6 +3112,8 @@ class Step2AsksWhetherAnythingIsCompared(unittest.TestCase):
                 contextlib.redirect_stdout(out), \
                 contextlib.redirect_stderr(io.StringIO()):
             f.main([old, new, '--repo', self.repo])
+        _harness.step2_ran(out.getvalue(), self.tmp,
+                           [old, new, '--repo', self.repo])
         self.out = flat(out.getvalue())
         return [(ref, path) for ref, paths in seen for path in paths]
 

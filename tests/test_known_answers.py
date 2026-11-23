@@ -268,7 +268,8 @@ class Step2Compare(StepRun):
                                                'removed_locales')]
             + [f'step2_rules_characters.{slug}.tsv',
                f'step2_rules_by_name.{slug}.json',
-               f'step2_rules.{slug}.json']))
+               f'step2_rules.{slug}.json',
+               f'step2_character_sets.{slug}.json']))
 
     def test_what_step_2_does_not_compare_is_said_once(self):
         """NOT_COMPARED_HERE: the code no step compares, pointed to once."""

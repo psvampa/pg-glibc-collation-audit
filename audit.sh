@@ -485,7 +485,8 @@ rm -f "$STEP2_LIST" "$STEP2_NOT_COMPARED" "$STEP2_REMOVED" "$OLD_STEP2_KEYED" \
       "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$OLD_STEP1_LIST" \
       "$SIDES_FILE" "$RULES_FILE" \
       "$OUT_DIR/step2_rules_characters.$PAIR.tsv" \
-      "$OUT_DIR/step2_rules.$PAIR.json"
+      "$OUT_DIR/step2_rules.$PAIR.json" \
+      "$OUT_DIR/step2_character_sets.$PAIR.json"
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log \
       "$OUT_DIR"/step[0-9]*."$PAIR".warnings.jsonl
 # The run's data file (scripts/report_data.py), written at the end from the

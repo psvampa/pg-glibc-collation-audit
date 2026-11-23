@@ -1444,7 +1444,9 @@ class CharmapReportLines(unittest.TestCase):
         base.update(fields)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            f.print_charmap_report(ck.Report(**base), 't1', 't2')
+            rec = f.print_charmap_report(ck.Report(**base), 't1', 't2')
+        _harness.charmaps_held(buf.getvalue(), rec, 'CharmapReportLines')
+        self.record = rec
         return buf.getvalue()
 
     def test_the_clean_line_says_compared_when_entries_were_not(self):
@@ -1518,6 +1520,89 @@ class CharmapReportLines(unittest.TestCase):
                         words))
                 self.assertEqual([(w['kind'], w['data']) for w in recs],
                                  [('charmaps_not_run', {'why': why})])
+
+    def test_every_line_without_a_warning_from_its_record(self):
+        """Three pairs (one of two charmaps with its counts, one not
+        compared with the build the check could not settle, one of one
+        charmap), two builds listed, and two the summary lists anyway,
+        one not compared with its reason and one no SUPPORTED entry
+        builds; the pair of two charmaps and the build listed anyway not
+        compared are lines no run of the suite reaches. The record says
+        each, and a record that says one thing otherwise is refused by
+        the holder."""
+        P, Q, R = (('ISO-8859-1', 'ISO-8859-15'), ('UTF-8', 'UTF-8'),
+                   ('KOI8-R', 'KOI8-R'))
+        found = [ck.Found('aa', 'aa.UTF-8', Q, {0x41, 0xe9}, ['aa'], None),
+                 ck.Found('bb', 'bb.ISO-8859-15', P, {0x42}, ['bb', 'cc'],
+                          None),
+                 ck.Found('kk', 'kk.KOI8-R', R, set(), [], 'bad koi')]
+        skipped = [ck.Found('dd', 'dd.UTF-8', Q, set(), [], 'dd uses `...`'),
+                   ck.Found('ee', None, Q, {0x43, 0x44, 0x45}, ['ee'],
+                            None)]
+        out = self.lines(charmaps=['ISO-8859-1', 'ISO-8859-15', 'KOI8-R',
+                                   'UTF-8'], changed=[P, R, Q],
+                         sizes={P: (3, 1, 0), Q: (2, 2, 0), R: None},
+                         found=found, skipped=skipped)
+        rec = self.record
+        self.assertEqual(rec['changed'], [
+            {'old': 'ISO-8859-1', 'new': 'ISO-8859-15', 'state': 'compared',
+             'added': 1, 'removed': 0, 'other': 2},
+            {'old': 'KOI8-R', 'new': 'KOI8-R', 'state': 'not compared'},
+            {'old': 'UTF-8', 'new': 'UTF-8', 'state': 'compared',
+             'added': 2, 'removed': 0, 'other': 0}])
+        self.assertEqual([(x['entry'], x['codepoints'], x['via'])
+                          for x in rec['listed']],
+                         [('aa.UTF-8', [0x41, 0xe9], ['aa']),
+                          ('bb.ISO-8859-15', [0x42], ['bb', 'cc'])])
+        self.assertEqual([(x['entry'], x['state'], x.get('why'),
+                           x.get('count')) for x in rec['anyway']],
+                         [('dd.UTF-8', 'not compared', 'dd uses `...`', None),
+                          ('-', 'named', None, 3)])
+        self.assertEqual([(x['entry'], x['why']) for x in rec['unsettled']],
+                         [('kk.KOI8-R', 'bad koi')])
+        self.assertIn('ISO-8859-1 -> ISO-8859-15: 1 character added, 2 '
+                      'given other bytes.', flat(out))
+        self.assertIn('KOI8-R: could not be compared (see below).',
+                      flat(out))
+        self.assertIn('  dd.UTF-8 (UTF-8): could not be compared: dd uses '
+                      '`...`', out)
+        self.assertIn('  ee (not in SUPPORTED in this charmap) (UTF-8): 3 '
+                      'characters, named in ee', out)
+        for field, value in (('builds', 3),
+                             ('charmaps', rec['charmaps'] + ['ZZ'])):
+            with self.subTest(field=field):
+                with self.assertRaises(AssertionError):
+                    _harness.charmaps_held(out, {**rec, field: value}, 'x')
+        for part, i, field, value in (
+                ('changed', 0, 'other', 1), ('changed', 1, 'state',
+                                            'compared'),
+                ('listed', 1, 'via', ['bb']), ('listed', 0, 'codepoints',
+                                               [0x41]),
+                ('anyway', 0, 'why', 'other'), ('anyway', 1, 'count', 2),
+                ('anyway', 1, 'entry', 'ee.UTF-8')):
+            with self.subTest(part=part, i=i, field=field):
+                bad = {**rec, part: [dict(x) for x in rec[part]]}
+                bad[part][i][field] = value
+                with self.assertRaises(AssertionError):
+                    _harness.charmaps_held(out, bad, 'x')
+
+    def test_a_name_broken_at_its_hyphen_is_read_whole(self):
+        """textwrap breaks a charmap's name at its hyphen where it
+        starts near the end of the line (EUC-JP at column 71 to 73): the
+        holder reads it whole, and reads it wrong where the record names
+        another charmap."""
+        P, Q = ('ARMSCII-8', 'ARMSCII-8'), ('EUC-JP', 'EUC-JP')
+        out = self.lines(charmaps=['ARMSCII-8', 'EUC-JP'], changed=[P, Q],
+                         sizes={P: (8146, 3456, 1234), Q: (3, 3, 0)})
+        self.assertRegex(out, r'(?m) EUC-$')
+        rec = self.record
+        self.assertEqual([x['new'] for x in rec['changed']],
+                         ['ARMSCII-8', 'EUC-JP'])
+        bad = {**rec, 'changed': [rec['changed'][0],
+                                  {**rec['changed'][1], 'old': 'EUC-KR',
+                                   'new': 'EUC-KR'}]}
+        with self.assertRaises(AssertionError):
+            _harness.charmaps_held(out, bad, 'x')
 
     def test_a_code_point_beyond_unicode_is_printed_as_a_number(self):
         found = ck.Found('loc', 'loc.UTF-8', ('UTF-8', 'UTF-8'),
