@@ -91,8 +91,9 @@ def step2_files(d, removed='en_US@ampm (deleted)\nxx (renamed to yy)\n',
 
 MACHINES = dict(
     compared='builds', machines=True, measurements=['a' * 64, 'b' * 64],
-    locales={'C': [None, 'built in', 'built into glibc, no locale file', '-'],
-             'sv_SE': ['sv_SE', 'differs', '', '-']})
+    locales={'C': [None, 'built in', 'built into glibc, no locale file', '-',
+                   None],
+             'sv_SE': ['sv_SE', 'differs', '', '-', 'sv_SE']})
 
 
 def nothing_files(d, nothing='commit'):
@@ -658,9 +659,9 @@ class EveryFileWritten(_Folder):
             'state': 'reported', 'by_name': {
                 'C': {'key': 'none', 'rules': 'built in',
                       'why': 'built into glibc, no locale file',
-                      'charmap': '-'},
+                      'charmap': '-', 'source': 'none'},
                 'sv_SE': {'key': 'sv_SE', 'rules': 'differs', 'why': '',
-                          'charmap': '-'}}})
+                          'charmap': '-', 'source': 'sv_SE'}}})
         self.assertEqual(r['step2']['removed']['source'], 'machine sources')
         self.assertEqual(r['run']['machines'],
                          {'state': 'given', 'old': '/m/old', 'new': '/m/new'})
@@ -3857,7 +3858,10 @@ class StepTwosTransliterationHangsTogether(_Folder):
     """step2.transliteration (step 2's step2_transliteration), each fact
     written wrong alone, refused by load() for the reason named, on two
     tags, on two machines and where the character set check did not run;
-    and the controls that a right change is read."""
+    and the controls that a right change is read. On two machines also
+    step 2's rules by name, each name's mark held to the rows of both
+    checks of its file, and their five fields, read as step 2 writes
+    them."""
 
     read = StepTwosRulesHangTogether.read
     check = StepTwosRulesHangTogether.check
@@ -3878,7 +3882,8 @@ class StepTwosTransliterationHangsTogether(_Folder):
                           'other': 0}],
              'listed': [], 'anyway': [], 'unsettled': [], 'distro': [],
              'unsearched': [], 'not_compared': []}) + '\n')
-        sv, c = (('sv_SE', 'C') if machines else ('sv_SE.UTF-8', 'C.UTF-8'))
+        sv, c = (('sv_SE', 'C.utf8') if machines
+                 else ('sv_SE.UTF-8', 'C.UTF-8'))
         write(self.d, f'step2_transliteration.{PAIR}.json', json.dumps(
             {'step': 2, 'state': 'compared', 'line': 'elements',
              'elements': 5, 'builds': 2, 'changed': 3, 'skipped': [],
@@ -4015,9 +4020,9 @@ class StepTwosTransliterationHangsTogether(_Folder):
 
     def test_on_two_machines(self):
         locales = dict(MACHINES['locales'],
-                       sv_SE=['sv_SE', 'same', '', 'transliteration'],
-                       C=[None, 'built in', 'built into glibc, no locale '
-                          'file', 'transliteration not compared'])
+                       sv_SE=['sv_SE', 'same', '', 'transliteration', 'sv_SE'])
+        locales['C.utf8'] = ['C', 'same', '', 'transliteration not compared',
+                             'C']
         self.files(**dict(MACHINES, locales=locales))
         step11_files(self.d)
         warnings_file(self.d, 0, [])
@@ -4030,11 +4035,125 @@ class StepTwosTransliterationHangsTogether(_Folder):
             ("rules by name", lambda r: bn(r)['sv_SE'].update(charmap='-')),
             ("rules by name", lambda r: bn(r)['sv_SE'].update(
                 charmap='transliteration not compared')),
-            ("rules by name", lambda r: bn(r)['C'].update(charmap='-')),
+            ("rules by name", lambda r: bn(r)['C.utf8'].update(charmap='-')),
+            # What its rows found, no more and no less.
+            ('charmap is', lambda r: bn(r)['sv_SE'].update(
+                charmap='changed')),
+            ('charmap is', lambda r: bn(r)['C.utf8'].update(
+                charmap='not compared')),
+            ('built into glibc', lambda r: bn(r)['C'].update(
+                charmap='transliteration not compared')),
+            ('built into glibc', lambda r: bn(r)['C'].update(source='C')),
+            ('built into glibc', lambda r: bn(r)['C'].update(key='C')),
+            # A name compare_rules does not have goes to its file.
+            ('the key', lambda r: bn(r)['C.utf8'].update(source='D')),
+            ('source is', lambda r: bn(r)['sv_SE'].update(source='none')),
+            ('source is', lambda r: bn(r)['sv_SE'].update(source=5)),
+            # A name of a file the check lists, not marked.
+            ('charmap is', lambda r: bn(r).update(zz=dict(
+                self.zz('-'), source='sv_SE'))),
+            # Not compared, with no row behind it and no `!!` naming it.
+            ('charmap is', lambda r: bn(r).update(zz=self.zz('not compared'))),
+            # Named by the `!!` of names not traced, yet not marked.
+            ('charmap is', lambda r: (
+                bn(r).update(zz=self.zz('-')), self.untraced(r, 'zz'))),
+            # The strongest of two rows of one file: transliteration over
+            # not compared (collation_keys.LISTED_STATES).
+            ('charmap is', lambda r: self.two_rows(r, 'not compared')),
+            # With step 2's `!!` not reported, a mark with no row is still
+            # refused where it is not 'not compared'.
+            ('charmap is', lambda r: (
+                r['warnings'].update(step2=rd.not_reported('x')),
+                bn(r).update(zz=self.zz('changed')))),
         ]
-        controls = [lambda r: bn(r)['sv_SE'].update(charmap='changed'),
-                    lambda r: bn(r)['C'].update(charmap='not compared')]
+        controls = [
+            # An alias of a file the check lists carries what it found.
+            lambda r: bn(r).update(swedish=dict(bn(r)['sv_SE'],
+                                                key='swedish')),
+            # The key first: sv_SE's own rows, whatever its source holds.
+            lambda r: bn(r)['sv_SE'].update(source='C'),
+            # A name the `!!` says was not traced is not compared.
+            lambda r: (bn(r).update(zz=self.zz('not compared')),
+                       self.untraced(r, 'zz')),
+            lambda r: self.two_rows(r, 'transliteration'),
+            # Of C's file, a charmap not settled (Cx) and transliterations
+            # not compared (C.utf8): the stronger marks both.
+            self.c_unsettled,
+            # or_IN's transliterations, left to step 2's list: its one row.
+            self.or_in_skipped,
+            # With step 2's `!!` not reported, whether a name was traced is
+            # not known: its 'not compared' is not checked.
+            lambda r: (r['warnings'].update(step2=rd.not_reported('x')),
+                       bn(r).update(zz=self.zz('not compared'))),
+        ]
         self.check(good, cases, controls)
+
+    @staticmethod
+    def zz(charmap):
+        """A name measured on a machine, built from a file of its own."""
+        return {'key': 'zz', 'rules': 'same', 'why': '', 'charmap': charmap,
+                'source': 'zz'}
+
+    @staticmethod
+    def untraced(r, name):
+        r['warnings']['step2']['items'].append(rd.warning_item(
+            'x', 'names_untraced',
+            {'machine': 'glibc-2.28', 'names': [{'name': name, 'why': 'w'}]},
+            '!! names_untraced'))
+
+    @staticmethod
+    def two_rows(r, charmap):
+        """sv_SE.utf8, a second build of sv_SE, whose charmap the check
+        could not settle, beside sv_SE's transliteration; the name is
+        marked CHARMAP."""
+        r['step2']['character_sets']['unsettled'].append(
+            {'entry': 'sv_SE.utf8', 'source': 'sv_SE', 'old': 'UTF-8',
+             'new': 'UTF-8', 'why': 'w'})
+        r['warnings']['step2']['items'].append(rd.warning_item(
+            'x', 'charmap_builds_unsettled',
+            {'builds': [{'build': 'sv_SE.utf8', 'charmap': 'UTF-8',
+                         'why': 'w'}]}, '!! charmap_builds_unsettled'))
+        r['step2']['rules_by_name']['locales']['by_name']['sv_SE.utf8'] = {
+            'key': 'sv_SE', 'rules': 'same', 'why': '', 'charmap': charmap,
+            'source': 'sv_SE'}
+
+    @staticmethod
+    def c_unsettled(r):
+        r['step2']['character_sets']['unsettled'].append(
+            {'entry': 'Cx', 'source': 'C', 'old': 'UTF-8', 'new': 'UTF-8',
+             'why': 'w'})
+        r['warnings']['step2']['items'].append(rd.warning_item(
+            'x', 'charmap_builds_unsettled',
+            {'builds': [{'build': 'Cx', 'charmap': 'UTF-8', 'why': 'w'}]},
+            '!! charmap_builds_unsettled'))
+        bn = r['step2']['rules_by_name']['locales']['by_name']
+        bn['Cx'] = dict(bn['C.utf8'], charmap='not compared')
+        bn['C.utf8']['charmap'] = 'not compared'
+
+    @staticmethod
+    def or_in_skipped(r):
+        r['step2']['character_sets']['builds'] = 4
+        r['step2']['transliteration']['skipped'].append(
+            {'entry': 'or_IN', 'source': 'or_IN', 'old': 'UTF-8',
+             'new': 'UTF-8', 'state': 'not compared', 'why': 'w'})
+        r['step2']['rules_by_name']['locales']['by_name']['or_IN'] = {
+            'key': 'or_IN', 'rules': 'differs', 'why': '',
+            'charmap': 'transliteration not compared', 'source': 'or_IN'}
+
+    def test_each_name_has_five_fields(self):
+        """step2_rules_by_name read as step 2 writes it: a name with four
+        fields, or six, is refused, never cut by zip; and the strongest
+        of what the check found is in collation_keys' order."""
+        import collation_keys as ck
+        self.assertEqual(rd.LISTED_STATES, ck.LISTED_STATES)
+        for v in (['sv_SE', 'same', '', '-'],
+                  ['sv_SE', 'same', '', '-', 'sv_SE', 'x']):
+            with self.subTest(v=v):
+                step2_files(self.d, **dict(MACHINES, locales={'sv_SE': v}))
+                with self.assertRaisesRegex(rd.ReportError,
+                                            'the rules of .sv_SE. are'):
+                    rd.rules_by_name(os.path.join(
+                        self.d, f'step2_rules_by_name.{PAIR}.json'))
 
     def test_where_the_check_did_not_run(self):
         step2_files(self.d, charmaps={'state': 'not run', 'why': 'no file'})
@@ -4295,8 +4414,9 @@ class StepTwosCharacterSetsHangTogether(_Folder):
 
     def test_on_two_machines(self):
         step2_files(self.d, **dict(MACHINES, locales={
-            'C': [None, 'built in', 'built into glibc, no locale file', '-'],
-            'sv_SE': ['sv_SE', 'differs', '', 'changed']}))
+            'C': [None, 'built in', 'built into glibc, no locale file', '-',
+                  None],
+            'sv_SE': ['sv_SE', 'differs', '', 'changed', 'sv_SE']}))
         step11_files(self.d)
         for step in (0, 1):
             warnings_file(self.d, step, [])

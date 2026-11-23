@@ -11532,7 +11532,10 @@ def rules_beside(verdicts_path, rules_path, out_path):
             if got is None:
                 die(f'step 2 gave no rules for {name}, which step 11 '
                     'measured')
-            key, rule, why, charmap = got
+            if not (isinstance(got, list) and len(got) == 5):
+                die(f'step 2 gave {name} the rules {got!r}, which are not '
+                    'its key, rules, reason, character set and source')
+            key, rule, why, charmap, source = got
             line = rule_line(state, words, rule, why, charmap)
             if line:
                 said.setdefault(line, []).append(name)

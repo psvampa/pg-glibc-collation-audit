@@ -3555,14 +3555,15 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
                            'C.utf8', 'aa_ER.utf8@saaho'],
                           ['sv_SE.utf8', 'ko_KR.euckr'])
         self.assertEqual(got, {
-            'C.utf8': ['C', 'differs', '', '-'],
+            'C.utf8': ['C', 'differs', '', '-', 'C'],
             'aa_ER.utf8@saaho': ['aa_ER@saaho', 'not compared',
-                                 'no file aa_ER@saaho on the new side', '-'],
-            'ko_KR.euckr': ['ko_KR', 'same', '', '-'],
-            'ko_KR.utf8': ['ko_KR', 'same', '', '-'],
-            'sv_SE.iso88591': ['sv_SE', 'differs', '', '-'],
-            'sv_SE.utf8': ['sv_SE', 'differs', '', '-'],
-            'swedish': ['swedish', 'differs', '', '-']})
+                                 'no file aa_ER@saaho on the new side', '-',
+                                 'aa_ER@saaho'],
+            'ko_KR.euckr': ['ko_KR', 'same', '', '-', 'ko_KR'],
+            'ko_KR.utf8': ['ko_KR', 'same', '', '-', 'ko_KR'],
+            'sv_SE.iso88591': ['sv_SE', 'differs', '', '-', 'sv_SE'],
+            'sv_SE.utf8': ['sv_SE', 'differs', '', '-', 'sv_SE'],
+            'swedish': ['swedish', 'differs', '', '-', 'sv_SE']})
 
     def test_c_and_posix_are_built_into_glibc(self):
         """The file C is C.UTF-8's, and differs here: the built-in C must
@@ -3571,13 +3572,13 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
         for name in ('C', 'POSIX'):
             self.assertEqual(got[name], [None, 'built in',
                                          'built into glibc, no locale file',
-                                         '-'])
+                                         '-', None])
 
     def test_a_name_no_file_builds(self):
         got = self.answer(['mine.utf8'], ['ko_KR'])
         self.assertEqual(got['mine.utf8'], ['mine', 'not compared',
                                             'no locale file of that name',
-                                            '-'])
+                                            '-', 'mine'])
 
     def test_an_entry_not_read_is_not_compared(self):
         got = self.answer(['de_IT.utf8'], ['de_IT'],
@@ -3585,7 +3586,7 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
         for name in ('de_IT.utf8', 'de_IT'):
             self.assertEqual(got[name], [
                 'de_IT', 'not compared', "not read among the machines' "
-                'locale sources: symlink on the new machine', '-'])
+                'locale sources: symlink on the new machine', '-', 'de_IT'])
 
     def test_the_character_set_check_per_name(self):
         got = self.answer(['ko_KR.utf8', 'sv_SE.utf8', 'swedish'], ['C'],
@@ -3615,7 +3616,7 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
         got = self.answer(['swedish', 'sv_SE.utf8'], ['C'],
                           keyed={'sv_SE': 'changed'})
         self.assertEqual(got['swedish'], ['swedish', 'differs', '',
-                                          'changed'])
+                                          'changed', 'sv_SE'])
         self.assertEqual(got['sv_SE.utf8'][3], 'changed')
 
     def test_a_state_it_does_not_know_is_refused(self):
