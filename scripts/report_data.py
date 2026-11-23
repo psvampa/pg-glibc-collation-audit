@@ -6,10 +6,11 @@ change.
 Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
-only inside a sentence (step 2's totals and character sets, and the
-provenance of each side) is 'not yet reported': a
-later step of the work turns each one into data (branch 24 of the
-plan).
+only inside a sentence (step 2's character sets and the provenance of
+each side) is 'not yet reported': a later step of the work turns each
+one into data (branch 24 of the plan). What step 2 prints of its rules
+is data: step2_rules.<pair>.json, read into step2.rules and tied to the
+other facts of the run (_rules).
 The `!!` notices of steps 0, 1, 2 and 11
 are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
@@ -254,6 +255,48 @@ def nothing_compared(run, by_name):
             f"the two {run['word']} are two commits of one source tree")
 
 
+# What step2_rules says (filter_lc_collate_changes.write_rules).
+RULES_STATES = ('compared', 'not compared')
+CHARACTER_STATES = ('listed', 'counted', 'none named', 'not known')
+ADDED_STATES = ('none', 'plain', 'notice')
+MISSING_STATES = ('not in SUPPORTED', 'not measured on that machine',
+                  'in the C.UTF-8 notice')
+RULES_KEYS = ['added', 'differ', 'not_ascii', 'removed', 'state', 'step',
+              'totals', 'unbuilt', 'unread']
+TOTALS_KEYS = ['names', 'same', 'differ', 'not_compared']
+
+
+def step2_rules(path, nothing):
+    """Step 2's record of what it prints of its rules, read as written,
+    its state 'compared' given as 'reported';
+    load() checks it. 'not compared' only where step 2 compared nothing,
+    with the same reason."""
+    if not os.path.isfile(path):
+        return not_reported(path)
+    lines = _lines(path)
+    if len(lines) != 1:
+        raise ReportError(f'{path} is not one line')
+    data = json.loads(lines[0])
+    if not isinstance(data, dict) or data.get('step') != 2 or \
+            data.get('state') not in RULES_STATES:
+        raise ReportError(f'{path} is not what step 2 writes')
+    if data['state'] == 'not compared':
+        if set(data) != {'step', 'state', 'why'}:
+            raise ReportError(f'{path} has the keys {sorted(data)}')
+        if nothing is None or data['why'] != nothing:
+            raise ReportError(f'{path}: not compared, {data["why"]!r}, '
+                              f'where step 2 says {nothing!r}')
+        return {'state': 'not compared', 'why': data['why']}
+    if sorted(data) != RULES_KEYS:
+        raise ReportError(f'{path} has the keys {sorted(data)}')
+    if nothing is not None:
+        raise ReportError(f'{path}: compared, yet step 2 compared nothing: '
+                          f'{nothing}')
+    out = {k: v for k, v in data.items() if k != 'step'}
+    out['state'] = 'reported'
+    return out
+
+
 def step2_section(a, run):
     d = a.out_dir
     by_name = rules_by_name(_file(d, f'step2_rules_by_name.{a.pair}.json'))
@@ -301,7 +344,8 @@ def step2_section(a, run):
             a, run, _file(d, f'step2_removed_locales.{a.pair}.txt')),
         'rules_by_name': by_name,
         'rules_characters': chars_s,
-        'totals': NOT_YET,
+        'rules': step2_rules(_file(d, f'step2_rules.{a.pair}.json'),
+                             nothing),
         'character_sets': NOT_YET,
     }
 
@@ -2438,6 +2482,296 @@ def _stated(where, obj, states, check):
                 raise ReportError(f'{where}.why is {obj[k]!r}')
 
 
+def _warnings_of(w, step, kind):
+    o = w[step]
+    if o['state'] != 'reported':
+        return None
+    return [it['data'] for it in o['items'] if it['kind'] == kind]
+
+
+def _rules(where, s2, some, run, pair, w, step11):
+    """step2.rules: its shape, then each fact tied to the others of the
+    same run: the totals add up and count the groups, the characters
+    file's rows and the not-compared files and names; each group is its
+    rows; the files only the new side has are the `!!` of an old tag or
+    commit side or a plain block, their renames are the Removed rows';
+    the printed Removed is the Removed file; the entries not read are
+    step 1's `!!`; the two notes go with the list."""
+    o = s2['rules']
+    _stated(where, o, ('reported', 'not compared', 'not reported'),
+            {'reported': ['totals', 'differ', 'added', 'removed', 'unread',
+                          'unbuilt', 'not_ascii'],
+             'not compared': ['why'], 'not reported': ['why']})
+    if o['state'] == 'not reported':
+        return
+    if (o['state'] == 'reported') != some:
+        raise ReportError(f'{where} is {o["state"]!r} where step 2 compared '
+                          f'{"something" if some else "nothing"}')
+    rb = s2['rules_by_name']
+    if o['state'] == 'not compared':
+        if rb['state'] == 'reported' and o['why'] != rb['nothing']['what']:
+            raise ReportError(f'{where}.why {o["why"]!r} is not '
+                              f'{rb["nothing"]["what"]!r}')
+        return
+    t = o['totals']
+    _keys(f'{where}.totals', t, TOTALS_KEYS)
+    for k in TOTALS_KEYS:
+        if not _is_count(t[k]):
+            raise ReportError(f'{where}.totals.{k} is {t[k]!r}')
+    if t['names'] != t['same'] + t['differ'] + t['not_compared']:
+        raise ReportError(f'{where}.totals do not add up: {t!r}')
+    # The groups whose rules differ.
+    names = []
+    if not isinstance(o['differ'], list):
+        raise ReportError(f'{where}.differ is not a list')
+    for i, x in enumerate(o['differ']):
+        at = f'{where}.differ[{i}]'
+        _keys(at, x, ['names', 'every_rule', 'characters'])
+        _strs(f'{at}.names', x['names'])
+        if not x['names'] or not _is_bool(x['every_rule']):
+            raise ReportError(f'{at} is {x!r}')
+        c = x['characters']
+        _stated(f'{at}.characters', c, CHARACTER_STATES,
+                {'listed': ['codepoints'], 'counted': ['count'],
+                 'none named': [], 'not known': ['why']})
+        if c['state'] == 'listed' and (x['every_rule'] or not c['codepoints']
+                                       or not all(_is_count(v) for v in
+                                                  c['codepoints'])):
+            raise ReportError(f'{at}: {x!r}')
+        if c['state'] == 'counted' and (not x['every_rule']
+                                        or not _is_positive(c['count'])):
+            raise ReportError(f'{at}: {x!r}')
+        if c['state'] == 'not known' and not _is_str(c['why']):
+            raise ReportError(f'{at}: {x!r}')
+        names += x['names']
+    if len(set(names)) != len(names):
+        raise ReportError(f'{where}.differ names one locale twice')
+    if t['differ'] != len(names):
+        raise ReportError(f'{where}.totals.differ {t["differ"]} and '
+                          f'{len(names)} names in its groups')
+    rc = s2['rules_characters']
+    if rc['state'] == 'reported':
+        rows = {r_[0]: r_ for r_ in rc['rows']}
+        if len(rows) != len(rc['rows']) or set(rows) != set(names):
+            raise ReportError(f'{where}.differ names {sorted(names)!r}, the '
+                              f'characters file {sorted(rows)!r}')
+        for x in o['differ']:
+            c = x['characters']
+            for n in x['names']:
+                _, state, every, chars = rows[n]
+                if state != 'differs' or every != ('yes' if x['every_rule']
+                                                   else 'no'):
+                    raise ReportError(f'{where}: {n} is {x!r}, its row '
+                                      f'{rows[n]!r}')
+                if c['state'] == 'not known':
+                    ok = chars == f'not known: {c["why"]}'
+                elif c['state'] == 'none named':
+                    ok = chars == ''
+                else:
+                    cps = chars.split(' ') if chars else []
+                    ok = all(re.fullmatch(r'U\+[0-9A-F]{4,}', v) for v in cps)
+                    ok = ok and (len(cps) == c['count']
+                                 if c['state'] == 'counted' else
+                                 [int(v[2:], 16) for v in cps]
+                                 == c['codepoints'])
+                if not ok:
+                    raise ReportError(f'{where}: {n} is {x!r}, its row '
+                                      f'{rows[n]!r}')
+    # The files only the new side has.
+    a = o['added']
+    _keys(f'{where}.added', a, ['state', 'rows'])
+    _one_of(f'{where}.added.state', a['state'], ADDED_STATES)
+    machines = rb['state'] == 'reported' and rb['machines']
+    added = []
+    for i, x in enumerate(a['rows']):
+        at = f'{where}.added.rows[{i}]'
+        _keys(at, x, ['name', 'spellings', 'renamed_from'])
+        if not _is_str(x['name']) or not _is_str(x['renamed_from']):
+            raise ReportError(f'{at} is {x!r}')
+        sp = x['spellings']
+        c_notice = (x['name'] == 'C.UTF-8' and a['state'] == 'notice')
+        if c_notice != (sp == {'state': 'in the C.UTF-8 notice'}):
+            raise ReportError(f'{at}.spellings is {sp!r} with the added '
+                              f'state {a["state"]!r}')
+        if isinstance(sp, dict):
+            _stated(f'{at}.spellings', sp, MISSING_STATES,
+                    {m: [] for m in MISSING_STATES})
+            if not c_notice and rb['state'] == 'reported' and \
+                    sp['state'] != ('not measured on that machine'
+                                    if machines else 'not in SUPPORTED'):
+                raise ReportError(f'{at}.spellings is {sp!r} with '
+                                  f'machines={machines}')
+        elif not (isinstance(sp, list) and sp and all(map(_is_str, sp))):
+            raise ReportError(f'{at}.spellings is {sp!r}')
+        elif machines:
+            # Each a name measured on the new machine, which step 2's
+            # rules by name hold under this file, or under itself where
+            # compare_rules has it (a locale.alias alias).
+            bn = rb['locales']['by_name']
+            for n in sp:
+                if n not in bn or bn[n]['key'] not in (x['name'], n):
+                    raise ReportError(f'{at}: {n} is no measured name of '
+                                      f'{x["name"]}: {bn.get(n)!r}')
+        if machines and not c_notice and step11.get('verdicts') is not None:
+            # The names measured on the new machine under this file: step
+            # 2's rules by name hold them under it, and step 11 calls none
+            # of them only old (a custom name on the old machine is).
+            bn = rb['locales']['by_name']
+            under = sorted(n for n, v in bn.items() if v['key'] == x['name'])
+            v11 = step11['verdicts']
+            if all(n in v11 for n in under):
+                want = [n for n in under if v11[n]['verdict'] != 'only old']
+                got_ = sorted(sp) if isinstance(sp, list) else []
+                if got_ != want:
+                    raise ReportError(f'{at}.spellings {sp!r}, measured on '
+                                      f'the new machine under it: {want!r}')
+        added.append(x['name'])
+    tag_old = run['old_class'] != 'build'
+    want = 'none' if not added else 'notice' if tag_old else 'plain'
+    if a['state'] != want:
+        raise ReportError(f'{where}.added.state is {a["state"]!r} with '
+                          f'{len(added)} file(s) and the old side a '
+                          f'{run["old_class"]}')
+    notice = _warnings_of(w, 'step2', 'added_not_at_old')
+    if notice is not None:
+        rest = [n for n in added if n != 'C.UTF-8']
+        if a['state'] == 'notice' and rest:
+            if len(notice) != 1 or notice[0]['locales'] != rest or \
+                    notice[0]['at'] != pair['old']:
+                raise ReportError(f'{where}.added {rest!r}, the `!!` '
+                                  f'{notice!r}')
+        elif notice:
+            raise ReportError(f'{where}.added is {a["state"]!r}, yet a `!!` '
+                              f'names files not at the old side: {notice!r}')
+        if a['state'] == 'notice' and 'C.UTF-8' in added:
+            c = _warnings_of(w, 'step2', 'c_utf8_no_source')
+            if not (c and pair['old'] in c[0]['sides']):
+                raise ReportError(f'{where}: C.UTF-8 has no file at the old '
+                                  f'tag, and no `!!` says so: {c!r}')
+    unknown = _warnings_of(w, 'step2', 'added_rules_unknown')
+    for d in unknown or ():
+        stray = [x['name'] for x in d['locales'] if x['name'] not in added]
+        if stray:
+            raise ReportError(f'{where}: the `!!` of rules not known names '
+                              f'{stray!r}, no file only the new side has')
+    # The files only the old side has, as printed: the Removed file's rows.
+    rm = o['removed']
+    if not isinstance(rm, list):
+        raise ReportError(f'{where}.removed is not a list')
+    for i, x in enumerate(rm):
+        _keys(f'{where}.removed[{i}]', x, ['name', 'renamed_to'])
+        if not (_is_str(x['name']) and _is_str(x['renamed_to'])):
+            raise ReportError(f'{where}.removed[{i}] is {x!r}')
+    if s2['removed']['state'] == 'reported':
+        rows = [{'name': x['name'] if x['name'] != 'C' else 'C.UTF-8',
+                 'renamed_to': x['to'] if x['to'] != 'C' else 'C.UTF-8'}
+                for x in s2['removed']['rows']]
+        if rm != rows:
+            raise ReportError(f'{where}.removed {rm!r}, the Removed file '
+                              f'{rows!r}')
+    # The C.UTF-8 `!!` of one tag side without the file C: C.UTF-8 is a
+    # file only the other side has, unless that side is a build, which
+    # can lack it too.
+    c = _warnings_of(w, 'step2', 'c_utf8_no_source')
+    for d in c or ():
+        lack = d['sides']
+        if pair['old'] in lack and pair['new'] not in lack and \
+                run['new_class'] != 'build' and 'C.UTF-8' not in added:
+            raise ReportError(f'{where}: no C at {pair["old"]} alone, and '
+                              f'C.UTF-8 is not among the added files')
+        if pair['new'] in lack and pair['old'] not in lack and \
+                run['old_class'] != 'build' and \
+                'C.UTF-8' not in [x['name'] for x in rm]:
+            raise ReportError(f'{where}: no C at {pair["new"]} alone, and '
+                              f'C.UTF-8 is not among the removed files')
+    # A rename is a removed row and an added file, both ways.
+    gone = {x['name']: x['renamed_to'] for x in rm}
+    came = {x['name']: x['renamed_from'] for x in a['rows']}
+    for n, frm in came.items():
+        if frm != '-' and gone.get(frm) != n:
+            raise ReportError(f'{where}: {n} renamed from {frm}, which '
+                              f'Removed gives as {gone.get(frm)!r}')
+    for n, to in gone.items():
+        if to != '-' and to in came and came[to] != n:
+            raise ReportError(f'{where}: {n} renamed to {to}, which the '
+                              f'added files give as from {came[to]!r}')
+    # The entries of a machine's sources not read.
+    un = o['unread']
+    if not isinstance(un, list):
+        raise ReportError(f'{where}.unread is not a list')
+    for i, x in enumerate(un):
+        _keys(f'{where}.unread[{i}]', x, ['name', 'why', 'counted'])
+        if not (_is_str(x['name']) and _is_strs(x['why']) and x['why']
+                and _is_bool(x['counted'])):
+            raise ReportError(f'{where}.unread[{i}] is {x!r}')
+        if x['counted'] and len(x['why']) != 1:
+            raise ReportError(f'{where}.unread[{i}]: counted, yet not read '
+                              f'on both machines: {x!r}')
+    skipped = _warnings_of(w, 'step1', 'machine_entries_skipped')
+    if not machines and un:
+        raise ReportError(f'{where}.unread {un!r} with no machines')
+    if machines and skipped is not None:
+        which = {pair['old']: 'old', pair['new']: 'new'}
+        want = {}
+        for d in sorted(skipped, key=lambda d: d['machine'] != pair['old']):
+            if d['machine'] not in which:
+                raise ReportError(f'{where}: a `!!` of skipped entries of '
+                                  f'{d["machine"]!r}')
+            for e in d['entries']:
+                if not e['entry'].startswith('charmaps/'):
+                    want.setdefault(e['entry'], []).append(
+                        f"{e['why']} on the {which[d['machine']]} machine")
+        # Without order: both steps name an entry through shown() (step
+        # 2's C as C.UTF-8, mapped below), which quotes a name it cannot
+        # print bare (de_DE~), but step 2 sorts by the entry's own name,
+        # and a quoted name sorts apart.
+        want = sorted([n if n != 'C' else 'C.UTF-8', v]
+                      for n, v in want.items())
+        if sorted([x['name'], x['why']] for x in un) != want:
+            raise ReportError(f'{where}.unread {un!r}, step 1 {want!r}')
+    # The not-compared count: the files only one side has and the names
+    # of the `!!` of names not compared.
+    listed_w = _warnings_of(w, 'step2', 'rules_not_compared')
+    if listed_w is not None:
+        n_listed = sum(len(g_['names']) for d in listed_w
+                       for g_ in d['groups'])
+        n_unread = sum(1 for x in un if x['counted'])
+        if t['not_compared'] != len(added) + len(rm) + n_listed + n_unread:
+            raise ReportError(f'{where}.totals.not_compared '
+                              f'{t["not_compared"]}: {len(added)} added, '
+                              f'{len(rm)} removed, {n_listed} listed, '
+                              f'{n_unread} not read')
+    # The notes under the list.
+    import glibc_locale_data as g
+    ub = o['unbuilt']
+    _stated(f'{where}.unbuilt', ub, ('listed', 'not applicable'),
+            {'listed': ['names'], 'not applicable': ['why']})
+    if (ub['state'] == 'not applicable') != machines:
+        raise ReportError(f'{where}.unbuilt is {ub["state"]!r} with '
+                          f'machines={machines}')
+    ls = s2['listed']
+    if ls['state'] == 'reported':
+        shown = {g.shown(n) if n != 'C' else 'C.UTF-8'
+                 for n in ls['compared'] + ls['not_compared']}
+        if ub['state'] == 'listed':
+            _strs(f'{where}.unbuilt.names', ub['names'])
+            if not set(ub['names']) <= shown:
+                raise ReportError(f'{where}.unbuilt {ub["names"]!r} not all '
+                                  f'in the list')
+        _strs(f'{where}.not_ascii', o['not_ascii'])
+        bare = [n for n in o['not_ascii'] if g.SAFE_NAME.fullmatch(n)]
+        if bare:
+            raise ReportError(f'{where}.not_ascii {bare!r} printed bare')
+        if set(o['not_ascii']) & shown:
+            raise ReportError(f'{where}.not_ascii {o["not_ascii"]!r} in the '
+                              f'list')
+        for n in names + [m for d in listed_w or () for g_ in d['groups']
+                          for m in g_['names']]:
+            if n not in shown and n not in o['not_ascii']:
+                raise ReportError(f'{where}: {n} is neither in the list nor '
+                                  f'among the names not ASCII')
+
+
 def _not_yet(where, obj):
     _keys(where, obj, ['state', 'why'])
     if obj != NOT_YET:
@@ -3147,7 +3481,7 @@ def load(path):
 
     s2 = r['step2']
     _keys('step2', s2, ['listed', 'removed', 'rules_by_name',
-                        'rules_characters', 'totals', 'character_sets'])
+                        'rules_characters', 'rules', 'character_sets'])
     nr = {'not reported': ['why']}
 
     def listed(where, o):
@@ -3242,7 +3576,7 @@ def load(path):
         if isinstance(rb['measurements'], list) != rb['machines']:
             raise ReportError('step2.rules_by_name.measurements does not go '
                               'with machines')
-    _not_yet('step2.totals', s2['totals'])
+    _rules('step2.rules', s2, some, run, r['pair'], w, r['step11'])
     _not_yet('step2.character_sets', s2['character_sets'])
 
     def s11_not_run(where, o):

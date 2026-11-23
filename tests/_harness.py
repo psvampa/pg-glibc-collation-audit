@@ -683,6 +683,9 @@ def run_step(script, *args, out_dir=None):
                            capture_output=True)
         _STEP_CACHE[key] = (p.returncode,
                             (p.stdout + p.stderr).decode('utf-8', 'replace'))
+        if script == 'filter_lc_collate_changes.py':
+            step2_ran(_STEP_CACHE[key][1], env.get('PG_GLIBC_AUDIT_OUT'),
+                      list(args))
     return _STEP_CACHE[key]
 
 
@@ -740,7 +743,10 @@ def check_report(returncode, out, out_dir):
     warnings of step 11 (check_step11_warnings); step 11's log, summary
     and characters file against its data file, and that file against
     the report's step11.counts, step11.findings and step11.checks
-    (check_step11_counts). A run that
+    (check_step11_counts); and what step 2 printed of its rules, as
+    Step2Report reads it, against the report's step2.rules, kept in
+    STEP2_RUNS for a test that cuts the step's text out of the run its own
+    way. A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -830,6 +836,18 @@ def check_report(returncode, out, out_dir):
                               and printed['not run']):
         raise AssertionError(f'{path}: charmaps {state!r}, step 2 printed '
                              f'{printed!r}')
+    # What step 2 printed of its rules against the report's step2.rules.
+    rules = s2['rules']
+    if rules['state'] == 'not reported':
+        raise AssertionError(f'{path}: step 2 rules {rules!r}')
+    lines = out.split('\n')
+    at = [i for i, x in enumerate(lines) if x.startswith('== STEP 2 ')]
+    if len(at) != 1:
+        raise AssertionError(f'{path}: step 2 banner {len(at)} times')
+    end = next(j for j in range(at[0] + 2, len(lines))
+               if lines[j].startswith('== '))
+    Step2Report('\n'.join(lines[at[0] + 2:end - 1]), data=rules)
+    STEP2_RUNS.append((out, rules))
     # Two machines' own sources read: the route the summary names.
     machines = (r['run']['machines']['state'] == 'given'
                 and r['run']['route'] == 'builds')
@@ -3325,6 +3343,105 @@ def assert_no_route_looks(case, out, label=None):
     case.assertEqual(flat(out).count(NO_ROUTE_LOOKS), 2, label)
 
 
+# What each run of step 2 the suite made wrote of its rules
+# (step2_rules.<pair>.json), by the text it printed: step2_ran fills it
+# right after the run, before another run can write the same folder, and
+# Step2Report holds what it read of that text to it.
+STEP2_DATA = {}
+# What the step 2 text of each audit.sh run was cut from (check_report),
+# with that run's record: a test that cuts the step's text out of the run
+# its own way reads a part of one of these.
+STEP2_RUNS = []
+# Step2Report(text, data=NO_RECORD): text made up in a test, of no run.
+NO_RECORD = object()
+
+
+def step2_ran(text, out_dir, args):
+    """Keep the record step 2 wrote to OUT_DIR for the run whose output is
+    TEXT and whose arguments are ARGS (its two sides the first two that
+    are not options or --repo's value); nothing when it wrote none (it
+    stopped first)."""
+    import glibc_locale_data as g
+    sides = [a for a in args if not a.startswith('-')]
+    if len(sides) < 2 or not out_dir:
+        return
+    if '--repo' in args:
+        repo = args[args.index('--repo') + 1]
+        sides = [a for a in sides if a != repo]
+    path = os.path.join(out_dir, 'step2_rules.%s.json'
+                        % g.pair_slug(sides[0], sides[1]))
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8') as f:
+            STEP2_DATA[text] = json.load(f)
+
+
+MISSING_WORDS = {'not in SUPPORTED': '(not in SUPPORTED)',
+                 'not measured on that machine':
+                 '(not measured on that machine)'}
+
+
+def step2_held(rep, d, where):
+    """What Step2Report REP read of step 2's text against D, the record
+    the same run wrote (or the report's step2.rules): every line it
+    prints of its rules, field by field."""
+    def no(what, a, b):
+        raise AssertionError(f'{where}: step 2 printed {what} {a!r}, its '
+                             f'record says {b!r}')
+    if d['state'] == 'not compared':
+        if rep.nothing != d['why'] + '.':
+            no('"Rules: not compared"', rep.nothing, d['why'])
+        return
+    t = d['totals']
+    want = (t['names'], t['same'], t['differ'], t['not_compared'])
+    if rep.totals != want:
+        no('the totals', rep.totals, want)
+    groups = []
+    for x in d['differ']:
+        c = x['characters']
+        chars = (c['codepoints'] if c['state'] == 'listed' else
+                 c['count'] if c['state'] == 'counted' else
+                 () if c['state'] == 'none named' else
+                 ('not known', c['why']))
+        groups.append((x['names'], chars, x['every_rule']))
+    if rep.groups != groups:
+        no('the groups whose rules differ', rep.groups, groups)
+    a = d['added']
+    added = {}
+    for x in a['rows']:
+        if a['state'] == 'notice' and x['name'] == STEP2_C:
+            added[STEP2_C] = 'C.UTF-8 !!'
+            continue
+        sp = x['spellings']
+        tail = ', '.join(sp) if isinstance(sp, list) else \
+            MISSING_WORDS[sp['state']]
+        if x['renamed_from'] != '-':
+            tail += f"; renamed from {x['renamed_from']}"
+        added[x['name']] = tail
+    if rep.added != added:
+        no('the files only the new side has', rep.added, added)
+    if rep.added_warned != (a['state'] == 'notice' and
+                            any(n != STEP2_C for n in added)):
+        no('the files only the new side has as a `!!`', rep.added_warned,
+           a['state'])
+    removed = {x['name']: '' if x['renamed_to'] == '-' else
+               f"(renamed to {x['renamed_to']})" for x in d['removed']}
+    if rep.removed != removed:
+        no('the files only the old side has', rep.removed, removed)
+    unread = (flat(f"Not compared, not read among a machine's locale "
+                   f"sources ({len(d['unread'])}): "
+                   + ', '.join(f"{x['name']} ({'; '.join(x['why'])})"
+                               for x in d['unread']))
+              if d['unread'] else None)
+    if rep.unread != unread:
+        no('the entries not read', rep.unread, unread)
+    ub = d['unbuilt']
+    unbuilt = ub['names'] if ub['state'] == 'listed' else []
+    if rep.unbuilt != unbuilt:
+        no('the names not in SUPPORTED', rep.unbuilt, unbuilt)
+    if rep.not_ascii != d['not_ascii']:
+        no('the names not ASCII', rep.not_ascii, d['not_ascii'])
+
+
 class Step2Report:
     """What step 2 (filter_lc_collate_changes.py) printed, read strictly.
 
@@ -3343,7 +3460,15 @@ class Step2Report:
       removed: {name: its "(renamed to ...)" or ''};
     listed: {name: why}, the `!!` block of names listed in the summary;
     reindex: the names of the "Listed in the summary" line; unbuilt and
-      not_ascii: the two notes under it, as printed.
+      not_ascii: the two notes under it, as printed;
+    groups: [(names, characters, every)] as printed, characters read as
+      in differs, or ('not known', why); unread: the paragraph of the
+      entries of a machine's sources not read, flattened, or None.
+
+    Held to the record of the run that printed it (step2_held): DATA, or
+    what step2_ran kept for this text, or that of the audit.sh runs whose
+    output holds it, when they agree; a text with none fails, unless DATA is
+    NO_RECORD (a text made up in a test).
 
     Every count a heading prints must equal the names under it, every line
     of a block it reads must be one of the block's forms, and the totals
@@ -3352,8 +3477,9 @@ class Step2Report:
     STEP2_C everywhere (16.139).
     """
 
-    def __init__(self, out):
+    def __init__(self, out, data=None):
         self.out = out
+        self.groups, self.unread = [], None
         self.totals = self.nothing = None
         self.differs, self.added, self.removed = {}, {}, {}
         self.added_warned = False
@@ -3405,6 +3531,10 @@ class Step2Report:
             elif head.startswith(STEP2_LISTED + ' ('):
                 self._seen('reindex')
                 self._reindex(lines)
+            elif head.startswith("Not compared, not read among a "
+                                 "machine's locale sources ("):
+                self._seen('unread')
+                self.unread = flat(para)
         # Printed right under pair_check's `!!`, with no blank line between.
         nothing = re.findall(r'(?m)^Rules: not compared, (.+)$', out)
         if len(nothing) > 1:
@@ -3444,14 +3574,43 @@ class Step2Report:
                 raise AssertionError(f'{differ} differ and {len(self.differs)}'
                                      f' named under "Rules differ"')
             named = len(self.added) + len(self.removed) + len(self.listed)
+            # An entry of a machine's sources not read that the other side
+            # holds is counted, and named only on its own line: the record
+            # says which (step2_rules' unread, counted).
+            d_ = self._record(data)
+            if d_ not in (None, NO_RECORD) and \
+                    d_.get('state') != 'not compared':
+                named += sum(1 for x in d_['unread'] if x['counted'])
             if nc != named:
                 raise AssertionError(f'{nc} not compared and {named} named '
                                      f'under the not-compared headings')
             if not self.reindex_line:
                 raise AssertionError('step 2 compared and printed no '
                                      f'"{STEP2_LISTED}" line')
+        d = self._record(data)
+        if d is None:
+            raise AssertionError(
+                'Step2Report read a step 2 text with no record of the run '
+                'that printed it: its runner calls step2_ran, check_report '
+                'keeps an audit.sh run\'s, or the test passes data= (or '
+                'NO_RECORD for text of no run)')
+        if d is not NO_RECORD:
+            step2_held(self, d, 'Step2Report')
 
     _once = None
+
+    def _record(self, data):
+        """The record of the run this text came from: DATA, or the one
+        step2_ran kept for this text, or that of the audit.sh runs whose
+        output holds it, when they agree; None when there is none."""
+        if data is not None:
+            return data
+        if self.out in STEP2_DATA:
+            return STEP2_DATA[self.out]
+        runs = [d for out, d in STEP2_RUNS if self.out in out]
+        if runs and all(d == runs[0] for d in runs):
+            return runs[0]
+        return None
 
     def _seen(self, block):
         self._once = self._once or set()
@@ -3515,6 +3674,8 @@ class Step2Report:
                 text = text[:-len(end)].strip()
             if text.startswith('which characters is not known: '):
                 chars = None
+                why = ('not known',
+                       text[len('which characters is not known: '):])
             elif text == 'the lines that count name no character':
                 chars = ()
             elif text == '' and every:
@@ -3537,7 +3698,10 @@ class Step2Report:
                     if len(chars) != int(m.group(1)):
                         raise AssertionError(f'says {m.group(1)} characters '
                                              f'and prints {len(chars)}')
-            for name in ' '.join(names).split(', '):
+            group = ' '.join(names).split(', ')
+            self.groups.append((group, why if chars is None else chars,
+                                every))
+            for name in group:
                 if not name or name in self.differs:
                     raise AssertionError(f'name {name!r} empty or twice')
                 self.differs[name] = (chars, every)

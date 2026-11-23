@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import _harness
 from _harness import (written_warnings, EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
                       NEW, OLD, PG_VERSION_DIFFER, PG_VERSION_SAME,
                       PG_VERSION_UNKNOWN,
@@ -648,7 +649,10 @@ def run_script(script, *args, env_extra=None):
            if script.endswith('.py') else [os.path.join(SCRIPTS_DIR, script)])
     p = subprocess.run(cmd + list(args), cwd=SCRIPTS_DIR, env=env,
                        capture_output=True)
-    return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
+    text = (p.stdout + p.stderr).decode('utf-8', 'replace')
+    if script == 'filter_lc_collate_changes.py':
+        _harness.step2_ran(text, env.get('PG_GLIBC_AUDIT_OUT'), list(args))
+    return p.returncode, text
 
 
 def add_unrelated_commit(repo, when, name='unrelated', parent=None):
@@ -1566,6 +1570,7 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
                            env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out_dir),
                            capture_output=True)
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        _harness.step2_ran(out, out_dir, [old, new])
         self.assertEqual(p.returncode, 0, out)
         listed = read_list(os.path.join(
             out_dir, f'step2_changed_collate.{old}..{new}.txt'))
@@ -2108,7 +2113,10 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         rc, text = run_script('filter_lc_collate_changes.py', OLD, MID, *extra,
                               env_extra=dict(env_extra,
                                              PG_GLIBC_AUDIT_OUT=out))
-        return rc, text.replace(out, '<out>')
+        shown = text.replace(out, '<out>')
+        if text in _harness.STEP2_DATA:
+            _harness.STEP2_DATA[shown] = _harness.STEP2_DATA[text]
+        return rc, shown
 
     def test_step_2_is_identical_under_each_config(self):
         pad = os.path.join(self.tmp, 'pad.sh')

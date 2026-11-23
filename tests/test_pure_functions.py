@@ -315,8 +315,20 @@ class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
             '  %d name(s), locale files and locale.alias aliases: 0 the '
             'same, %d differ, 0 not compared.\n'
             % (len(differs), len(differs))
-            + self.printed(f.print_differs, got, differs, '/out/chars.tsv')
-            + '\n' + _harness.STEP2_LISTED + ' (0): none\n')
+            + self.printed(f.print_differs, f.differ_groups(got, differs),
+                           '/out/chars.tsv')
+            + '\n' + _harness.STEP2_LISTED + ' (0): none\n',
+            data=self.record(got, differs))
+
+    def record(self, got, differs):
+        """The record step 2 would write beside what report() prints."""
+        return {'state': 'compared',
+                'totals': {'names': len(differs), 'same': 0,
+                           'differ': len(differs), 'not_compared': 0},
+                'differ': f.differ_groups(got, differs),
+                'added': {'state': 'none', 'rows': []}, 'removed': [],
+                'unread': [], 'unbuilt': {'state': 'listed', 'names': []},
+                'not_ascii': []}
 
     def test_each_of_the_four_printings(self):
         got = {
@@ -331,7 +343,8 @@ class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
         self.assertEqual(r.differs, {'aa': (None, False), 'bb': ((), False),
                                      'cc': ([0x41, 0x42], False),
                                      'dd': (2, True), 'ee': (None, True)})
-        text = flat(self.printed(f.print_differs, got, sorted(got),
+        groups = f.differ_groups(got, sorted(got))
+        text = flat(self.printed(f.print_differs, groups,
                                  '/out/chars.tsv'))
         # Not known is never a count, and says why.
         self.assertIn('aa which characters is not known: a line it cannot '
@@ -343,11 +356,25 @@ class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
         self.assertNotIn('0 character(s)', text)
         self.assertNotIn('(0)', text)
 
+    def test_a_text_with_no_record_is_refused(self):
+        """A step 2 text whose run left no record (step2_ran) is not read
+        as held: Step2Report fails, unless told the text is of no run."""
+        text = ('The sort rules localedef builds for each locale at a and '
+                'at b:\n  0 name(s), locale files and locale.alias '
+                'aliases: 0 the same, 0 differ, 0 not compared.\n\n'
+                'Rules differ: none.\n\n' + _harness.STEP2_LISTED
+                + ' (0): none\n')
+        with self.assertRaisesRegex(AssertionError, 'no record'):
+            _harness.Step2Report(text)
+        self.assertEqual(_harness.Step2Report(
+            text, data=_harness.NO_RECORD).totals, (0, 0, 0, 0))
+
     def test_names_with_one_answer_are_one_group_and_two_answers_two(self):
         got = {n: self.R(glibc_tree.DIFFERS, None, (0x57, 0x77), False)
                for n in ('sv_FI', 'sv_SE')}
         got['th_TH'] = self.R(glibc_tree.DIFFERS, None, (0x41,), True)
-        text = self.printed(f.print_differs, got, sorted(got),
+        groups = f.differ_groups(got, sorted(got))
+        text = self.printed(f.print_differs, groups,
                             '/out/chars.tsv')
         self.assertIn('\n  sv_FI, sv_SE\n', text)
         self.assertIn('\n  th_TH\n', text)

@@ -34,7 +34,10 @@ def write(d, name, text):
 def step2_files(d, removed='en_US@ampm (deleted)\nxx (renamed to yy)\n',
                 **by_name):
     """The files step 2 writes; by_name replaces fields of its
-    step2_rules_by_name (tags, something compared, check compared)."""
+    step2_rules_by_name (tags, something compared, check compared), and
+    step2_rules follows them: compared nothing where by_name says so, else
+    or_IN's group, the removed rows, and SUPPORTED not applicable on two
+    machines."""
     write(d, f'step2_changed_collate.{PAIR}.txt', 'C\nor_IN\nsv_SE\n')
     write(d, f'step2_not_compared.{PAIR}.txt', 'sv_SE\n')
     write(d, f'step2_removed_locales.{PAIR}.txt',
@@ -49,6 +52,23 @@ def step2_files(d, removed='en_US@ampm (deleted)\nxx (renamed to yy)\n',
     write(d, f'step2_rules_characters.{PAIR}.tsv',
           '# name\tstate\tevery rule can change\tcharacters\n'
           'or_IN\tdiffers\tyes\tU+0000 U+0001\n')
+    rows = [{'name': m[1], 'renamed_to': m[3] or '-'} for m in (
+        rd.REMOVED_ROW.fullmatch(x) for x in removed.split('\n') if x)]
+    write(d, f'step2_rules.{PAIR}.json', json.dumps(
+        {'step': 2, 'state': 'not compared', 'why': data['what']}
+        if data['nothing'] else
+        {'step': 2, 'state': 'compared',
+         'totals': {'names': 11 + len(rows), 'same': 10, 'differ': 1,
+                    'not_compared': len(rows)},
+         'differ': [{'names': ['or_IN'], 'every_rule': True,
+                     'characters': {'state': 'counted', 'count': 2}}],
+         'added': {'state': 'none', 'rows': []}, 'removed': rows,
+         'unread': [],
+         'unbuilt': ({'state': 'not applicable',
+                      'why': "a machine's file holds no SUPPORTED"}
+                     if data['machines'] else
+                     {'state': 'listed', 'names': []}),
+         'not_ascii': []}) + '\n')
 
 
 MACHINES = dict(
@@ -583,9 +603,10 @@ class EveryFileWritten(_Folder):
             'state': 'not run', 'why': "no machines' files",
             'not_done': list(rd.STEP11_NOT_DONE)})
         self.assertEqual(r['run']['machines']['state'], 'not given')
-        for part in (r['compared'], r['step2']['totals'],
-                     r['step2']['character_sets']):
+        for part in (r['compared'], r['step2']['character_sets']):
             self.assertEqual(part['state'], 'not yet reported')
+        self.assertEqual(r['step2']['rules']['totals'], {
+            'names': 13, 'same': 10, 'differ': 1, 'not_compared': 2})
         self.assertEqual(r['warnings']['step11'], {
             'state': 'not run', 'why': "no machines' files"})
         self.assertEqual(r['warnings']['step0']['state'], 'not run')
@@ -1335,10 +1356,11 @@ class AFileNotWritten(_Folder):
                            ('step2_not_compared', 'listed'),
                            ('step2_removed_locales', 'removed'),
                            ('step2_rules_by_name', 'rules_by_name'),
-                           ('step2_rules_characters', 'rules_characters')):
+                           ('step2_rules_characters', 'rules_characters'),
+                           ('step2_rules', 'rules')):
             with self.subTest(name=name):
                 step2_files(self.d)
-                ext = ('.json' if name.endswith('by_name') else
+                ext = ('.json' if name.endswith(('by_name', 'rules')) else
                        '.tsv' if name.endswith('characters') else '.txt')
                 os.remove(os.path.join(self.d, f'{name}.{PAIR}{ext}'))
                 got = self.written()['step2'][part]
@@ -2368,7 +2390,7 @@ class TheReaderIsStrict(_Folder):
                      ('run', 'machines'), ('warnings', 'step0'),
                      ('warnings', 'step1'), ('warnings', 'step2'),
                      ('compared',),
-                     ('step2', 'totals')):
+                     ('step2', 'rules')):
             with self.subTest(path=path):
                 def change(r):
                     x = r
@@ -3490,7 +3512,7 @@ class TheReaderIsStrict(_Folder):
         def all_three_kept(r):
             # The control: the same report, each rule kept, is read.
             lists_where_nothing_was_compared(r)
-            for part in ('listed', 'rules_characters'):
+            for part in ('listed', 'rules_characters', 'rules'):
                 r['step2'][part] = {'state': 'not compared', 'why': 'x'}
         r = copy.deepcopy(self.good)
         all_three_kept(r)
@@ -3545,6 +3567,266 @@ class TheReaderIsStrict(_Folder):
         def change(r):
             r['step11'] = {'state': 'not run', 'why': 'x', 'not_done': []}
         self.refuses(change)
+
+
+
+class StepTwosRulesHangTogether(_Folder):
+    """step2.rules (step 2's step2_rules), each fact written wrong alone,
+    refused by load() for the reason named, on two machines and on two
+    tags; and the controls that a right change is read."""
+
+    def read(self, r):
+        p = os.path.join(self.d, 'changed.json')
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        return rd.load(p)
+
+    def check(self, good, cases, controls=()):
+        self.assertEqual(self.read(copy.deepcopy(good)), good)
+        for why, change in cases:
+            with self.subTest(why=why, line=change.__code__.co_firstlineno):
+                r = copy.deepcopy(good)
+                change(r)
+                with self.assertRaisesRegex(rd.ReportError, why):
+                    self.read(r)
+        for change in controls:
+            with self.subTest(control=change.__code__.co_firstlineno):
+                r = copy.deepcopy(good)
+                change(r)
+                self.assertEqual(self.read(r), r)
+
+    def machines(self):
+        step2_files(self.d, **MACHINES)
+        step11_files(self.d)
+        warnings_file(self.d, 0, [])
+        warnings_file(self.d, 1, [])
+        warnings_file(self.d, 2, [])
+        warnings_file(self.d, 11, ['same_build', 'other_encoding',
+                                   'closing'])
+        return self.written(**ON_MACHINES)
+
+    def test_on_two_machines(self):
+        good = self.machines()
+
+        def R(r):
+            return r['step2']['rules']
+
+        def more(r, **k):
+            for key, n in k.items():
+                R(r)['totals'][key] += n
+                R(r)['totals']['names'] += n
+
+        def added(r, spellings, renamed_from='xx', name='yy'):
+            R(r)['added'] = {'state': 'plain', 'rows': [
+                {'name': name, 'spellings': spellings,
+                 'renamed_from': renamed_from}]}
+            more(r, not_compared=1)
+
+        def group(r, **k):
+            R(r)['differ'][0].update(k)
+
+        def skipped(r, why, other=None):
+            # de_IT skipped on both machines, as step 1 says it.
+            items = r['warnings']['step1']['items']
+            for machine in ('glibc-2.28', other or 'glibc-2.34'):
+                items.append(rd.warning_item(
+                    'x', 'machine_entries_skipped',
+                    {'machine': machine,
+                     'entries': [{'entry': 'de_IT', 'why': 'symlink'}]},
+                    '!! machine_entries_skipped'))
+            R(r)['unread'].append({'name': 'de_IT', 'why': why,
+                                   'counted': False})
+
+        def unsafe_and_bare(r):
+            entries = [{'entry': 'aa_DJ', 'why': 'symlink'},
+                       {'entry': ascii('de_DE~'), 'why': 'unsafe name'}]
+            r['warnings']['step1']['items'].append(rd.warning_item(
+                'x', 'machine_entries_skipped',
+                {'machine': 'glibc-2.28', 'entries': entries},
+                '!! machine_entries_skipped'))
+            R(r)['unread'] += [
+                {'name': 'aa_DJ', 'counted': False,
+                 'why': ['symlink on the old machine']},
+                {'name': ascii('de_DE~'), 'counted': False,
+                 'why': ['unsafe name on the old machine']}]
+
+        cases = [
+            ('totals do not add up',
+             lambda r: R(r)['totals'].update(names=99)),
+            ('names in its groups', lambda r: more(r, differ=1)),
+            ('the characters file',
+             lambda r: group(r, names=['zz_ZZ'])),
+            ('its row', lambda r: group(
+                r, characters={'state': 'counted', 'count': 3})),
+            ('its row', lambda r: group(
+                r, every_rule=False,
+                characters={'state': 'listed', 'codepoints': [0, 1]})),
+            (r'differ\[0\]: ', lambda r: group(
+                r, characters={'state': 'listed', 'codepoints': [0, 1]})),
+            (r'differ\[0\]: ', lambda r: group(
+                r, every_rule=False)),
+            ('names one locale twice', lambda r: R(r)['differ'].append(
+                copy.deepcopy(R(r)['differ'][0]))),
+            ('the Removed file', lambda r: (R(r)['removed'].pop(),
+                                            more(r, not_compared=-1))),
+            ('the Removed file',
+             lambda r: R(r)['removed'][1].update(renamed_to='zz')),
+            ('which Removed gives', lambda r: added(
+                r, {'state': 'not measured on that machine'}, 'qq')),
+            ('added.state is', lambda r: (
+                added(r, {'state': 'not measured on that machine'}),
+                R(r)['added'].update(state='notice'))),
+            ('is no measured name of', lambda r: added(r, ['zz_ZZ'])),
+            ('with machines=True', lambda r: added(
+                r, {'state': 'not in SUPPORTED'})),
+            ('step 1', lambda r: (R(r)['unread'].append(
+                {'name': 'zz_U', 'why': ['symlink on the new machine'],
+                 'counted': False}))),
+            ('counted, yet not read on both machines',
+             lambda r: R(r)['unread'].append(
+                 {'name': 'zz_U', 'counted': True,
+                  'why': ['symlink on the old machine',
+                          'symlink on the new machine']})),
+            ('not_compared', lambda r: more(r, not_compared=1)),
+            ('unbuilt is', lambda r: R(r).update(
+                unbuilt={'state': 'listed', 'names': []})),
+            ('printed bare', lambda r: R(r)['not_ascii'].append('zz_ZZ')),
+            ('where step 2 compared something', lambda r: r['step2'].update(
+                rules={'state': 'not compared', 'why': 'x'})),
+            ('added files give as from', lambda r: added(
+                r, {'state': 'not measured on that machine'}, '-')),
+            ('step 1', lambda r: skipped(r, ['symlink on the new machine',
+                                             'symlink on the old machine'])),
+            ('skipped entries of', lambda r: skipped(
+                r, ['symlink on the old machine',
+                    'symlink on the new machine'], other='zz_machine')),
+            # sv_SE is measured, and step 11 calls it on the new machine.
+            ('measured on the new machine under it', lambda r: added(
+                r, {'state': 'not measured on that machine'}, '-', 'sv_SE')),
+            ('yet a `!!`', lambda r: r['warnings']['step2']['items'].append(
+                rd.warning_item('x', 'added_not_at_old',
+                                {'at': 'glibc-2.28', 'named': 'tag',
+                                 'locales': ['zz']}, '!! added_not_at_old'))),
+            ('in the list', lambda r: (
+                r['step2']['listed']['compared'].append('zz Z'),
+                R(r)['not_ascii'].append(ascii('zz Z')))),
+        ]
+        self.check(good, cases, controls=[
+            # A file only the new side has, renamed from a removed one,
+            # that no name measured on the new machine is built from.
+            lambda r: added(r, {'state': 'not measured on that machine'}),
+            # The names measured on the new machine under the file.
+            lambda r: added(r, ['sv_SE'], '-', 'sv_SE'),
+            # An entry skipped on both machines: its reasons old first.
+            lambda r: skipped(r, ['symlink on the old machine',
+                                  'symlink on the new machine']),
+            # A link and an editor's backup on the old machine: step 2
+            # sorts them by their own names, step 1 quotes the backup's.
+            lambda r: unsafe_and_bare(r),
+        ])
+
+    def test_on_two_tags(self):
+        step2_files(self.d)
+        warnings_file(self.d, 1, [])
+        with open(os.path.join(self.d, f'step2_rules.{PAIR}.json'),
+                  encoding='utf-8') as f:
+            rules = json.load(f)
+        rules['added'] = {'state': 'notice', 'rows': [
+            {'name': 'zz_NEW', 'spellings': {'state': 'not in SUPPORTED'},
+             'renamed_from': '-'}]}
+        rules['totals']['not_compared'] += 1
+        rules['totals']['names'] += 1
+        write(self.d, f'step2_rules.{PAIR}.json', json.dumps(rules) + '\n')
+        write(self.d, f'step2.{PAIR}.warnings.jsonl', json.dumps(
+            {'kind': 'added_not_at_old', 'text': '!! added_not_at_old',
+             'data': {'at': 'glibc-2.28', 'named': 'tag',
+                      'locales': ['zz_NEW']}}) + '\n')
+        good = self.written()
+
+        def items(r):
+            return r['warnings']['step2']['items']
+
+        def warning(kind, data):
+            return rd.warning_item('x', kind, data, f'!! {kind}')
+
+        def c_added(r):
+            rules = r['step2']['rules']
+            rules['added']['rows'].append(
+                {'name': 'C.UTF-8', 'renamed_from': '-',
+                 'spellings': {'state': rd.MISSING_STATES[2]}})
+            rules['totals']['not_compared'] += 1
+            rules['totals']['names'] += 1
+
+        def notice_names(r, names):
+            items(r)[0]['data']['locales'] = names
+            items(r)[0]['title'] = rd.KINDS['added_not_at_old'][2](
+                items(r)[0]['data'])
+
+        cases = [
+            ('the `!!`', lambda r: notice_names(r, ['zz_OTHER'])),
+            ('the `!!`', lambda r: items(r).clear()),
+            ('added.state is', lambda r: r['step2']['rules']['added'].update(
+                state='plain')),
+            ('rules not known names', lambda r: items(r).append(warning(
+                'added_rules_unknown', {'old': 'glibc-2.28',
+                                        'new': 'glibc-2.34',
+                                        'locales': [{'name': 'zz_X',
+                                                     'why': 'w'}]}))),
+            ('not among the added files', lambda r: items(r).append(warning(
+                'c_utf8_no_source', {'sides': ['glibc-2.28']}))),
+            ('not among the removed files', lambda r: items(r).append(
+                warning('c_utf8_no_source', {'sides': ['glibc-2.34']}))),
+            ('with no machines', lambda r: r['step2']['rules'][
+                'unread'].append({'name': 'zz_U', 'counted': False,
+                                  'why': ['symlink on the new machine']})),
+            ('C.UTF-8 has no file at the old', lambda r: c_added(r)),
+            ('with the added state', lambda r: (c_added(r), r['step2'][
+                'rules']['added']['rows'][-1].update(
+                    spellings={'state': 'not in SUPPORTED'}), items(r).append(
+                warning('c_utf8_no_source', {'sides': ['glibc-2.28']})))),
+            ('not all in the list', lambda r: r['step2']['rules'][
+                'unbuilt']['names'].append('zz_ZZ')),
+            ('neither in the list', lambda r: (
+                r['step2']['rules']['differ'].append(
+                    {'names': ['zz_A'], 'every_rule': False,
+                     'characters': {'state': 'none named'}}),
+                r['step2']['rules']['totals'].update(
+                    differ=2, names=r['step2']['rules']['totals']['names']
+                    + 1),
+                r['step2']['rules_characters']['rows'].append(
+                    ['zz_A', 'differs', 'no', '']))),
+        ]
+        self.check(good, cases, controls=[
+            lambda r: items(r).append(warning(
+                'added_rules_unknown', {'old': 'glibc-2.28',
+                                        'new': 'glibc-2.34',
+                                        'locales': [{'name': 'zz_NEW',
+                                                     'why': 'w'}]})),
+            # Both tags without C: C.UTF-8 is neither added nor removed.
+            lambda r: items(r).append(warning(
+                'c_utf8_no_source', {'sides': ['glibc-2.28',
+                                               'glibc-2.34']})),
+            # C at the new tag alone: added, and the `!!` says so.
+            lambda r: (c_added(r), items(r).append(warning(
+                'c_utf8_no_source', {'sides': ['glibc-2.28']}))),
+        ])
+
+    def test_where_nothing_was_compared(self):
+        what = nothing_files(self.d)
+        good = self.written()
+        self.assertEqual(good['step2']['rules'],
+                         {'state': 'not compared', 'why': what})
+        self.check(good, [
+            ('is not', lambda r: r['step2']['rules'].update(why='x')),
+        ])
+
+    def test_the_constants_are_step_2s(self):
+        """The states the reader takes are the ones step 2 writes."""
+        import filter_lc_collate_changes as f
+        self.assertEqual(rd.CHARACTER_STATES, f.CHARACTER_STATES)
+        self.assertEqual(rd.MISSING_STATES,
+                         tuple(f.MISSING_STATES.values()) + (f.C_NOTICE,))
+        self.assertEqual(rd.ADDED_STATES, f.ADDED_STATES)
 
 
 if __name__ == '__main__':
