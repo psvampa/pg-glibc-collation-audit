@@ -746,8 +746,9 @@ def check_report(returncode, out, out_dir):
     (check_step11_counts); and what step 2 printed of its rules, as
     Step2Report reads it, against the report's step2.rules, kept in
     STEP2_RUNS for a test that cuts the step's text out of the run its own
-    way; and what it printed of its character set check against the
-    report's step2.character_sets (charmaps_held). A run that
+    way; and what it printed of its character set check and of its
+    transliterations against the report's step2.character_sets and
+    step2.transliteration (charmaps_held, translit_held). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -856,6 +857,13 @@ def check_report(returncode, out, out_dir):
         raise AssertionError(f'{path}: step 2 character sets {cs!r}')
     charmaps_held('\n'.join(lines[at[0] + 2:end - 1]), cs, path,
                   (r['pair']['old'], r['pair']['new']), r['run']['word'])
+    # And of its transliterations against step2.transliteration.
+    tr = s2['transliteration']
+    if tr['state'] == 'not reported':
+        raise AssertionError(f'{path}: step 2 transliteration {tr!r}')
+    translit_held('\n'.join(lines[at[0] + 2:end - 1]), tr, path,
+                  (r['pair']['old'], r['pair']['new']), r['run']['word'],
+                  machines=cs.get('basis') == 'measured')
     # Two machines' own sources read: the route the summary names.
     machines = (r['run']['machines']['state'] == 'given'
                 and r['run']['route'] == 'builds')
@@ -3369,8 +3377,9 @@ def step2_ran(text, out_dir, args):
     TEXT and whose arguments are ARGS (its two sides the first two that
     are not options or --repo's value); nothing when it wrote none (it
     stopped first). And hold what TEXT says of the character set check
-    to the record of it the same run wrote (charmaps_held), which must be
-    there where TEXT prints the check."""
+    and of the transliterations to the record of each the same run wrote
+    (charmaps_held, translit_held), which must be there where TEXT prints
+    them."""
     import glibc_locale_data as g
     sides = [a for a in args if not a.startswith('-')]
     if len(sides) < 2 or not out_dir:
@@ -3385,11 +3394,22 @@ def step2_ran(text, out_dir, args):
             STEP2_DATA[text] = json.load(f)
     path = os.path.join(out_dir, 'step2_character_sets.%s.json'
                         % g.pair_slug(sides[0], sides[1]))
+    cs = None
     if os.path.isfile(path):
         with open(path, encoding='utf-8') as f:
-            charmaps_held(text, json.load(f), 'step2_ran', sides[:2])
+            cs = json.load(f)
+        charmaps_held(text, cs, 'step2_ran', sides[:2])
     elif _cs_block(text) is not None:
         raise AssertionError(f'step 2 printed its character set check and '
+                             f'wrote no {path}')
+    path = os.path.join(out_dir, 'step2_transliteration.%s.json'
+                        % g.pair_slug(sides[0], sides[1]))
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8') as f:
+            translit_held(text, json.load(f), 'step2_ran', sides[:2],
+                          machines=bool(cs) and cs.get('basis') == 'measured')
+    elif _tr_block(text) is not None:
+        raise AssertionError(f'step 2 printed its transliterations and '
                              f'wrote no {path}')
 
 
@@ -3607,6 +3627,209 @@ def charmaps_held(text, rec, where, sides=None, word=None):
               for x in rec['anyway']]
     if got['anyway'] != anyway:
         no('the builds the summary lists anyway', got['anyway'], anyway)
+
+
+TR_HEAD = 'Transliteration (LC_CTYPE): '
+TR_LIST = re.compile(r"Locale builds whose collating elements are built "
+                     r"differently \((?P<n>\d+)\), listed in the summary:")
+TR_MORE = re.compile(r"(?P<n>\d+) more locale builds? with collating "
+                     r"elements built differently, or not compared, "
+                     r"(?P<verb>is|are) listed already\.")
+TR_LINE = [
+    ('no change', re.compile(
+        r"no character set and no locale file's LC_CTYPE changed "
+        r"(?P<between>between the \w+), so no collating element is built "
+        r"differently\.")),
+    ('elements', re.compile(
+        r"(?P<e>\d+) collating elements? of (?P<b>\d+) locale builds? "
+        r"(?P<dep>depends?) on a transliteration; (?P<n>none|\d+) "
+        r"(?P<verb>is|are) built differently at (?P<at>\S+?)\.")),
+    ('unmoved', re.compile(
+        r"(?P<u>\d+) locale builds? may build a collating element out of a "
+        r"transliteration, and nothing (?P<read>they read|it reads) changed "
+        r"(?P<between>between the \w+)\.")),
+    ('none', re.compile(r"no compared locale build builds a collating "
+                        r"element out of a transliteration\.")),
+    ('listed already', re.compile(
+        r"the (?P<k>\d+) locale builds? that may build a collating element "
+        r"out of a transliteration (?P<verb>is|are) listed already, so none "
+        r"was compared\.")),
+]
+
+
+def _tr_block(text):
+    """The lines of the transliterations' part without `!!`, from the
+    first of its lines (its "Transliteration (LC_CTYPE):" line, else its
+    list, else its "N more" line) to a blank line or a `!!`; None where
+    there is none."""
+    lines = text.split('\n')
+    at = [i for i, x in enumerate(lines)
+          if x.startswith(TR_HEAD)
+          or x.startswith('Locale builds whose collating elements')
+          or re.match(r'\d+ more locale builds? with collating', x)]
+    if not at:
+        return None
+    out = []
+    for x in lines[at[0]:]:
+        if not x.strip() or x.startswith('!!'):
+            break
+        out.append(x)
+    if len(out) < at[-1] - at[0] + 1:
+        raise AssertionError(f'step 2 printed its transliterations in two '
+                             f'places: {[lines[i] for i in at]!r}')
+    return out
+
+
+def translit_read(text):
+    """What step 2 printed of its transliterations without `!!`, read
+    strictly: None where it printed none of its lines, else {'line': one
+    of node_charmaps.TRANSLIT_LINES or 'no change', its numbers and words,
+    'listed': [(entry, charmap, count, via, codepoints)], 'more': N or
+    None}. A line it cannot place raises."""
+    block = _tr_block(text)
+    if block is None:
+        return None
+    segs = []        # [prose, [rows]]
+    for x in block:
+        if x.startswith('      '):
+            if not segs or not segs[-1][1]:
+                raise AssertionError(f'characters with no build: {x!r}')
+            segs[-1][1][-1].append(x.strip())
+        elif x.startswith('  ') and not x.startswith('   '):
+            if not segs:
+                raise AssertionError(f'a build with no heading: {x!r}')
+            segs[-1][1].append([x[2:]])
+        elif x.startswith(' '):
+            raise AssertionError(f'unexpected line: {x!r}')
+        elif segs and not segs[-1][1]:
+            # textwrap breaks a name at its hyphen: the line then ends in
+            # the hyphen, and goes on with no blank.
+            segs[-1][0] += ('' if segs[-1][0].endswith('-') else ' ') + x
+        else:
+            segs.append([x, []])
+    got = {'line': 'no line', 'listed': [], 'more': None}
+    t = segs[0][0]
+    if t.startswith(TR_HEAD):
+        t = t[len(TR_HEAD):]
+        for name, form in TR_LINE:
+            m = re.compile(form.pattern + r'(?= |$)').match(t)
+            if m:
+                break
+        else:
+            raise AssertionError(f'unreadable transliteration line: {t!r}')
+        got['line'] = name
+        d = m.groupdict()
+        if name == 'elements':
+            e, b = int(d['e']), int(d['b'])
+            n = 0 if d['n'] == 'none' else int(d['n'])
+            if d['n'] == '0' or (d['dep'] == 'depends') != (e == 1) or \
+                    (d['verb'] == 'is') != (n < 2) or \
+                    m[0].startswith(f"{e} collating elements ") == (e == 1):
+                raise AssertionError(f'unreadable transliteration line: '
+                                     f'{t!r}')
+            got.update(elements=e, builds=b, changed=n, at=d['at'])
+        elif name == 'unmoved':
+            u = int(d['u'])
+            if (d['read'] == 'it reads') != (u == 1):
+                raise AssertionError(f'{d["read"]} with {u}: {t!r}')
+            got.update(unmoved=u, between=d['between'])
+        elif name == 'listed already':
+            k = int(d['k'])
+            if (d['verb'] == 'is') != (k == 1):
+                raise AssertionError(f'{d["verb"]} with {k}: {t!r}')
+            got.update(skipped=k)
+        elif name == 'no change':
+            got.update(between=d['between'])
+        t = t[m.end():].lstrip(' ')
+    heads = [t] + [x for x, _ in segs[1:]]
+    rowss = [r for _, r in segs]
+    for head, rows in zip(heads, rowss):
+        m = TR_LIST.match(head)
+        if m:
+            if got['listed'] or int(m['n']) != len(rows) or not rows:
+                raise AssertionError(f'unreadable list {head!r} over '
+                                     f'{rows!r}')
+            for row in rows:
+                r = re.fullmatch(r'(\S+) \((\S+)\): (\d+) elements?, '
+                                 r'defined in (.+)', row[0])
+                chars = ' '.join(row[1:])
+                c = re.fullmatch(r'transliterated characters \((\d+)\):'
+                                 r'(?: (.+))?', chars)
+                cps = ([int(h, 16) for h in
+                        re.findall(r'U\+([0-9A-F]{4,})', c[2] or '')]
+                       if c else None)
+                if not r or not c or len(cps) != int(c[1]):
+                    raise AssertionError(f'unreadable build {row!r}')
+                got['listed'].append((r[1], r[2], int(r[3]), r[4], cps))
+            head = head[m.end():].lstrip(' ')
+        elif rows:
+            raise AssertionError(f'unreadable heading {head!r} over '
+                                 f'{rows!r}')
+        if head:
+            m = TR_MORE.fullmatch(head)
+            if not m or got['more'] is not None or \
+                    (m['verb'] == 'is') != (m['n'] == '1'):
+                raise AssertionError(f'unreadable line {head!r}')
+            got['more'] = int(m['n'])
+    return got
+
+
+def translit_held(text, rec, where, sides=None, word=None, machines=False):
+    """What step 2 printed of its transliterations without `!!`
+    (translit_read) against REC, the record the same run wrote
+    (step2_transliteration) or the report's step2.transliteration: none
+    of its lines where the check compared no build, or where all it has
+    are builds it could not compare (their `!!`), else each line field
+    by field; SIDES, the two sides' names, and WORD, what the sides are
+    (tags, builds or sides; MACHINES, two machines), where the caller has
+    them. Its `!!` is held to the run's warnings elsewhere (check_report),
+    and report_data ties it to the record."""
+    def no(what, a, b):
+        raise AssertionError(f'{where}: step 2 printed {what} {a!r}, its '
+                             f'record says {b!r}')
+    got = translit_read(text)
+    if rec['state'] not in ('compared', 'reported', 'no change'):
+        if got is not None:
+            no('its transliteration lines', got, rec)
+        return
+    more = (len(rec['skipped']) if rec.get('skipped') and rec.get('line')
+            in ('elements', 'unmoved', 'no line') else None)
+    if rec['state'] != 'no change' and rec['line'] == 'no line' and \
+            more is None:
+        # Only builds it could not compare: their `!!` is all it prints.
+        if got is not None:
+            no('its transliteration lines', got, rec)
+        return
+    if got is None:
+        no('none of its transliteration lines', None, rec)
+    between = ('between the machines' if machines else
+               f'between the {word}' if word else None)
+    if rec['state'] == 'no change':
+        if got['line'] != 'no change' or got['listed'] or got['more'] \
+                is not None:
+            no('its transliterations', got, rec)
+        if between and got['between'] != between:
+            no('the sides as', got['between'], between)
+        return
+    if got['line'] != rec['line']:
+        no('the line', got['line'], rec['line'])
+    want = {'elements': ('elements', 'builds', 'changed'),
+            'unmoved': ('unmoved',), 'listed already': ('skipped',)}
+    for k in want.get(rec['line'], ()):
+        v = len(rec[k]) if k == 'skipped' else rec[k]
+        if got[k] != v:
+            no(k, got[k], v)
+    if sides is not None and rec['line'] == 'elements' and \
+            got['at'] != sides[1]:
+        no('the new side', got['at'], sides[1])
+    if between and rec['line'] == 'unmoved' and got['between'] != between:
+        no('the sides as', got['between'], between)
+    listed = [(x['entry'], x['new'], x['count'], ', '.join(x['via']),
+               x['codepoints']) for x in rec['listed']]
+    if got['listed'] != listed:
+        no('the builds it lists', got['listed'], listed)
+    if got['more'] != more:
+        no('"more locale builds ... listed already"', got['more'], more)
 
 
 MISSING_WORDS = {'not in SUPPORTED': '(not in SUPPORTED)',

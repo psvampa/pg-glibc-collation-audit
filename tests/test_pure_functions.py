@@ -2792,15 +2792,134 @@ class CtypeMoved(unittest.TestCase):
 
 
 class TranslitReportLines(unittest.TestCase):
-    """Lines print_translit_report writes."""
+    """Lines print_translit_report writes, each held to the record it
+    returns (_harness.translit_held)."""
 
-    def lines(self, translit, builds=2):
+    def lines(self, translit, builds=2, skipped=(), new='t2'):
         r = ck.Report(None, builds, ['TEST'], [], {}, [], [], [], [],
-                      translit, [])
+                      translit, list(skipped))
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            f.print_translit_report(r, 't2')
-        return buf.getvalue()
+            rec = f.print_translit_report(r, new, old='t1')
+        out = buf.getvalue()
+        _harness.translit_held(out, rec, 'lines', ('t1', new), 'tags')
+        self.rec = rec
+        return out
+
+    def test_every_form_held_to_its_record(self):
+        """Every line, list and count print_translit_report prints, two of
+        each list, held to its record, the record asserted; and the holder
+        refuses the text with one field of the record changed. No real
+        pair measured prints the list or the "more" line; 2.35..2.36
+        prints the unmoved line and 2.27..2.28 the line of builds listed
+        already (24.3b-2a, final review)."""
+        def T(source, n, chars, via, why=None, cm=('TEST', 'TEST')):
+            return ck.Translit(source, source + '.UTF-8', cm, n, set(chars),
+                               via, why)
+        a = T('aa_XX', 1, {0x2BB}, ['aa_XX'])
+        b = T('bb_XX', 2, {0x7, 0x110005, 0x2BC}, ['bb_XX', 'tr_x'])
+        u1 = T('cc_XX', 0, (), [], 'reason one')
+        u2 = T('dd_XX', 0, (), [], 'reason two')
+        s1, s2 = T('ee_XX', 1, {0x41}, ['ee_XX']), T('ff_XX', 0, (), [], 'r')
+        # Longer than a line, so that textwrap cuts it at a hyphen.
+        long = ('glibc-2.34-275.el9_8-with-a-very-long-build-name-that-'
+                'does-not-fit-on-one-line')
+        listed = [
+            {'entry': 'aa_XX.UTF-8', 'source': 'aa_XX', 'old': 'TEST',
+             'new': 'TEST', 'count': 1, 'codepoints': [0x2BB],
+             'via': ['aa_XX']},
+            {'entry': 'bb_XX.UTF-8', 'source': 'bb_XX', 'old': 'TEST',
+             'new': 'TEST', 'count': 2, 'codepoints': [0x7, 0x2BC, 0x110005],
+             'via': ['bb_XX', 'tr_x']}]
+        unsettled = [
+            {'entry': x + '.UTF-8', 'source': x, 'old': 'TEST', 'new': 'TEST',
+             'why': w} for x, w in (('cc_XX', 'reason one'),
+                                    ('dd_XX', 'reason two'))]
+        base = {'state': 'compared', 'listed': [], 'unsettled': [],
+                'skipped': []}
+        S1 = {'entry': 'ee_XX.UTF-8', 'source': 'ee_XX', 'old': 'TEST',
+              'new': 'TEST', 'state': 'built differently', 'count': 1}
+        S2 = {'entry': 'ff_XX.UTF-8', 'source': 'ff_XX', 'old': 'TEST',
+              'new': 'TEST', 'state': 'not compared', 'why': 'r'}
+        cases = [
+            (ck.TranslitReport(5, 2, 0, [a, b, u1, u2], 6), [s1, s2], long,
+             dict(base, line='elements', elements=5, builds=2, changed=6,
+                  listed=listed, unsettled=unsettled, skipped=[S1, S2]),
+             'changed', 7),
+            (ck.TranslitReport(1, 1, 0, [a], 1), [s1], 't2',
+             dict(base, line='elements', elements=1, builds=1, changed=1,
+                  listed=listed[:1], skipped=[S1]), 'elements', 2),
+            (ck.TranslitReport(3, 1, 0, [], 0), [], 't2',
+             dict(base, line='elements', elements=3, builds=1, changed=0),
+             'builds', 2),
+            (ck.TranslitReport(0, 0, 1, [], 0), [s1], 't2',
+             dict(base, line='unmoved', unmoved=1, skipped=[S1]), 'unmoved',
+             2),
+            (ck.TranslitReport(0, 0, 2, [u1], 0), [], 't2',
+             dict(base, line='unmoved', unmoved=2, unsettled=unsettled[:1]),
+             'unmoved', 1),
+            (ck.TranslitReport(0, 0, 0, [], 0), [], 't2',
+             dict(base, line='none'), None, None),
+            (ck.TranslitReport(0, 0, 0, [], 0), [s2], 't2',
+             dict(base, line='listed already', skipped=[S2]), 'skipped',
+             [S1, S2]),
+            (ck.TranslitReport(0, 0, 0, [], 0), [s1, s2], 't2',
+             dict(base, line='listed already', skipped=[S1, S2]),
+             'skipped', [S1]),
+            (ck.TranslitReport(0, 0, 0, [u1, u2], 0), [s1, s2], 't2',
+             dict(base, line='no line', unsettled=unsettled,
+                  skipped=[S1, S2]), 'skipped', [S2]),
+            (ck.TranslitReport(0, 0, 0, [u1], 0), [], 't2',
+             dict(base, line='no line', unsettled=unsettled[:1]), None,
+             None),
+            (None, [], 't2', {'state': 'no change'}, None, None),
+        ]
+        for tr, skipped, new, want, field, other in cases:
+            with self.subTest(want=want):
+                out = self.lines(tr, skipped=skipped, new=new)
+                self.assertEqual(self.rec, want)
+                if field:
+                    bad = dict(want, **{field: other})
+                    with self.assertRaises(AssertionError):
+                        _harness.translit_held(out, bad, 'x', ('t1', new),
+                                               'tags')
+        # A list changed in one field of one build, and the sides.
+        out = self.lines(cases[0][0], skipped=cases[0][1], new=long)
+        for k, v in (('count', 3), ('codepoints', [0x2BB, 0x2BC]),
+                     ('via', ['aa_XX', 'x']), ('entry', 'zz.UTF-8'),
+                     ('new', 'UTF-8')):
+            with self.subTest(k=k):
+                bad = dict(self.rec, listed=[dict(listed[0], **{k: v}),
+                                             listed[1]])
+                with self.assertRaises(AssertionError):
+                    _harness.translit_held(out, bad, 'x', ('t1', long),
+                                           'tags')
+        with self.assertRaises(AssertionError):
+            _harness.translit_held(out, self.rec, 'x', ('t1', 't3'), 'tags')
+        self.assertIn('with-a-\nvery', self.lines(cases[0][0],
+                                                   skipped=cases[0][1],
+                                                   new=long))
+        out = self.lines(cases[3][0], skipped=cases[3][1])
+        for word in ('builds', None):
+            with self.assertRaises(AssertionError):
+                _harness.translit_held(out, self.rec, 'x',
+                                       machines=word is None, word=word)
+        # Text printed where the record says only builds it could not
+        # compare, whose `!!` is all it prints.
+        out = self.lines(cases[5][0])
+        with self.assertRaises(AssertionError):
+            _harness.translit_held(out, cases[9][3], 'x')
+        out = self.lines(None)
+        for word in ('builds', None):
+            with self.assertRaises(AssertionError):
+                _harness.translit_held(out, {'state': 'no change'}, 'x',
+                                       machines=word is None, word=word)
+        # Where no build was compared, nothing is printed, and a record
+        # that says otherwise is refused.
+        self.assertEqual(self.lines(None, builds=0), '')
+        self.assertEqual(self.rec['state'], 'not run')
+        with self.assertRaises(AssertionError):
+            _harness.translit_held('', want, 'x')
 
     def test_each_line(self):
         self.assertIn('24 collating elements of 3 locale builds depend on a '
@@ -2822,6 +2941,10 @@ class TranslitReportLines(unittest.TestCase):
                                          'elements') and 'fi_XX (TEST): a '
                             'reason' in b for b in _bang_blocks(out)), out)
         self.assertEqual(self.lines(None, builds=0), '')
+        self.assertEqual(self.rec, {
+            'state': 'not run',
+            'why': 'No locale build is in SUPPORTED at both tags with its '
+                   'source file at both, so none was compared.'})
 
 
 def _cm_file(root, entry, text):
