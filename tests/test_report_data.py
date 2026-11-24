@@ -624,7 +624,7 @@ class EveryFileWritten(_Folder):
         self.assertEqual(r['run']['machines']['state'], 'not given')
         self.assertEqual(r['step2']['character_sets']['state'],
                          'reported')
-        self.assertEqual(r['compared']['state'], 'not yet reported')
+        self.assertEqual(r['compared']['state'], 'not reported')
         self.assertEqual(r['step2']['transliteration'], {
             'state': 'reported', 'line': 'none', 'listed': [],
             'unsettled': [], 'skipped': []})
@@ -4553,6 +4553,387 @@ class StepTwosCharacterSetsHangTogether(_Folder):
             tuple('reported' if s == 'compared' else s
                   for s in lo.CHARMAPS_STATES), rd.CS_STATES)
         self.assertEqual(set(rd.CS_KEYS), set(lo.CHARMAPS_STATES))
+
+
+B8, B9 = 'glibc-2.28-251.el8_10.40', 'glibc-2.34-275.el9_8'
+DETAIL = 'gpg is not installed; the signature was NOT checked'
+
+
+def _items(*pairs):
+    return {'state': 'reported', 'items': [
+        {'kind': k, 'data': d, 'text': f'!! {k}'} for k, d in pairs]}
+
+
+def compared_run(machines=False):
+    """The parts of a report _compared reads, as a real run of 2.28 ->
+    2.34 has them: on the tags, or on the two machines' files."""
+    sig = ('signatures_unchecked', {'refs': [
+        {'ref': 'glibc-2.28', 'status': 'no-gpg'},
+        {'ref': 'glibc-2.34', 'status': 'no-gpg'}]})
+    tags = [{'ref': 'glibc-2.28', 'commit': '3c03baca37fd',
+             'status': 'no-gpg', 'detail': DETAIL},
+            {'ref': 'glibc-2.34', 'commit': 'ae37d06c7d12',
+             'status': 'no-gpg', 'detail': DETAIL}]
+    version = {'state': 'differ', 'old': '2.28', 'new': '2.34'}
+    if not machines:
+        return {
+            'pair': {'old': 'glibc-2.28', 'new': 'glibc-2.34', 'slug': PAIR},
+            'run': {'route': 'tags', 'old_class': 'tag', 'new_class': 'tag',
+                    'nothing_compared': 'none',
+                    'machines': {'state': 'not given', 'why': 'x'}},
+            'warnings': {'step0': {'state': 'not run', 'why': 'x'},
+                         'step1': _items(sig, ('sides_read_as_tags', {
+                             'refs': ['glibc-2.28', 'glibc-2.34'],
+                             'classes': ['tag', 'tag'], 'ask': 'build'}),
+                             ('code_not_compared', {'step11': False}))},
+            'compared': {'state': 'reported', 'tags': tags, 'machines': [],
+                         'builds': {'state': 'none'},
+                         'collation_version': version,
+                         'note': {'state': 'not run', 'why': 'x'}}}
+    machine = lambda b, sha, n: {
+        'build': b, 'commit': sha[:12], 'tag': b[:10], 'word': b + '.x86_64',
+        'measurement_sha256': sha, 'locales': n,
+        'charmaps': {'state': 'counted', 'count': 233}}
+    return {
+        'pair': {'old': B8, 'new': B9, 'slug': PAIR},
+        'run': {'route': 'builds', 'old_class': 'build',
+                'nothing_compared': 'none',
+                'new_class': 'build',
+                'machines': {'state': 'given', 'old': '/a', 'new': '/b'}},
+        'warnings': {'step0': _items(),
+                     'step1': _items(sig, ('machine_not_checked', {}),
+                                     ('code_not_compared', {'step11': True}))},
+        'compared': {'state': 'reported', 'tags': tags,
+                     'machines': [machine(B8, 'a' * 64, 355),
+                                  machine(B9, 'b' * 64, 356)],
+                     'builds': {'state': 'none'},
+                     'collation_version': version,
+                     'note': {'state': 'printed', 'builds': [B8, B9],
+                              'given': ['glibc-2.28', 'glibc-2.34']}}}
+
+
+class WhatWasComparedHangsTogether(unittest.TestCase):
+    """compared in load(): the facts report_data._compared ties to others
+    of the same run, a case for each tie that refuses one wrong value, and
+    the forms of a real run no run of the suite prints."""
+
+    def ok(self, r):
+        rd._compared(r)
+
+    def refused(self, r, message):
+        with self.assertRaisesRegex(rd.ReportError, message):
+            rd._compared(r)
+
+    def test_a_real_run_of_each_kind(self):
+        for machines in (False, True):
+            with self.subTest(machines=machines):
+                self.ok(compared_run(machines))
+
+    def test_forms_no_run_of_the_suite_prints(self):
+        """A good signature (gpg and the key there), a glibc version not
+        read, two machines on one build, glibc of 32 and 64 bits on one
+        machine, both sides given as their builds."""
+        r = compared_run()
+        r['compared']['tags'][0]['status'] = 'good'
+        r['warnings']['step1']['items'][0]['data']['refs'].pop(0)
+        self.ok(r)
+        r = compared_run()
+        r['compared']['tags'][1]['status'] = 'good'
+        r['compared']['tags'][0]['status'] = 'good'
+        del r['warnings']['step1']['items'][0]
+        self.ok(r)
+        r = compared_run()
+        r['compared']['collation_version'] = {'state': 'unknown',
+                                              'sides': ['glibc-2.28']}
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_unknown',
+             'data': {'sides': ['glibc-2.28']}, 'text': '!! x'})
+        self.ok(r)
+        r = compared_run(True)
+        r['pair']['new'] = B8
+        r['compared']['machines'][1] = dict(r['compared']['machines'][0])
+        r['compared']['tags'].pop()
+        r['warnings']['step1']['items'][0]['data']['refs'].pop()
+        r['compared']['collation_version'] = {'state': 'same',
+                                              'version': '2.28'}
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_same',
+             'data': {'version': '2.28'}, 'text': '!! x'})
+        r['compared']['note']['builds'] = [B8, B8]
+        r['compared']['note']['given'] = ['glibc-2.28', 'glibc-2.28']
+        self.ok(r)
+        r = compared_run(True)
+        r['compared']['machines'][1]['word'] = (B9 + '.x86_64 ' + B9
+                                                + '.i686')
+        self.ok(r)
+        r = compared_run(True)
+        r['compared']['note'] = {'state': 'not printed'}
+        self.ok(r)
+
+    def test_the_tags(self):
+        def tags(f):
+            r = compared_run()
+            f(r['compared']['tags'])
+            return r
+        self.refused(tags(lambda t: t[0].update(ref='glibc-2.29')),
+                     "not the sides'")
+        self.refused(tags(lambda t: t.reverse()), "not the sides'")
+        self.refused(tags(lambda t: t.pop()), "not the sides'")
+        self.refused(tags(lambda t: t.append(dict(t[0]))), "not the sides'")
+        self.refused(tags(lambda t: t[0].update(commit='3c03baca37f')),
+                     r'compared\.tags\[0\] is')
+        self.refused(tags(lambda t: t[0].update(status='bad')),
+                     r'tags\[0\]\.status')
+        self.refused(tags(lambda t: t[0].update(x=1)), 'has the keys')
+        # A build side is read on its version's tag.
+        r = compared_run(True)
+        r['compared']['tags'][0]['ref'] = 'glibc-2.29'
+        self.refused(r, "not the sides'")
+
+    def test_the_signatures_not_checked_are_the_warnings(self):
+        for status in ('good', 'no-key'):
+            with self.subTest(status=status):
+                r = compared_run()
+                r['compared']['tags'][0]['status'] = status
+                self.refused(r, 'the `!!` of signatures')
+        # The `!!` is one block for every tag.
+        r = compared_run()
+        items = r['warnings']['step1']['items']
+        items.insert(1, dict(items[0]))
+        self.refused(r, 'the `!!` of signatures')
+
+    def test_the_machines(self):
+        def machines(f):
+            r = compared_run(True)
+            f(r['compared']['machines'])
+            return r
+        self.refused(machines(lambda m: m.__setitem__(0, dict(m[1]))),
+                     'are not the build sides')
+        self.refused(machines(lambda m: m[0].update(
+            build='glibc-2.39-1.el10', tag='glibc-2.39',
+            word='glibc-2.39-1.el10.x86_64')), 'are not the build sides')
+        self.refused(machines(lambda m: m[0].update(tag='glibc-2.29')),
+                     'is not that of')
+        self.refused(machines(lambda m: m[0].update(word=B9 + '.x86_64')),
+                     'word')
+        self.refused(machines(lambda m: m[1].update(
+            word=B9 + '.x86_64 glibc-2.34-283.el9_8.i686')), 'word')
+        self.refused(machines(lambda m: m[0].update(word='glibc')), 'word')
+        self.refused(machines(lambda m: m.pop()), 'are not the build sides')
+        self.refused(machines(lambda m: m.reverse()),
+                     'are not the build sides')
+        self.refused(machines(lambda m: m.clear()),
+                     'what no step reads of a machine')
+        self.refused(machines(lambda m: m[0].update(
+            measurement_sha256='x')), r'machines\[0\] is')
+        self.refused(machines(lambda m: m[0].update(locales='355')),
+                     r'machines\[0\] is')
+        self.refused(machines(lambda m: m[0].update(
+            charmaps={'state': 'none'})), 'charmaps has the keys')
+        self.refused(machines(lambda m: m[0]['charmaps'].update(
+            count='233')), 'charmaps is')
+        self.refused(machines(lambda m: m[0].update(
+            charmaps={'state': 'none', 'why': ['x']})), 'charmaps is')
+        r = compared_run(True)
+        r['warnings']['step1']['items'].append(
+            {'kind': 'machine_entries_skipped',
+             'data': {'machine': 'glibc-2.39-1.el10',
+                      'entries': [{'entry': 'x', 'why': 'y'}]},
+             'text': '!! x'})
+        self.refused(r, 'entries skipped')
+        # A build side that is neither a machine nor a rebuilt build.
+        r = compared_run(True)
+        r['compared']['machines'] = []
+        r['warnings']['step1']['items'].pop(1)
+        self.refused(r, 'neither machines nor rebuilt builds')
+
+    def test_the_builds(self):
+        r = compared_run()
+        r['compared']['builds'] = dict(rd.NOT_YET)
+        self.refused(r, 'not checked for builds')
+        r = compared_run()
+        r['compared']['builds'] = {'state': 'not yet reported', 'why': 'x'}
+        r['warnings']['step1']['items'].append(
+            {'kind': 'build_not_checked',
+             'data': {'metadata': True, 'unlisted': []}, 'text': '!! x'})
+        self.refused(r, 'compared.builds is')
+        r = compared_run(True)
+        r['compared']['builds'] = dict(rd.NOT_YET)
+        r['warnings']['step1']['items'].append(
+            {'kind': 'build_not_checked',
+             'data': {'metadata': True, 'unlisted': []}, 'text': '!! x'})
+        self.refused(r, 'machines and rebuilt builds at once')
+
+    def test_the_glibc_versions(self):
+        def version(v, *warned):
+            r = compared_run(True)
+            r['compared']['collation_version'] = v
+            r['warnings']['step1']['items'] += [
+                {'kind': k, 'data': d, 'text': '!! x'} for k, d in warned]
+            return r
+        self.refused(version({'state': 'differ', 'old': '2.29',
+                              'new': '2.34'}), 'the build')
+        self.refused(version({'state': 'differ', 'old': '2.34',
+                              'new': '2.34'}), 'collation_version is')
+        r = compared_run()
+        r['compared']['collation_version']['old'] = 2.28
+        self.refused(r, 'collation_version is')
+        self.refused(version({'state': 'same', 'version': '2.34'},
+                             ('collation_version_same', {'version': '2.34'})),
+                     'the build')
+        r = compared_run()
+        r['compared']['collation_version'] = {'state': 'same',
+                                              'version': '2.34'}
+        self.refused(r, 'its `!!`')
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_same', 'data': {'version': '2.28'},
+             'text': '!! x'})
+        self.refused(r, 'its `!!`')
+        r = compared_run()
+        r['compared']['collation_version'] = {'state': 'unknown',
+                                              'sides': ['x']}
+        self.refused(r, 'its `!!`')
+        r = compared_run()
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_same', 'data': {'version': '2.34'},
+             'text': '!! x'})
+        self.refused(r, 'its `!!`')
+
+    def test_step_0s_note(self):
+        def note(n, machines=True):
+            r = compared_run(machines)
+            r['compared']['note'] = n
+            return r
+        self.refused(note({'state': 'not run', 'why': 'x'}), 'machines')
+        self.refused(note({'state': 'printed', 'builds': [B8, B9],
+                           'given': ['glibc-2.28', 'glibc-2.34']}, False),
+                     'machines')
+        self.refused(note({'state': 'fallback'}),
+                     'machines that read their tags')
+        # A note of builds on a run whose sides are tags, where step 0's
+        # `!!` (which a fallback writes) is not there to say why.
+        r = compared_run()
+        r['run']['machines'] = {'state': 'given', 'old': '/a', 'new': '/b'}
+        r['warnings']['step0'] = {'state': 'not reported', 'why': 'x'}
+        r['compared']['note'] = {'state': 'not printed'}
+        self.refused(r, 'on sides')
+        self.refused(note({'state': 'printed', 'builds': [B9, B8],
+                           'given': ['glibc-2.28', 'glibc-2.34']}),
+                     'note is')
+        self.refused(note({'state': 'printed', 'builds': [B8, B9],
+                           'given': ['glibc-2.34', 'glibc-2.28']}),
+                     'note is')
+        self.refused(note({'state': 'printed', 'builds': [B8, B9],
+                           'given': [B8, B9]}), 'note is')
+        r = compared_run(True)
+        r['warnings']['step0'] = _items(('machine_falls_back_to_tags', {
+            'unread': [{'side': 'old', 'build': B8, 'why': 'w'}],
+            'tags': ['glibc-2.28', 'glibc-2.34']}))
+        self.refused(r, 'machines that read their tags')
+
+
+class WhatWasComparedAgainstTheText(unittest.TestCase):
+    """_harness.compared_held on a run's text and data made here, with
+    the machines' files given, for two notes no audit.sh run of the suite
+    meets: 'not printed' (both sides typed as their builds), held; and
+    'not reported', refused."""
+
+    def text(self, r):
+        import glibc_locale_data as g
+        c, rule = r['compared'], '=' * 64
+        return '\n'.join(
+            ['', rule, '== WHAT WAS COMPARED', rule,
+             "Machines' files, as given:", '  old  /a', '  new  /b']
+            + g.tag_provenance_lines(c['tags'])
+            + g.machine_provenance_lines(c['machines'])
+            + g.collation_version_lines(c['collation_version'])
+            + ['', rule, '== STEP 2  x', rule, ''])
+
+    def test_the_note_not_printed_and_not_reported(self):
+        r = compared_run(True)
+        r['compared']['note'] = {'state': 'not printed'}
+        _harness.compared_held(self.text(r), r, 'x')
+        r['compared']['note'] = {'state': 'not reported', 'why': 'x'}
+        with self.assertRaisesRegex(AssertionError, "step 0's note"):
+            _harness.compared_held(self.text(r), r, 'x')
+
+
+class WhatWasComparedRead(_Folder):
+    """compared as the files of a run give it: the sides' record, step 0's
+    note beside it on the machines' files, and each machine's measurement
+    against the file the run laid out."""
+
+    def files(self, sha_old=None):
+        import hashlib
+        step2_files(self.d)
+        run = compared_run(True)
+        for side, m in zip(('old', 'new'), run['compared']['machines']):
+            data = f'measurement of {side}'.encode()
+            os.makedirs(os.path.join(self.d, f'node_file.{PAIR}.{side}'),
+                        exist_ok=True)
+            write(self.d, f'node_file.{PAIR}.{side}/locale_order.out',
+                  data.decode())
+            m['measurement_sha256'] = hashlib.sha256(data).hexdigest()
+        if sha_old:
+            run['compared']['machines'][0]['measurement_sha256'] = sha_old
+        write(self.d, f'build_sides.{PAIR}.txt', ''.join(
+            f"{m['build']}\t{m['commit']}{'0' * 28}\n"
+            for m in run['compared']['machines']))
+        record = {k: run['compared'][k] for k in
+                  ('tags', 'machines', 'builds', 'collation_version')}
+        write(self.d, f'step1_compared.{PAIR}.json',
+              json.dumps(dict(record, step=1)) + '\n')
+        write(self.d, f'step0.{PAIR}.json',
+              json.dumps(dict(run['compared']['note'], step=0)) + '\n')
+        return run
+
+    def section(self):
+        return rd.compared_section(args(self.d, old=B8, new=B9,
+                                        old_node='/a', new_node='/b'))
+
+    def test_the_record_and_the_note(self):
+        run = self.files()
+        got = self.section()
+        self.assertEqual(got, run['compared'])
+
+    def test_a_measurement_that_is_not_the_files(self):
+        self.files(sha_old='c' * 64)
+        with self.assertRaisesRegex(rd.ReportError, 'measurement'):
+            self.section()
+
+    def test_a_commit_that_is_not_the_one_recorded(self):
+        """Each machine's commit is the one the sides recorded for its
+        build (build_sides.<pair>.txt); a build they recorded none for,
+        or a file of another shape, refused."""
+        for text in (f'{B8}\t{"9" * 40}\n{B9}\t{"b" * 40}\n',
+                     f'{B9}\t{"b" * 40}\n',
+                     f'{B8} {"a" * 40}\n{B9}\t{"b" * 40}\n'):
+            with self.subTest(text=text):
+                self.files()
+                write(self.d, f'build_sides.{PAIR}.txt', text)
+                with self.assertRaisesRegex(rd.ReportError, 'commit|a line'):
+                    self.section()
+
+    def test_no_note_beside_the_machines(self):
+        self.files()
+        os.remove(os.path.join(self.d, f'step0.{PAIR}.json'))
+        self.assertEqual(self.section()['note']['state'], 'not reported')
+
+    def test_a_record_of_another_shape(self):
+        for name, text, message in (
+                (f'step1_compared.{PAIR}.json', '{"step": 1}\n',
+                 'has the keys'),
+                (f'step1_compared.{PAIR}.json', '{"step": 2}\n',
+                 'not what step 1 writes'),
+                (f'step1_compared.{PAIR}.json', '{}\n{}\n',
+                 'not one line'),
+                (f'step0.{PAIR}.json', '{"step": 1}\n',
+                 'not what step 0 writes')):
+            with self.subTest(name=name, text=text):
+                self.files()
+                write(self.d, name, text)
+                with self.assertRaisesRegex(rd.ReportError, message):
+                    self.section()
 
 
 if __name__ == '__main__':

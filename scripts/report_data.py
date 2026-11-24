@@ -5,10 +5,15 @@ change.
 
 Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
-was not looked at" for "nothing was found". What the steps hold today
-only inside a sentence (the provenance of each side) is 'not yet
-reported': a later step of the work turns it into data (branch 24 of
-the plan). What step 2 prints of its rules is data:
+was not looked at" for "nothing was found". What 'What was compared'
+says of the tags, the machines and the glibc versions, and step 0's note
+above it, is data: step1_compared.<pair>.json and, when the machines'
+files are given, step0.<pair>.json, read into compared and tied to
+other facts of the run (_compared); but for a build rebuilt from its
+packages (compared.builds is 'not yet reported') and the line latest-elN
+prints above the block, which are not yet data: a later step of the work
+turns them into data (branch 24 of the plan). What step 2 prints of its
+rules is data:
 step2_rules.<pair>.json, read into step2.rules and tied to the other
 facts of the run (_rules); and so is what it prints of its character
 set check: step2_character_sets.<pair>.json, read into
@@ -75,7 +80,8 @@ CHARACTER_COLUMNS = ['locales', 'finding', 'characters', 'how', 'test',
                      'before', 'now', 'measured']
 RULES_CHARACTER_COLUMNS = ['name', 'state', 'every rule can change',
                            'characters']
-# What later steps of branch 24 turn into data.
+# What later steps of branch 24 turn into data: today the rebuilt builds
+# of compared.builds (glibc_locale_data.compared_sides writes it).
 NOT_YET = {'state': 'not yet reported',
            'why': 'today said only in the text of the run'}
 
@@ -2504,6 +2510,77 @@ def warnings_section(a):
             'step2': step_warnings(f(2)), 'step11': step11}
 
 
+# ---------------------------------------------------------------- compared
+
+# What 'What was compared' says (glibc_locale_data.COMPARED_RECORD), and
+# step 0's note (STEP0_RECORD_ENV).
+COMPARED_KEYS = ['builds', 'collation_version', 'machines', 'step', 'tags']
+NOTE_STATES = ('printed', 'not printed', 'fallback')
+
+
+def _one_json(path, step):
+    lines = _lines(path)
+    if len(lines) != 1:
+        raise ReportError(f'{path} is not one line')
+    data = json.loads(lines[0])
+    if not isinstance(data, dict) or data.get('step') != step:
+        raise ReportError(f'{path} is not what step {step} writes')
+    return {k: v for k, v in data.items() if k != 'step'}
+
+
+def compared_section(a):
+    """What 'What was compared' printed, read from its record, with step
+    0's note (or 'not run' without the machines' files, 'not reported'
+    without its file); each machine's commit held to the one the sides
+    recorded for its build, and its measurement sha256 to the file this
+    run laid out for the side its build names: the old side's where both
+    sides are one build, whose file the sides read for both."""
+    import hashlib
+    path = _file(a.out_dir, f'step1_compared.{a.pair}.json')
+    if not os.path.isfile(path):
+        return not_reported(path)
+    data = _one_json(path, 1)
+    if sorted(list(data) + ['step']) != COMPARED_KEYS:
+        raise ReportError(f'{path} has the keys {sorted(data)}')
+    out = dict(data, state='reported')
+    if a.old_node:
+        p0 = _file(a.out_dir, f'step0.{a.pair}.json')
+        out['note'] = (_one_json(p0, 0) if os.path.isfile(p0)
+                       else not_reported(p0))
+    else:
+        out['note'] = {'state': 'not run',
+                       'why': 'no --old-node and --new-node'}
+    machines = out['machines'] if isinstance(out['machines'], list) else []
+    recorded = {}
+    if machines:
+        # The commit the sides recorded for each build, the steps after
+        # them read (glibc_locale_data.write_recorded): `<build>\t<commit>`.
+        p1 = _file(a.out_dir, f'build_sides.{a.pair}.txt')
+        for line in _lines(p1):
+            build, sep, commit = line.partition('\t')
+            if not sep or build in recorded:
+                raise ReportError(f'{p1}: a line {line!r}')
+            recorded[build] = commit
+    for e in machines:
+        if e.get('commit') != recorded.get(e.get('build'), '')[:12]:
+            raise ReportError(f'{path}: {e.get("build")!r} commit '
+                              f'{e.get("commit")!r}, the sides recorded '
+                              f'{recorded.get(e.get("build"))!r}')
+        side = ('old' if e.get('build') == a.old else
+                'new' if e.get('build') == a.new else None)
+        if side is None:
+            raise ReportError(f'{path}: a machine {e.get("build")!r} that is '
+                              f'neither side')
+        f = _file(a.out_dir, f'node_file.{a.pair}.{side}/locale_order.out')
+        with open(f, 'rb') as fh:
+            sha = hashlib.sha256(fh.read()).hexdigest()
+        if e.get('measurement_sha256') != sha:
+            raise ReportError(f'{path}: {e.get("build")!r} measurement '
+                              f'{e.get("measurement_sha256")!r}, {f} is '
+                              f'{sha}')
+    return out
+
+
 # ---------------------------------------------------------------- whole
 
 def build(a):
@@ -2513,7 +2590,7 @@ def build(a):
         'format': FORMAT,
         'pair': {'old': a.old, 'new': a.new, 'slug': a.pair},
         'run': run,
-        'compared': NOT_YET,
+        'compared': compared_section(a),
         'step2': step2,
         'step11': step11_section(a, step2['rules_by_name']),
         'warnings': warnings_section(a),
@@ -3358,10 +3435,172 @@ def _charmap_by_name(where, s2, w):
                               f'{want!r}')
 
 
-def _not_yet(where, obj):
-    _keys(where, obj, ['state', 'why'])
-    if obj != NOT_YET:
-        raise ReportError(f'{where} is {obj!r}')
+TAG_STATUSES = ('good',) + tuple(SIGNATURE_WHY)
+HEX12 = re.compile(r'[0-9a-f]{12}')
+HEX64 = re.compile(r'[0-9a-f]{64}')
+
+
+def _build_tag(where, name):
+    import glibc_locale_data as g
+    parsed = g.build_name(name)
+    if parsed is None:
+        raise ReportError(f'{where}: {name!r} is no build name')
+    return 'glibc-' + parsed[0], parsed[0]
+
+
+def _compared(r):
+    """compared: its shape, then these facts tied to others of the same
+    run: the tags are the sides' (a build's by its version); their
+    statuses that are not good are the `!!` of signatures; each machine is
+    a side of the pair, on its tag; the machines are there exactly when
+    their `!!` is, the builds exactly when theirs is; the glibc version is
+    each build's and its `!!`; and step 0's note is the pair's. A tag's
+    commit, a signature's detail, a tag's glibc version, the counts of
+    locale sources and charmaps, why a machine's file holds no charmaps
+    and the architecture of `rpm -q glibc` are tied here to nothing;
+    _harness.compared_held holds them to the printed text."""
+    c, run, w, pair = r['compared'], r['run'], r['warnings'], r['pair']
+    _stated('compared', c, ('reported', 'not reported'),
+            {'reported': ['tags', 'machines', 'builds', 'collation_version',
+                          'note'],
+             'not reported': ['why']})
+    if c['state'] == 'not reported':
+        return
+    sides = [(pair['old'], run['old_class']), (pair['new'], run['new_class'])]
+    # The tags, once each, in the order of the sides.
+    want = []
+    for name, cls in sides:
+        t = _build_tag('compared', name)[0] if cls == 'build' else name
+        if t not in want:
+            want.append(t)
+    tags = c['tags']
+    if not isinstance(tags, list):
+        raise ReportError('compared.tags is not a list')
+    for i, t in enumerate(tags):
+        at = f'compared.tags[{i}]'
+        _keys(at, t, ['ref', 'commit', 'status', 'detail'])
+        _one_of(f'{at}.status', t['status'], TAG_STATUSES)
+        if not (_is_str(t['ref']) and _is_str(t['detail'])
+                and isinstance(t['commit'], str)
+                and HEX12.fullmatch(t['commit'])):
+            raise ReportError(f'{at} is {t!r}')
+    if [t['ref'] for t in tags] != want:
+        raise ReportError(f'compared.tags {[t["ref"] for t in tags]!r} are '
+                          f'not the sides\' {want!r}')
+    sig = _warnings_of(w, 'step1', 'signatures_unchecked')
+    if sig is not None:
+        got = [{'ref': t['ref'], 'status': t['status']} for t in tags
+               if t['status'] != 'good']
+        if len(sig) > 1 or got != (sig[0]['refs'] if sig else []):
+            raise ReportError(f'compared.tags not good {got!r}, the `!!` of '
+                              f'signatures {sig!r}')
+    # The machines.
+    ms = c['machines']
+    if not isinstance(ms, list):
+        raise ReportError('compared.machines is not a list')
+    builds = [name for name, cls in sides if cls == 'build']
+    for i, m in enumerate(ms):
+        at = f'compared.machines[{i}]'
+        _keys(at, m, ['build', 'commit', 'tag', 'word',
+                      'measurement_sha256', 'locales', 'charmaps'])
+        if m['tag'] != _build_tag(at, m['build'])[0]:
+            raise ReportError(f'{at}.tag {m["tag"]!r} is not that of '
+                              f'{m["build"]!r}')
+        if not (isinstance(m['commit'], str) and HEX12.fullmatch(m['commit'])
+                and isinstance(m['measurement_sha256'], str)
+                and HEX64.fullmatch(m['measurement_sha256'])
+                and _is_count(m['locales']) and _is_str(m['word'])):
+            raise ReportError(f'{at} is {m!r}')
+        # Each word `rpm -q glibc` printed, by the rule machine_build reads
+        # them with: two words on a machine with glibc of 32 and 64 bits.
+        import locale_order as lo
+        parts = [lo.build_parts(x) for x in m['word'].split()]
+        if not parts or None in parts or \
+                {'glibc-%s-%s' % p for p in parts} != {m['build']}:
+            raise ReportError(f'{at}.word {m["word"]!r} is not '
+                              f'{m["build"]!r}')
+        _stated(f'{at}.charmaps', m['charmaps'], ('counted', 'none'),
+                {'counted': ['count'], 'none': ['why']})
+        if m['charmaps']['state'] == 'counted' and \
+                not _is_count(m['charmaps']['count']):
+            raise ReportError(f'{at}.charmaps is {m["charmaps"]!r}')
+        if m['charmaps']['state'] == 'none' and \
+                not _is_str(m['charmaps']['why']):
+            raise ReportError(f'{at}.charmaps is {m["charmaps"]!r}')
+    if [m['build'] for m in ms] not in ([], builds):
+        raise ReportError(f'compared.machines {[m["build"] for m in ms]!r} '
+                          f'are not the build sides {builds!r}')
+    said = _warnings_of(w, 'step1', 'machine_not_checked')
+    if said is not None and bool(said) != bool(ms):
+        raise ReportError(f'compared.machines {len(ms)}, the `!!` of what no '
+                          f'step reads of a machine {len(said)} time(s)')
+    skipped = _warnings_of(w, 'step1', 'machine_entries_skipped') or []
+    if not {s['machine'] for s in skipped} <= {m['build'] for m in ms}:
+        raise ReportError(f'entries skipped of {skipped!r}, machines '
+                          f'{[m["build"] for m in ms]!r}')
+    # The builds rebuilt from their packages (24.3c-2).
+    b = c['builds']
+    _stated('compared.builds', b, ('none', 'not yet reported'),
+            {'none': [], 'not yet reported': ['why']})
+    if b['state'] != 'none' and b != NOT_YET:
+        raise ReportError(f'compared.builds is {b!r}')
+    said = _warnings_of(w, 'step1', 'build_not_checked')
+    if said is not None and bool(said) != (b['state'] != 'none'):
+        raise ReportError(f'compared.builds {b!r}, the `!!` of what is not '
+                          f'checked for builds {len(said)} time(s)')
+    if ms and b['state'] != 'none':
+        raise ReportError('compared: machines and rebuilt builds at once')
+    if [n for n in builds if n not in {m['build'] for m in ms}] and \
+            b['state'] == 'none':
+        raise ReportError(f'compared: build sides {builds!r} that are '
+                          f'neither machines nor rebuilt builds')
+    # The glibc version of each side.
+    v = c['collation_version']
+    _stated('compared.collation_version', v, ('differ', 'same', 'unknown'),
+            {'differ': ['old', 'new'], 'same': ['version'],
+             'unknown': ['sides']})
+    versions = {'differ': [v.get('old'), v.get('new')],
+                'same': [v.get('version')] * 2}.get(v['state'])
+    if versions is not None:
+        if not all(_is_str(x) for x in versions) or \
+                (v['state'] == 'differ' and versions[0] == versions[1]):
+            raise ReportError(f'compared.collation_version is {v!r}')
+        for (name, cls), have in zip(sides, versions):
+            if cls == 'build' and _build_tag('compared', name)[1] != have:
+                raise ReportError(f'compared.collation_version {v!r}, the '
+                                  f'build {name!r}')
+    elif not _is_strs(v['sides']) or not v['sides']:
+        raise ReportError(f'compared.collation_version is {v!r}')
+    same = _warnings_of(w, 'step1', 'collation_version_same')
+    unknown = _warnings_of(w, 'step1', 'collation_version_unknown')
+    if same is not None:
+        want = {'differ': ([], []), 'same': ([{'version': v.get('version')}],
+                                             []),
+                'unknown': ([], [{'sides': v.get('sides')}])}[v['state']]
+        if (same, unknown) != want:
+            raise ReportError(f'compared.collation_version {v!r}, its `!!` '
+                              f'{same!r} {unknown!r}')
+    # Step 0's note.
+    n = c['note']
+    _stated('compared.note', n, NOTE_STATES + ('not run', 'not reported'),
+            {'printed': ['builds', 'given'], 'not printed': [],
+             'fallback': [], 'not run': ['why'], 'not reported': ['why']})
+    if (n['state'] == 'not run') != (run['machines']['state'] == 'not given'):
+        raise ReportError(f'compared.note {n!r}, machines '
+                          f'{run["machines"]["state"]!r}')
+    fell = _warnings_of(w, 'step0', 'machine_falls_back_to_tags')
+    if fell is not None and (n['state'] == 'fallback') != bool(fell):
+        raise ReportError(f'compared.note {n!r}, the `!!` of machines that '
+                          f'read their tags {fell!r}')
+    if n['state'] in ('printed', 'not printed') and \
+            builds != [pair['old'], pair['new']]:
+        raise ReportError(f'compared.note {n!r} on sides {sides!r}')
+    if n['state'] == 'printed':
+        if n['builds'] != builds or not _is_strs(n['given']) or \
+                len(n['given']) != 2 or n['given'] == n['builds'] or \
+                not all(x in (b_, _build_tag('compared.note', b_)[0])
+                        for x, b_ in zip(n['given'], builds)):
+            raise ReportError(f'compared.note is {n!r}')
 
 
 # What step 11 finds in a changed locale, in the order it finds it
@@ -4037,7 +4276,6 @@ def load(path):
         _one_of(f'run.{k}', run[k], allowed)
     _stated('run.machines', run['machines'], ('given', 'not given'),
             {'given': ['old', 'new'], 'not given': ['why']})
-    _not_yet('compared', r['compared'])
     w = r['warnings']
     _keys('warnings', w, ['step0', 'step1', 'step2', 'step11'])
 
@@ -4064,6 +4302,7 @@ def load(path):
     _stated('warnings.step11', w['step11'],
             ('reported', 'not run', 'not reported'),
             {**wr, 'not run': ['why']})
+    _compared(r)
 
     s2 = r['step2']
     _keys('step2', s2, ['listed', 'removed', 'rules_by_name',
