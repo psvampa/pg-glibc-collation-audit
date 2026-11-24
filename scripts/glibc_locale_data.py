@@ -31,7 +31,7 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
       provenance and where PostgreSQL warns about a collation's version
       between the sides; under audit.sh it also records each build's commit for
       the steps after it (SIDES_ENV); and writes what it printed of the
-      tags, the machines and the glibc versions to
+      tags, the machines, the rebuilt builds and the glibc versions to
       step1_compared.<pair>.json in the output folder (COMPARED_RECORD)
   python3 glibc_locale_data.py resolve --to F <old> <new>
       for audit.sh, before anything runs: writes to F `<side>\t<kind>` a
@@ -49,7 +49,8 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
   python3 glibc_locale_data.py latest --to F <old> <new>
       for audit.sh, once: writes to F each side a line, latest-elN
       replaced by the newest build of RHEL N the mirror lists, and prints
-      which it took
+      which it took; and, when LATEST_RECORD_ENV names a file, what it
+      printed as data (latest_entry)
 """
 import collections
 import contextlib
@@ -1670,24 +1671,49 @@ def refuse_latest(names):
                 f"give the build's name it prints.")
 
 
-def latest_line(name, got):
-    """The line audit.sh prints for `name` (latest-elN) resolved to `got`
-    (build_sources.Latest): which build, where and as of when. Printed once,
-    before the sides are read; neither the URL nor the date is ever cut, so the one can
-    be copied whole and the other read on one line."""
+def latest_entry(name, got):
+    """What audit.sh prints for `name` (latest-elN) resolved to `got`
+    (build_sources.Latest), as data: the name, the build, the folder it
+    is the newest of, and the date of the metadata as printed (when), or
+    that none is read ('no date')."""
     stamp = got.timestamp or ''
     if stamp.isdigit():
         import datetime
-        when = datetime.datetime.fromtimestamp(
-            int(stamp), datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+        when = {'state': 'dated', 'utc': datetime.datetime.fromtimestamp(
+            int(stamp), datetime.timezone.utc).strftime(
+                '%Y-%m-%d %H:%M UTC')}
+    else:
+        when = {'state': 'no date'}
+    return {'name': name, 'build': got.build,
+            'folder': got.mirror + got.tree, 'when': when}
+
+
+def latest_lines(e):
+    """The lines audit.sh prints of `e` (latest_entry): which build, where
+    and as of when. Printed once, before the sides are read; neither the
+    URL nor the date is ever cut, so the one can be copied whole and the
+    other read on one line."""
+    if e['when']['state'] == 'dated':
         # Held together while wrapping: NUL is in no date and no URL.
-        when = "by its metadata of " + when.replace(' ', '\x00')
+        when = "by its metadata of " + e['when']['utc'].replace(' ', '\x00')
     else:
         when = "and its metadata gives no date this reads"
     return textwrap.fill(
-        f"{name} is {got.build}: the newest glibc build in "
-        f"{got.mirror}{got.tree}, {when}.", width=78,
-        break_long_words=False, break_on_hyphens=False).replace('\x00', ' ')
+        f"{e['name']} is {e['build']}: the newest glibc build in "
+        f"{e['folder']}, {when}.", width=78,
+        break_long_words=False,
+        break_on_hyphens=False).replace('\x00', ' ').split('\n')
+
+
+def latest_line(name, got):
+    """latest_lines of latest_entry, as one text."""
+    return '\n'.join(latest_lines(latest_entry(name, got)))
+
+
+# Where audit.sh has `latest` write what it printed as data (latest_entry,
+# each N once, in the order of the sides), for report_data.py. Unset,
+# nothing is written.
+LATEST_RECORD_ENV = 'PG_GLIBC_AUDIT_LATEST_RECORD'
 
 
 def _asked(build):
@@ -2492,8 +2518,9 @@ def compared_sides(here, old, new):
     (print_collation_version, a `!!` when it never does or cannot be
     told), a `!!` for the sides read as tags (tag_sides_text) and one for
     what no step compares (CODE_NOT_COMPARED), and hold each side to the
-    floor; then write what it printed of the tags, the machines and the
-    glibc versions as data (COMPARED_RECORD), from which it printed it.
+    floor; then write what it printed of the tags, the machines, the
+    rebuilt builds and the glibc versions as data (COMPARED_RECORD), from
+    which it printed it.
     A build name (is_build_name) is never asked of git: build_side
     fetches it and makes its commit again, or makes it from a machine's own
     file under audit.sh (machine_side). latest-elN is refused
@@ -2542,11 +2569,8 @@ def compared_sides(here, old, new):
             record['machines'] = report_machine_provenance(machines)
         rebuilt = [sd for sd in builds if not is_machine(sd)]
         if rebuilt:
-            report_build_provenance(rebuilt)
-            # Step 24.3c-2 of the plan.
-            record['builds'] = {
-                'state': 'not yet reported',
-                'why': 'today said only in the text of the run'}
+            record['builds'] = {'state': 'rebuilt',
+                                'entries': report_build_provenance(rebuilt)}
     record['collation_version'] = print_collation_version(
         repo, sides[0], sides[1])
     if tags:
@@ -2569,9 +2593,9 @@ def compared_sides(here, old, new):
 
 
 # What 'What was compared' prints, as data, beside the log of the step that
-# prints it (compared_sides): its tags, its machines, whether builds were
-# rebuilt (not yet what of them) and the glibc versions as
-# collation_version says them; report_data.py reads it.
+# prints it (compared_sides): its tags, its machines, its rebuilt builds
+# and the glibc versions as collation_version says them; report_data.py
+# reads it.
 COMPARED_RECORD = 'step1_compared.%s.json'
 
 
@@ -2867,60 +2891,105 @@ def _checked(text):
                          break_on_hyphens=False)
 
 
+BUILD_PROVENANCE_HEAD = [
+    "Build provenance (each build is rebuilt here: its upstream tag above, "
+    "with",
+    "localedata/ and locale/ from its source RPM, as one commit of the "
+    "clone):"]
+# The files of a build, in the order printed, with the title of each.
+BUILD_FILES = (('srpm', 'SRPM'),
+               ('glibc-locale-source', 'glibc-locale-source'),
+               ('glibc-common', 'glibc-common'))
+
+
+def build_entry(sd):
+    """What 'Build provenance' prints of the build Side `sd`: its name,
+    the 12 hex of its commit, its tag, each file fetched (url, sha256 and
+    whether metadata lists it), each "checked:" line in order and the
+    patches applied of the SRPM's; and what its `!!` of charmaps not
+    checked says (build_sources.check_charmaps), printed under the block
+    as build_charmaps_unchecked."""
+    prov = sd.prov
+    files = (prov.get('fetched') or {}).get('files') or {}
+    unchecked = []
+    for line in prov.get('verified') or ():
+        if line.startswith('!!'):
+            # build_sources.check_charmaps, the one `!!` it writes.
+            m = re.fullmatch(r'!! charmaps NOT checked against (\S+): '
+                             r'(.+)', line, re.S)
+            if not m:
+                die(f"a line of {label(sd)}'s provenance opens with !! "
+                    f"and is not the charmaps one: {line!r}")
+            unchecked.append({'package': m[1], 'why': m[2]})
+    return {'build': label(sd), 'commit': sd.ref[:12], 'tag': prov['tag'],
+            'charmaps_unchecked': unchecked,
+            'files': [{'package': key, 'url': files[key]['url'],
+                       'sha256': files[key]['sha256'],
+                       'listed': files[key].get('listed') is not False}
+                      for key, _ in BUILD_FILES if files.get(key)],
+            'checked': [prov['tarball']] + [
+                line for line in prov.get('verified') or ()
+                if not line.startswith('!!')],
+            'patches': {'applied': len(prov.get('applied') or ()),
+                        'of': prov.get('patches')}}
+
+
+def build_provenance_lines(entries):
+    """What 'Build provenance' prints of `entries` (build_entry). URLs are
+    never wrapped, so they can be copied whole."""
+    titles = dict(BUILD_FILES)
+    lines = list(BUILD_PROVENANCE_HEAD)
+    for e in entries:
+        lines.append(f"  {e['build']} = {e['commit']}, one parent: "
+                     f"{e['tag']}")
+        for f in e['files']:
+            lines.append(f"    {titles[f['package']]:<20} {f['url']}")
+            lines.append(f"    {'':<20} sha256 {f['sha256']}")
+            if not f['listed']:
+                # build_sources.where_from: a folder with no source
+                # metadata (vault 9.3), the SRPM taken from its listing.
+                lines += textwrap.fill(
+                    "no metadata gives this sha256: it is the file's as "
+                    "downloaded", width=78, initial_indent=' ' * 25,
+                    subsequent_indent=' ' * 25).split('\n')
+        # Cut at 78 columns under "checked:" (16.335).
+        for c in e['checked']:
+            lines += _checked(c).split('\n')
+        p = e['patches']
+        text = (f"patches: {p['applied']} of the SRPM's {p['of']} change "
+                f"localedata/ or locale/, applied in the order rpm "
+                f"recorded")
+        lines += textwrap.fill(text, width=78, initial_indent='    ',
+                               subsequent_indent='             ',
+                               break_on_hyphens=False,
+                               break_long_words=False).split('\n')
+    return lines
+
+
 def report_build_provenance(builds):
-    """Print where each build Side came from and what was checked (its
-    prov); one `!!` for what was not. URLs are never wrapped, so they can
-    be copied whole."""
+    """Print where each build Side came from and what was checked
+    (build_entry, returned); a `!!` for each build's charmaps not checked,
+    and one for what is not checked for any build."""
     import build_sources as bs
-    print("Build provenance (each build is rebuilt here: its upstream tag "
-          "above, with")
-    print("localedata/ and locale/ from its source RPM, as one commit of the "
-          "clone):")
-    fetched = False
+    entries = [build_entry(sd) for sd in builds]
+    for line in build_provenance_lines(entries):
+        print(line)
+    fetched = any(e['files'] for e in entries)
     warned, unlisted = [], []
     for sd in builds:
         prov = sd.prov
-        print(f"  {label(sd)} = {sd.ref[:12]}, one parent: {prov['tag']}")
         files = (prov.get('fetched') or {}).get('files') or {}
-        fetched = fetched or bool(files)
-        for key, title in (('srpm', 'SRPM'),
-                           ('glibc-locale-source', 'glibc-locale-source'),
-                           ('glibc-common', 'glibc-common')):
+        for key, _ in BUILD_FILES:
             e = files.get(key)
-            if e:
-                print(f"    {title:<20} {e['url']}")
-                print(f"    {'':<20} sha256 {e['sha256']}")
-                if e.get('listed') is False:
-                    # build_sources.where_from: a folder with no source
-                    # metadata (vault 9.3), the SRPM taken from its listing.
-                    print(textwrap.fill(
-                        "no metadata gives this sha256: it is the file's as "
-                        "downloaded", width=78, initial_indent=' ' * 25,
-                        subsequent_indent=' ' * 25))
-                    unlisted.append(
-                        (label(sd), e['url'].split(e['tree'] + '/')[0]
-                         + e['tree']))
-        # Cut at 78 columns under "checked:" (16.335).
-        print(_checked(prov['tarball']))
-        for line in prov.get('verified') or ():
-            if line.startswith('!!'):
-                # build_sources.check_charmaps, the one `!!` it writes.
-                m = re.fullmatch(r'!! charmaps NOT checked against (\S+): '
-                                 r'(.+)', line, re.S)
-                if not m:
-                    die(f"a line of {label(sd)}'s provenance opens with !! "
-                        f"and is not the charmaps one: {line!r}")
-                warned.append((f"{label(sd)}: {line[2:].strip()}",
-                               {'build': label(sd), 'package': m[1],
-                                'why': m[2]}))
-            else:
-                print(_checked(line))
-        text = (f"patches: {len(prov.get('applied') or ())} of the SRPM's "
-                f"{prov.get('patches')} change localedata/ or locale/, "
-                f"applied in the order rpm recorded")
-        print(textwrap.fill(text, width=78, initial_indent='    ',
-                            subsequent_indent='             ',
-                            break_on_hyphens=False, break_long_words=False))
+            if e and e.get('listed') is False:
+                unlisted.append(
+                    (label(sd), e['url'].split(e['tree'] + '/')[0]
+                     + e['tree']))
+    for e in entries:
+        for u in e['charmaps_unchecked']:
+            warned.append((f"{e['build']}: charmaps NOT checked against "
+                           f"{u['package']}: {u['why']}",
+                           dict(u, build=e['build'])))
     for w, data in warned:
         warn(w, 'build_charmaps_unchecked', data, split_words=False)
     items = list(bs.NOT_CHECKED)
@@ -2952,6 +3021,7 @@ def report_build_provenance(builds):
           'unlisted': [{'build': b, 'folder': where}
                        for b, where in unlisted]},
          split_words=False)
+    return entries
 
 
 def _main(argv):
@@ -3052,8 +3122,15 @@ def _main(argv):
                 major = latest_major(name)
                 fh.write((found[major][1].build if major is not None
                           else name) + '\n')
-        for name, got in found.values():
-            print(latest_line(name, got), flush=True)
+        entries = [latest_entry(name, got) for name, got in found.values()]
+        record = os.environ.get(LATEST_RECORD_ENV)
+        if record:
+            with open(record, 'w', encoding='utf-8') as fh:
+                fh.write(json.dumps({'step': 'latest', 'resolved': entries},
+                                    sort_keys=True) + '\n')
+        for e in entries:
+            for line in latest_lines(e):
+                print(line, flush=True)
         return 0
     if len(argv) >= 2 and argv[0] == 'corpus':
         # The corpus floor of the tags given, silent on success;
