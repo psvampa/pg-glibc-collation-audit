@@ -4263,8 +4263,26 @@ class MachineSides(unittest.TestCase):
             calls.append(name)
             raise bs.Refused('this test downloads nothing')
         with mock.patch.object(bs, 'fetch_build', fake):
-            got = g.machine_sides(given, words, no_sources)
-        return got, calls
+            *got, self.note = g.machine_sides(given, words, no_sources)
+        return tuple(got), calls
+
+    def test_the_note_is_the_one_printed(self):
+        """Step 0's note as data (machine_note), the one its lines are
+        printed from: printed where a side is given as its tag, not
+        printed where both are the builds, fallback where the tags are
+        read."""
+        for given, no_sources, want in (
+                (('glibc-2.28', B275), (None, None),
+                 {'state': 'printed', 'builds': [B40, B275],
+                  'given': ['glibc-2.28', B275]}),
+                ((B40, B275), (None, None), {'state': 'not printed'}),
+                (('glibc-2.28', 'glibc-2.34'), ('no sources', None),
+                 {'state': 'fallback'})):
+            with self.subTest(given=given):
+                (_, lines), _ = self.sides(given, (W8, W9), no_sources)
+                self.assertEqual(self.note, want)
+                if want['state'] != 'fallback':
+                    self.assertEqual(lines, g.machine_note_lines(want))
 
     def refused(self, given, words, no_sources=(None, None)):
         err = io.StringIO()

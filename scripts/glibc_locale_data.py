@@ -30,7 +30,9 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
       MACHINES_ENV); checks the order and the floor and prints the
       provenance and where PostgreSQL warns about a collation's version
       between the sides; under audit.sh it also records each build's commit for
-      the steps after it (SIDES_ENV)
+      the steps after it (SIDES_ENV); and writes what it printed of the
+      tags, the machines and the glibc versions to
+      step1_compared.<pair>.json in the output folder (COMPARED_RECORD)
   python3 glibc_locale_data.py resolve --to F <old> <new>
       for audit.sh, before anything runs: writes to F `<side>\t<kind>` a
       line each, the side without the architecture `rpm -q` prints
@@ -42,7 +44,8 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
       are what `rpm -q glibc` printed on each, each folder that file laid
       out (whether it holds locales/, else the sources-not-included
       reason); writes to F, a line each, the side the run reads, its
-      kind and its upstream tag, and prints which each side reads
+      kind and its upstream tag, and prints which each side reads; and,
+      when STEP0_RECORD_ENV names a file, its note as data (machine_note)
   python3 glibc_locale_data.py latest --to F <old> <new>
       for audit.sh, once: writes to F each side a line, latest-elN
       replaced by the newest build of RHEL N the mirror lists, and prints
@@ -1130,39 +1133,60 @@ def signing_key(lines):
     return 'a key gpg did not name'
 
 
+# The mark each status of verify_tag is printed with under 'Tag provenance'.
+SIGNATURE_MARKS = {
+    'good': 'OK      ', 'bad': 'INVALID ', 'no-key': 'UNCHECKED',
+    'no-gpg': 'UNCHECKED', 'unverifiable': 'UNCHECKED',
+    'revoked-key': 'UNCHECKED', 'expired-key': 'UNCHECKED',
+    'expired-sig': 'UNCHECKED', 'untrusted': 'UNCHECKED',
+    'unsigned': 'UNSIGNED', 'not-a-tag': 'UNSIGNED'}
+TAG_PROVENANCE_HEAD = ("Tag provenance (this audit reads a third-party "
+                       "mirror; a tag is a mutable pointer):")
+
+
+def tag_provenance(repo, tags):
+    """Each tag of `tags` once, in order, as 'Tag provenance' prints it:
+    its name (ref), the 12 hex of its commit printed (commit), verify_tag's
+    status and detail."""
+    out = []
+    for tag in dict.fromkeys(tags):
+        status, detail = verify_tag(repo, tag)
+        sha = run_git(['rev-parse', f'{tag}^{{commit}}'],
+                      repo).stdout.decode().strip()
+        out.append({'ref': tag, 'commit': sha[:12], 'status': status,
+                    'detail': detail})
+    return out
+
+
+def tag_provenance_lines(entries):
+    """What 'Tag provenance' prints of `entries` (tag_provenance)."""
+    lines = textwrap.fill(TAG_PROVENANCE_HEAD, width=78).split('\n')
+    for e in entries:
+        lines += textwrap.fill(
+            f"{SIGNATURE_MARKS[e['status']]} {e['ref']} = {e['commit']}  "
+            f"{e['detail']}", width=78, initial_indent='  ',
+            subsequent_indent='    ', break_long_words=False,
+            break_on_hyphens=False).split('\n')
+    return lines
+
+
 def report_tag_provenance(repo, *tags):
-    """Print what is known about where each tag's content came from.
+    """Print what is known about where each tag's content came from, and
+    return it (tag_provenance), printed from what is returned.
 
     Aborts on a bad signature. Everything else is reported and the audit
     continues -- an unchecked signature is a gap in evidence, not proof of
     tampering, and refusing to run without gpg would make the tool unusable on
     a stock container for no gain in truth.
     """
-    print(textwrap.fill("Tag provenance (this audit reads a third-party "
-                        "mirror; a tag is a mutable pointer):", width=78))
-    worst = 'good'
-    unchecked = {}
-    for tag in dict.fromkeys(tags):
-        status, detail = verify_tag(repo, tag)
-        sha = run_git(['rev-parse', f'{tag}^{{commit}}'],
-                      repo).stdout.decode().strip()
-        mark = {'good': 'OK      ', 'bad': 'INVALID ', 'no-key': 'UNCHECKED',
-                'no-gpg': 'UNCHECKED', 'unverifiable': 'UNCHECKED',
-                'revoked-key': 'UNCHECKED', 'expired-key': 'UNCHECKED',
-                'expired-sig': 'UNCHECKED', 'untrusted': 'UNCHECKED',
-                'unsigned': 'UNSIGNED', 'not-a-tag': 'UNSIGNED'}[status]
-        print(textwrap.fill(f"{mark} {tag} = {sha[:12]}  {detail}", width=78,
-                            initial_indent='  ', subsequent_indent='    ',
-                            break_long_words=False, break_on_hyphens=False))
-        if status == 'bad':
-            worst = 'bad'
-        elif status != 'good':
-            if worst == 'good':
-                worst = status
-            unchecked.setdefault(tag, status)
-    if worst == 'bad':
+    entries = tag_provenance(repo, tags)
+    for line in tag_provenance_lines(entries):
+        print(line)
+    if any(e['status'] == 'bad' for e in entries):
         die("a tag's signature is INVALID. The source this would audit is not "
             "what the glibc maintainers released. Refusing to continue.")
+    unchecked = {e['ref']: e['status'] for e in entries
+                 if e['status'] != 'good'}
     if unchecked:
         # A `!!`, so that the summary's warnings repeat it (16.154): every
         # status but good and bad, UNCHECKED (no gpg, no key, a signature
@@ -1177,6 +1201,7 @@ def report_tag_provenance(repo, *tags):
              'signatures_unchecked',
              {'refs': [{'ref': r, 'status': s} for r, s in unchecked.items()]},
              split_words=False)
+    return entries
 
 
 def read_blobs(repo, tag, paths, raw=False):
@@ -1515,8 +1540,9 @@ def machine_build(words):
 def machine_sides(given, words, no_sources=(None, None)):
     """What the run reads for each side when audit.sh is given each
     machine's file: [(name, kind, tag)], kind 'build' or 'tag', tag the
-    upstream tag of that side, which step 11 reads; and the lines
-    to print, `!!` blocks included.
+    upstream tag of that side, which step 11 reads; the lines to print,
+    `!!` blocks included; and step 0's note as data (machine_note;
+    'fallback' where both sides read their tags).
 
     `given` are the two sides as typed, `words` what `rpm -q glibc` printed
     on each machine, `no_sources` for each side None when its file holds
@@ -1577,14 +1603,9 @@ def machine_sides(given, words, no_sources=(None, None)):
             die(f"cannot read the build {b}: {why}", 2)
         unread.append((side, b, why))
     if not unread:
-        lines = []
-        if list(given) != builds:
-            lines.append(textwrap.fill(
-                f"Each machine's file names the build it runs: step 2 "
-                f"reads {builds[0]} and {builds[1]}, in place of {given[0]} "
-                f"and {given[1]}, from each machine's own locale sources.",
-                width=78, break_long_words=False, break_on_hyphens=False))
-        return [(b, 'build', t) for b, t in zip(builds, tags)], lines
+        note = machine_note(given, builds)
+        return ([(b, 'build', t) for b, t in zip(builds, tags)],
+                machine_note_lines(note), note)
     out = io.StringIO()
     said = '; and '.join(f"the {side} machine's file names {b}, which this "
                          f"run cannot read: {why}" for side, b, why in unread)
@@ -1595,7 +1616,37 @@ def machine_sides(given, words, no_sources=(None, None)):
              {'unread': [{'side': side, 'build': b, 'why': why}
                          for side, b, why in unread],
               'tags': list(tags)}, split_words=False)
-    return [(t, 'tag', t) for t in tags], out.getvalue().rstrip('\n').split('\n')
+    return ([(t, 'tag', t) for t in tags],
+            out.getvalue().rstrip('\n').split('\n'), {'state': 'fallback'})
+
+
+def machine_note(given, builds):
+    """What step 0 says of the sides given (`given`) where each machine's
+    build (`builds`) is read: 'printed' (builds, given) where a side was
+    given as its tag, else 'not printed'."""
+    if list(given) != list(builds):
+        return {'state': 'printed', 'builds': list(builds),
+                'given': list(given)}
+    return {'state': 'not printed'}
+
+
+def machine_note_lines(note):
+    """The line machine_note's state 'printed' prints."""
+    if note['state'] != 'printed':
+        return []
+    b, g = note['builds'], note['given']
+    return textwrap.fill(
+        f"Each machine's file names the build it runs: step 2 "
+        f"reads {b[0]} and {b[1]}, in place of {g[0]} "
+        f"and {g[1]}, from each machine's own locale sources.",
+        width=78, break_long_words=False,
+        break_on_hyphens=False).split('\n')
+
+
+# Where audit.sh has step 0 write its note (machine_note) as data, beside
+# its `!!` (WARNINGS_ENV); 'fallback' where both machines read their tags,
+# which its `!!` says. Unset, nothing is written.
+STEP0_RECORD_ENV = 'PG_GLIBC_AUDIT_STEP0_RECORD'
 
 
 def latest_major(name):
@@ -2441,7 +2492,9 @@ def compared_sides(here, old, new):
     (print_collation_version, a `!!` when it never does or cannot be
     told), a `!!` for the sides read as tags (tag_sides_text) and one for
     what no step compares (CODE_NOT_COMPARED), and hold each side to the
-    floor. A build name (is_build_name) is never asked of git: build_side
+    floor; then write what it printed of the tags, the machines and the
+    glibc versions as data (COMPARED_RECORD), from which it printed it.
+    A build name (is_build_name) is never asked of git: build_side
     fetches it and makes its commit again, or makes it from a machine's own
     file under audit.sh (machine_side). latest-elN is refused
     (refuse_latest)."""
@@ -2472,22 +2525,30 @@ def compared_sides(here, old, new):
     # Under audit.sh, for the steps after this one (SIDES_ENV): after the
     # order check, so a refused pair records nothing.
     write_recorded(builds)
+    # What is printed below, as data (COMPARED_RECORD), written once the
+    # block is.
+    record = {'step': 1, 'machines': [], 'builds': {'state': 'none'}}
     if not builds:
-        report_tag_provenance(repo, old, new)
+        record['tags'] = report_tag_provenance(repo, old, new)
     else:
         under = []
         for sd in sides:
             t = sd if _is_tag(sd) else sd.prov['tag']
             if t not in under:
                 under.append(t)
-        report_tag_provenance(repo, *under)
+        record['tags'] = report_tag_provenance(repo, *under)
         machines = [sd for sd in builds if is_machine(sd)]
         if machines:
-            report_machine_provenance(machines)
+            record['machines'] = report_machine_provenance(machines)
         rebuilt = [sd for sd in builds if not is_machine(sd)]
         if rebuilt:
             report_build_provenance(rebuilt)
-    print_collation_version(repo, sides[0], sides[1])
+            # Step 24.3c-2 of the plan.
+            record['builds'] = {
+                'state': 'not yet reported',
+                'why': 'today said only in the text of the run'}
+    record['collation_version'] = print_collation_version(
+        repo, sides[0], sides[1])
     if tags:
         classes = [side_class(repo, t) for t in tags]
         warn(tag_sides_text(tags, classes), 'sides_read_as_tags',
@@ -2500,7 +2561,18 @@ def compared_sides(here, old, new):
     # reads as "nothing changed". A build was held to it by build_side.
     for n in tags:
         side(repo, n)
+    # Written on every run that gets here, so that a missing file means the
+    # sides did not; through named(), as the screen.
+    write_list(COMPARED_RECORD % pair_slug(old, new),
+               [named(json.dumps(record, sort_keys=True))])
     return repo, sides[0], sides[1]
+
+
+# What 'What was compared' prints, as data, beside the log of the step that
+# prints it (compared_sides): its tags, its machines, whether builds were
+# rebuilt (not yet what of them) and the glibc versions as
+# collation_version says them; report_data.py reads it.
+COMPARED_RECORD = 'step1_compared.%s.json'
 
 
 # How audit.sh tells tag_sides_text what a reader of this run can do to have a
@@ -2550,9 +2622,11 @@ def side_glibc_version(repo, s):
     return m.group(1).decode('ascii', 'replace') if m else None
 
 
-def print_collation_version(repo, old, new):
+def collation_version(repo, old, new):
     """16.166: whether PostgreSQL warns about a collation's version, said
-    once for the pair. PostgreSQL records glibc's version for every libc
+    once for the pair, as a state: 'unknown' (sides: those whose version
+    could not be read), 'same' (version) or 'differ' (old, new).
+    PostgreSQL records glibc's version for every libc
     locale but C, C.* and POSIX, and warns where the recorded string is not
     the one it now runs (strcmp): a named collation
     (pg_locale.c:1596-1629@REL_14_25), a database's default collation from
@@ -2566,37 +2640,60 @@ def print_collation_version(repo, old, new):
     glibc's, collationcmds.c:237-238@REL_13_23) and, from 14 or older, its
     database defaults (no datcollversion there, pg_dump.c:3293@REL_18_6;
     createdb takes the running glibc's, dbcommands.c:1300-1316@REL_18_6).
-    So the line says where a warning comes from, and what records the
-    version that never warns."""
+    So the line collation_version_lines prints says where a warning comes
+    from, and what records the version that never warns."""
     ov, nv = side_glibc_version(repo, old), side_glibc_version(repo, new)
     if ov is None or nv is None:
-        which = [_ref(s) if _is_tag(s) else s.build
-                 for s, v in ((old, ov), (new, nv)) if v is None]
+        return {'state': 'unknown',
+                'sides': [_ref(s) if _is_tag(s) else s.build
+                          for s, v in ((old, ov), (new, nv)) if v is None]}
+    if ov == nv:
+        return {'state': 'same', 'version': nv}
+    return {'state': 'differ', 'old': ov, 'new': nv}
+
+
+def collation_version_lines(v):
+    """The line collation_version's state 'differ' prints; the other two
+    are `!!` (print_collation_version)."""
+    if v['state'] != 'differ':
+        return []
+    ov, nv = v['old'], v['new']
+    return textwrap.fill(
+        f"glibc {ov} on the old side, {nv} on the new: the version a "
+        "PostgreSQL that runs it records for a libc collation, where it "
+        "records one. PostgreSQL warns about a collation, and "
+        "PostgreSQL 15 or later about a database's default collation, "
+        "where "
+        f"the version it recorded is not {nv} ({ov} if it was recorded "
+        "on the old side), whether that locale's order changed or not. "
+        f"Where it recorded {nv}, it does not warn, whatever changed: "
+        f"initdb and a restore on the new side record {nv} for every "
+        "collation, and pg_upgrade there for those of pg_catalog, for "
+        "every collation from PostgreSQL 12 or older, and for a "
+        "database's default from 14 or older.",
+        width=78).split('\n')
+
+
+def print_collation_version(repo, old, new):
+    """Print collation_version's state, and return it."""
+    v = collation_version(repo, old, new)
+    if v['state'] == 'unknown':
         warn("Whether PostgreSQL warns about a collation's version is NOT "
-             f"known: no glibc version could be read for {', '.join(which)}.",
-             'collation_version_unknown', {'sides': which},
+             f"known: no glibc version could be read for "
+             f"{', '.join(v['sides'])}.",
+             'collation_version_unknown', {'sides': v['sides']},
              split_words=False)
-    elif ov == nv:
+    elif v['state'] == 'same':
+        nv = v['version']
         warn("PostgreSQL warns about no libc collation between these two "
              f"sides: both are glibc {nv}, the version a PostgreSQL that "
              "runs it records for a collation and compares. Whatever this "
              "run finds changed between them, PostgreSQL does not report.",
              'collation_version_same', {'version': nv})
     else:
-        print(textwrap.fill(
-            f"glibc {ov} on the old side, {nv} on the new: the version a "
-            "PostgreSQL that runs it records for a libc collation, where it "
-            "records one. PostgreSQL warns about a collation, and "
-            "PostgreSQL 15 or later about a database's default collation, "
-            "where "
-            f"the version it recorded is not {nv} ({ov} if it was recorded "
-            "on the old side), whether that locale's order changed or not. "
-            f"Where it recorded {nv}, it does not warn, whatever changed: "
-            f"initdb and a restore on the new side record {nv} for every "
-            "collation, and pg_upgrade there for those of pg_catalog, for "
-            "every collation from PostgreSQL 12 or older, and for a "
-            "database's default from 14 or older.",
-            width=78))
+        for line in collation_version_lines(v):
+            print(line)
+    return v
 
 
 _REF_KINDS = {}
@@ -2699,27 +2796,52 @@ MACHINE_NOT_CHECKED = (
     "is answered by the tag's ancestry.")
 
 
+MACHINE_PROVENANCE_HEAD = (
+    "Machine provenance (each machine's own locale sources and charmaps, "
+    "from its file, on its upstream tag above, as one commit of the clone; "
+    "nothing downloaded):")
+
+
+def machine_entry(sd):
+    """What 'Machine provenance' prints of the machine Side `sd`."""
+    prov = sd.prov
+    return {'build': label(sd), 'commit': sd.ref[:12], 'tag': prov['tag'],
+            'word': prov['word'],
+            'measurement_sha256': prov['measurement_sha256'],
+            'locales': prov['locales'],
+            'charmaps': ({'state': 'none', 'why': prov['charmaps_why']}
+                         if prov['charmaps'] is None else
+                         {'state': 'counted', 'count': prov['charmaps']})}
+
+
+def machine_provenance_lines(entries):
+    """What 'Machine provenance' prints of `entries` (machine_entry)."""
+    lines = textwrap.fill(MACHINE_PROVENANCE_HEAD, width=78).split('\n')
+    for e in entries:
+        lines.append(f"  {e['build']} = {e['commit']}, one parent: "
+                     f"{e['tag']}")
+        lines.append(f"    rpm -q glibc   {e['word']}")
+        lines.append(f"    measurement    sha256 {e['measurement_sha256']}")
+        lines.append(f"    locale sources {e['locales']} file(s)")
+        cm = e['charmaps']
+        if cm['state'] == 'none':
+            lines += textwrap.fill(
+                f"charmaps       none, because {cm['why']}",
+                width=78, initial_indent='    ', subsequent_indent=' ' * 19,
+                break_long_words=False, break_on_hyphens=False).split('\n')
+        else:
+            lines.append(f"    charmaps       {cm['count']} file(s)")
+    return lines
+
+
 def report_machine_provenance(machines):
     """Print, for each Side read from a machine's own files, which file and
-    what it held; a `!!` for the entries of its sources that were not read;
-    one `!!` for what no step reads of a machine (MACHINE_NOT_CHECKED)."""
-    print(textwrap.fill("Machine provenance (each machine's own locale "
-                        "sources and charmaps, from its file, on its upstream "
-                        "tag above, as one commit of the clone; nothing "
-                        "downloaded):", width=78))
-    for sd in machines:
-        prov = sd.prov
-        print(f"  {label(sd)} = {sd.ref[:12]}, one parent: {prov['tag']}")
-        print(f"    rpm -q glibc   {prov['word']}")
-        print(f"    measurement    sha256 {prov['measurement_sha256']}")
-        print(f"    locale sources {prov['locales']} file(s)")
-        if prov['charmaps'] is None:
-            print(textwrap.fill(
-                f"charmaps       none, because {prov['charmaps_why']}",
-                width=78, initial_indent='    ', subsequent_indent=' ' * 19,
-                break_long_words=False, break_on_hyphens=False))
-        else:
-            print(f"    charmaps       {prov['charmaps']} file(s)")
+    what it held (machine_entry, returned); a `!!` for the entries of its
+    sources that were not read; one `!!` for what no step reads of a
+    machine (MACHINE_NOT_CHECKED)."""
+    entries = [machine_entry(sd) for sd in machines]
+    for line in machine_provenance_lines(entries):
+        print(line)
     for sd in machines:
         skipped = sd.prov['skipped']
         if skipped:
@@ -2735,6 +2857,7 @@ def report_machine_provenance(machines):
                               for e, why in skipped]},
                  split_words=False)
     warn(MACHINE_NOT_CHECKED, 'machine_not_checked', {}, split_words=False)
+    return entries
 
 
 def _checked(text):
@@ -2875,7 +2998,8 @@ def _main(argv):
     if argv and argv[0] == 'machines':
         # audit.sh, given each machine's file, before the sides are read:
         # which side the run reads (machine_sides), its kind and its tag, a line
-        # each in --to; what to say about it on stdout. Each machine's
+        # each in --to; what to say about it on stdout, and its note as
+        # data where STEP0_RECORD_ENV names a file. Each machine's
         # laid-out file says whether it holds the locale sources, and why
         # not (sources-not-included).
         if len(argv) != 9 or argv[1] != '--to':
@@ -2893,10 +3017,15 @@ def _main(argv):
             except OSError:
                 why = ''
             no_sources.append(why or "the file gives no reason")
-        sides, lines = machine_sides(argv[3:5], argv[5:7], no_sources)
+        sides, lines, note = machine_sides(argv[3:5], argv[5:7], no_sources)
         with open(argv[2], 'w', encoding='utf-8') as fh:
             for name, kind, tag in sides:
                 fh.write(f"{name}\t{kind}\t{tag}\n")
+        record = os.environ.get(STEP0_RECORD_ENV)
+        if record:
+            with open(record, 'w', encoding='utf-8') as fh:
+                fh.write(json.dumps(dict(note, step=0), sort_keys=True)
+                         + '\n')
         for ln in lines:
             print(ln, flush=True)
         return 0

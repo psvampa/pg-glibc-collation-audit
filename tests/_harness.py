@@ -748,7 +748,9 @@ def check_report(returncode, out, out_dir):
     STEP2_RUNS for a test that cuts the step's text out of the run its own
     way; and what it printed of its character set check and of its
     transliterations against the report's step2.character_sets and
-    step2.transliteration (charmaps_held, translit_held). A run that
+    step2.transliteration (charmaps_held, translit_held); and what it
+    printed before and under 'What was compared' against the report's
+    compared (compared_held). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -935,6 +937,7 @@ def check_report(returncode, out, out_dir):
     check_summary_warnings(r, out, path)
     check_step11_warnings(r, out_dir, path)
     check_step11_counts(r, out_dir, path)
+    compared_held(out, r, path)
 
 
 def check_warnings(r, out_dir, path):
@@ -3058,6 +3061,88 @@ def bang_blocks(log):
         return []
     with open(log, encoding='utf-8') as f:
         return text_bang_blocks(f.read())
+
+
+def _without_bangs(lines):
+    """LINES without the `!!` blocks (text_bang_blocks' rule): those are
+    held to the run's warnings by check_warnings."""
+    out, inside = [], False
+    for line in lines:
+        if line.startswith('!!'):
+            inside = True
+        elif inside and line.startswith('   '):
+            pass
+        else:
+            inside = False
+            out.append(line)
+    return out
+
+
+# What latest-elN prints (glibc_locale_data.latest_line), once per N, its
+# lines joined by one blank.
+_LATEST = (r'latest-el\d+ is glibc-\S+: the newest glibc build in \S+, '
+           r'(?:by its metadata of \d{4}-\d\d-\d\d \d\d:\d\d UTC|and '
+           r'its metadata gives no date this reads)\.')
+LATEST_LINES = re.compile(f'{_LATEST}(?: {_LATEST})?')
+
+
+def compared_held(out, r, path):
+    """What the run printed before 'What was compared' and under it,
+    without its `!!` (check_warnings holds those), against the report's
+    compared and run.machines, line by line, both ends: step 0's note;
+    the machines' files as given; the tags, the machines and the line of
+    the glibc versions, rebuilt from the data by the functions that print
+    them. Set aside: what the run says it does (cloning, fetching tags)
+    and, until step 24.3c-2, latest-elN's line and the rebuilt builds."""
+    import glibc_locale_data as g
+    c = r['compared']
+
+    def no(what, got, want):
+        raise AssertionError(f'{path}: printed {what} {got!r}, the data '
+                             f'{want!r}')
+    if c['state'] != 'reported':
+        no('a block', None, c)
+    lines, at = _compared_at(out)
+    before = lines[:at]
+    if before[-2:] != ['', '=' * 64]:
+        no('above the banner', before[-2:], ['', '=' * 64])
+    before = _without_bangs(before[:-2])
+    note = c['note']
+    if note['state'] == 'not reported':
+        no("step 0's note", None, note)
+    if note['state'] == 'not run':
+        # Nothing, or latest-elN's lines alone (24.3c-2 makes them data).
+        if before and not LATEST_LINES.fullmatch(' '.join(before)):
+            no('before the block', before, note)
+    elif before != g.machine_note_lines(note):
+        no("step 0's note", before, note)
+    body = compared_text(out).split('\n')
+    m = r['run']['machines']
+    if m['state'] == 'given':
+        given = ["Machines' files, as given:", '  old  ' + m['old'],
+                 '  new  ' + m['new']]
+        if body[:3] != given:
+            no("the machines' files", body[:3], given)
+        body = body[3:]
+    body = [x for x in _without_bangs(body)
+            if not x.startswith(('Cloning glibc (full history',
+                                 'Refs not present locally: '))]
+    # Step 24.3c-2: the rebuilt builds' lines.
+    if c['builds']['state'] != 'none':
+        heads = [i for i, x in enumerate(body)
+                 if x.startswith('Build provenance (each build')]
+        if len(heads) != 1:
+            no('Build provenance', len(heads), c['builds'])
+        j = heads[0] + 2
+        while j < len(body) and body[j].startswith(' '):
+            j += 1
+        body = body[:heads[0]] + body[j:]
+    want = g.tag_provenance_lines(c['tags'])
+    if c['machines']:
+        want += g.machine_provenance_lines(c['machines'])
+    want += g.collation_version_lines(c['collation_version'])
+    if body != want:
+        no('the block', body, want)
 
 
 def text_bang_blocks(text):
