@@ -6,13 +6,12 @@ change.
 Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What 'What was compared'
-says of the tags, the machines and the glibc versions, and step 0's note
-above it, is data: step1_compared.<pair>.json and, when the machines'
-files are given, step0.<pair>.json, read into compared and tied to
-other facts of the run (_compared); but for a build rebuilt from its
-packages (compared.builds is 'not yet reported') and the line latest-elN
-prints above the block, which are not yet data: a later step of the work
-turns them into data (branch 24 of the plan). What step 2 prints of its
+says of the tags, the machines, the builds rebuilt from their packages
+and the glibc versions, and what is printed above it (step 0's note, or
+the line of each latest-elN), is data: step1_compared.<pair>.json and,
+when the machines' files are given, step0.<pair>.json, or, when a side
+was typed as latest-elN, latest.<pair>.json, read into compared and tied
+to other facts of the run (_compared, _latest). What step 2 prints of its
 rules is data:
 step2_rules.<pair>.json, read into step2.rules and tied to the other
 facts of the run (_rules); and so is what it prints of its character
@@ -35,7 +34,7 @@ its list, is an error, never a default.
 usage: report_data.py --out-dir DIR --pair SLUG --old OLD --new NEW
          --route tags|builds|sides --order-words "ORDER NOTHING OLD NEW WORD"
          [--old-node FILE --new-node FILE] [--tag-side old|new]
-         [--step11]
+         [--old-asked SIDE --new-asked SIDE] [--step11]
 """
 import argparse
 import glob
@@ -80,12 +79,6 @@ CHARACTER_COLUMNS = ['locales', 'finding', 'characters', 'how', 'test',
                      'before', 'now', 'measured']
 RULES_CHARACTER_COLUMNS = ['name', 'state', 'every rule can change',
                            'characters']
-# What later steps of branch 24 turn into data: today the rebuilt builds
-# of compared.builds (glibc_locale_data.compared_sides writes it).
-NOT_YET = {'state': 'not yet reported',
-           'why': 'today said only in the text of the run'}
-
-
 class ReportError(Exception):
     pass
 
@@ -2550,9 +2543,29 @@ def compared_section(a):
     else:
         out['note'] = {'state': 'not run',
                        'why': 'no --old-node and --new-node'}
+    if a.old_asked:
+        pl = _file(a.out_dir, f'latest.{a.pair}.json')
+        if os.path.isfile(pl):
+            lines = _lines(pl)
+            if len(lines) != 1:
+                raise ReportError(f'{pl} is not one line')
+            got = json.loads(lines[0])
+            if not isinstance(got, dict) or got.get('step') != 'latest' or \
+                    sorted(got) != ['resolved', 'step']:
+                raise ReportError(f'{pl} is not what latest writes')
+            out['latest'] = {'state': 'reported',
+                             'asked': [a.old_asked, a.new_asked],
+                             'resolved': got['resolved']}
+        else:
+            out['latest'] = not_reported(pl)
+    else:
+        out['latest'] = {'state': 'not asked'}
     machines = out['machines'] if isinstance(out['machines'], list) else []
+    b = out['builds']
+    rebuilt = (b.get('entries') if isinstance(b, dict) and
+               isinstance(b.get('entries'), list) else [])
     recorded = {}
-    if machines:
+    if machines or rebuilt:
         # The commit the sides recorded for each build, the steps after
         # them read (glibc_locale_data.write_recorded): `<build>\t<commit>`.
         p1 = _file(a.out_dir, f'build_sides.{a.pair}.txt')
@@ -2561,6 +2574,11 @@ def compared_section(a):
             if not sep or build in recorded:
                 raise ReportError(f'{p1}: a line {line!r}')
             recorded[build] = commit
+    for e in rebuilt:
+        if not isinstance(e, dict) or \
+                e.get('commit') != recorded.get(e.get('build'), '')[:12]:
+            raise ReportError(f'{path}: a build {e!r}, the sides recorded '
+                              f'{recorded!r}')
     for e in machines:
         if e.get('commit') != recorded.get(e.get('build'), '')[:12]:
             raise ReportError(f'{path}: {e.get("build")!r} commit '
@@ -3448,21 +3466,86 @@ def _build_tag(where, name):
     return 'glibc-' + parsed[0], parsed[0]
 
 
+LATEST_WHEN = re.compile(r'\d{4}-\d\d-\d\d \d\d:\d\d UTC')
+
+
+def _latest(x, pair, sides, es):
+    """compared.latest: 'not asked' when no side was typed as latest-elN
+    (audit.sh passes the sides as typed only then), else each N typed as
+    latest-elN, once, in the order of the sides, named as first typed
+    and resolved to the build of its side; a side typed otherwise is the
+    side without its architecture; each resolved build is a build of
+    that RHEL major rebuilt in this run, in a folder pub/rocky/N; the
+    date of its metadata as printed. That it is the newest build there,
+    the mirror and the date are tied here to nothing."""
+    import glibc_locale_data as g
+    _stated('compared.latest', x, ('reported', 'not asked', 'not reported'),
+            {'reported': ['asked', 'resolved'], 'not asked': [],
+             'not reported': ['why']})
+    if x['state'] != 'reported':
+        return
+    asked = x['asked']
+    if not (_is_strs(asked) and len(asked) == 2):
+        raise ReportError(f'compared.latest.asked is {asked!r}')
+    want = {}
+    for typed, (name, _) in zip(asked, sides):
+        n = g.latest_major(typed)
+        if n is None:
+            if g.without_arch(typed) != name:
+                raise ReportError(f'compared.latest: {typed!r} typed, the '
+                                  f'side is {name!r}')
+        elif want.setdefault(n, (typed, name))[1] != name:
+            raise ReportError(f'compared.latest: {typed!r} is {name!r}')
+    if not want:
+        raise ReportError(f'compared.latest {x!r}: no side typed latest-elN')
+    res = x['resolved']
+    if not isinstance(res, list):
+        raise ReportError('compared.latest.resolved is not a list')
+    for i, e in enumerate(res):
+        at = f'compared.latest.resolved[{i}]'
+        _keys(at, e, ['name', 'build', 'folder', 'when'])
+        _stated(f'{at}.when', e['when'], ('dated', 'no date'),
+                {'dated': ['utc'], 'no date': []})
+        if e['when']['state'] == 'dated' and not (
+                isinstance(e['when']['utc'], str)
+                and LATEST_WHEN.fullmatch(e['when']['utc'])):
+            raise ReportError(f'{at}.when is {e["when"]!r}')
+        n = g.latest_major(e['name'])
+        bn = g.build_name(e['build']) if _is_str(e['build']) else None
+        if n is None or bn is None or bn[2] != n or \
+                not _is_str(e['folder']) or \
+                not e['folder'].endswith(f'pub/rocky/{n}'):
+            raise ReportError(f'{at} is {e!r}')
+    if [(e['name'], e['build']) for e in res] != list(want.values()):
+        raise ReportError(f'compared.latest resolved {res!r}, the sides '
+                          f'typed {asked!r} are {want!r}')
+    if not {b for _, b in want.values()} <= {e['build'] for e in es}:
+        raise ReportError(f'compared.latest {list(want.values())!r} not '
+                          f'rebuilt')
+
+
 def _compared(r):
     """compared: its shape, then these facts tied to others of the same
     run: the tags are the sides' (a build's by its version); their
     statuses that are not good are the `!!` of signatures; each machine is
     a side of the pair, on its tag; the machines are there exactly when
-    their `!!` is, the builds exactly when theirs is; the glibc version is
-    each build's and its `!!`; and step 0's note is the pair's. A tag's
-    commit, a signature's detail, a tag's glibc version, the counts of
-    locale sources and charmaps, why a machine's file holds no charmaps
-    and the architecture of `rpm -q glibc` are tied here to nothing;
-    _harness.compared_held holds them to the printed text."""
+    their `!!` is, the rebuilt builds exactly when theirs is; each build
+    rebuilt from its packages is a side that is no machine, in order, on
+    its tag, its first "checked:" line the tarball against that tag, and
+    what its `!!` say of it (whether any file was fetched, the SRPMs no
+    metadata lists, each under the folder its `!!` names, the charmaps
+    not checked) is its own; the glibc version is each build's
+    and its `!!`; step 0's note is the pair's; latest-elN as _latest
+    says. A tag's commit, a signature's detail, a tag's glibc version, the
+    counts of locale sources and charmaps, why a machine's file holds no
+    charmaps, the architecture of `rpm -q glibc`, a build's "checked:"
+    lines after the first and its counts of patches, the sha256 of each
+    file and the URL of each file metadata lists are tied here to
+    nothing; _harness.compared_held holds them to the printed text."""
     c, run, w, pair = r['compared'], r['run'], r['warnings'], r['pair']
     _stated('compared', c, ('reported', 'not reported'),
             {'reported': ['tags', 'machines', 'builds', 'collation_version',
-                          'note'],
+                          'note', 'latest'],
              'not reported': ['why']})
     if c['state'] == 'not reported':
         return
@@ -3540,16 +3623,80 @@ def _compared(r):
                           f'{[m["build"] for m in ms]!r}')
     # The builds rebuilt from their packages (24.3c-2).
     b = c['builds']
-    _stated('compared.builds', b, ('none', 'not yet reported'),
-            {'none': [], 'not yet reported': ['why']})
-    if b['state'] != 'none' and b != NOT_YET:
+    _stated('compared.builds', b, ('none', 'rebuilt'),
+            {'none': [], 'rebuilt': ['entries']})
+    es = b.get('entries', [])
+    if not isinstance(es, list) or (b['state'] == 'rebuilt') != bool(es):
         raise ReportError(f'compared.builds is {b!r}')
+    unlisted = []
+    for i, e in enumerate(es):
+        at = f'compared.builds.entries[{i}]'
+        _keys(at, e, ['build', 'commit', 'tag', 'files', 'checked',
+                      'patches', 'charmaps_unchecked'])
+        cu = e['charmaps_unchecked']
+        if not isinstance(cu, list) or not all(
+                isinstance(u, dict) and sorted(u) == ['package', 'why']
+                and _is_str(u['package']) and _is_str(u['why'])
+                for u in cu):
+            raise ReportError(f'{at}.charmaps_unchecked is {cu!r}')
+        if not (_is_str(e['build']) and isinstance(e['commit'], str)
+                and HEX12.fullmatch(e['commit'])
+                and isinstance(e['files'], list) and _is_strs(e['checked'])
+                and e['checked']):
+            raise ReportError(f'{at} is {e!r}')
+        if e['tag'] != _build_tag(at, e['build'])[0]:
+            raise ReportError(f'{at}.tag {e["tag"]!r} is not that of '
+                              f'{e["build"]!r}')
+        # The first "checked:" line is the tarball's, against that tag.
+        import build_sources as bs
+        if e['checked'][0] != bs.TARBALL_IS_TAG % e['tag']:
+            raise ReportError(f'{at}.checked[0] {e["checked"][0]!r} is not '
+                              f'the tarball against {e["tag"]!r}')
+        _keys(f'{at}.patches', e['patches'], ['applied', 'of'])
+        if not (_is_count(e['patches']['applied'])
+                and _is_count(e['patches']['of'])
+                and e['patches']['applied'] <= e['patches']['of']):
+            raise ReportError(f'{at}.patches is {e["patches"]!r}')
+        # The three files fetched, or none (a Side made by hand).
+        import glibc_locale_data as g
+        if [f.get('package') if isinstance(f, dict) else None
+                for f in e['files']] not in (
+                    [], [k for k, _ in g.BUILD_FILES]):
+            raise ReportError(f'{at}.files are {e["files"]!r}')
+        for j, f in enumerate(e['files']):
+            _keys(f'{at}.files[{j}]', f, ['package', 'url', 'sha256',
+                                          'listed'])
+            if not (_is_str(f['url']) and isinstance(f['sha256'], str)
+                    and HEX64.fullmatch(f['sha256'])
+                    and isinstance(f['listed'], bool)
+                    and (f['listed'] or f['package'] == 'srpm')):
+                raise ReportError(f'{at}.files[{j}] is {f!r}')
+            if not f['listed']:
+                unlisted.append((e['build'], f['url']))
+    if [e['build'] for e in es] not in (
+            [], [n for n in builds if n not in {m['build'] for m in ms}]):
+        raise ReportError(f'compared.builds {[e["build"] for e in es]!r} '
+                          f'are not the build sides {builds!r}')
     said = _warnings_of(w, 'step1', 'build_not_checked')
     if said is not None and bool(said) != (b['state'] != 'none'):
         raise ReportError(f'compared.builds {b!r}, the `!!` of what is not '
                           f'checked for builds {len(said)} time(s)')
-    if ms and b['state'] != 'none':
-        raise ReportError('compared: machines and rebuilt builds at once')
+    if said:
+        d = said[0]
+        got = [(u['build'], u['folder']) for u in d['unlisted']]
+        if len(said) > 1 or \
+                d['metadata'] != any(e['files'] for e in es) or \
+                [x for x, _ in got] != [x for x, _ in unlisted] or \
+                not all(url.startswith(folder + '/')
+                        for (_, folder), (_, url) in zip(got, unlisted)):
+            raise ReportError(f'compared.builds {es!r}, the `!!` of what is '
+                              f'not checked for builds {said!r}')
+    warned = _warnings_of(w, 'step1', 'build_charmaps_unchecked')
+    want = [dict(u, build=e['build']) for e in es
+            for u in e['charmaps_unchecked']]
+    if warned is not None and warned != want:
+        raise ReportError(f'charmaps not checked {warned!r}, of the builds '
+                          f'{want!r}')
     if [n for n in builds if n not in {m['build'] for m in ms}] and \
             b['state'] == 'none':
         raise ReportError(f'compared: build sides {builds!r} that are '
@@ -3595,6 +3742,7 @@ def _compared(r):
     if n['state'] in ('printed', 'not printed') and \
             builds != [pair['old'], pair['new']]:
         raise ReportError(f'compared.note {n!r} on sides {sides!r}')
+    _latest(c['latest'], pair, sides, es)
     if n['state'] == 'printed':
         if n['builds'] != builds or not _is_strs(n['given']) or \
                 len(n['given']) != 2 or n['given'] == n['builds'] or \
@@ -4542,6 +4690,8 @@ def main(argv=None):
     ap.add_argument('--old-node', default='')
     ap.add_argument('--new-node', default='')
     ap.add_argument('--tag-side', default='')
+    ap.add_argument('--old-asked', default='')
+    ap.add_argument('--new-asked', default='')
     ap.add_argument('--step11', action='store_true')
     a = ap.parse_args(argv)
     path = _file(a.out_dir, f'report.{a.pair}.json')

@@ -3078,22 +3078,14 @@ def _without_bangs(lines):
     return out
 
 
-# What latest-elN prints (glibc_locale_data.latest_line), once per N, its
-# lines joined by one blank.
-_LATEST = (r'latest-el\d+ is glibc-\S+: the newest glibc build in \S+, '
-           r'(?:by its metadata of \d{4}-\d\d-\d\d \d\d:\d\d UTC|and '
-           r'its metadata gives no date this reads)\.')
-LATEST_LINES = re.compile(f'{_LATEST}(?: {_LATEST})?')
-
-
 def compared_held(out, r, path):
     """What the run printed before 'What was compared' and under it,
     without its `!!` (check_warnings holds those), against the report's
     compared and run.machines, line by line, both ends: step 0's note;
     the machines' files as given; the tags, the machines and the line of
     the glibc versions, rebuilt from the data by the functions that print
-    them. Set aside: what the run says it does (cloning, fetching tags)
-    and, until step 24.3c-2, latest-elN's line and the rebuilt builds."""
+    them; latest-elN's lines and the rebuilt builds' the same way. Set
+    aside: what the run says it does (cloning, fetching tags)."""
     import glibc_locale_data as g
     c = r['compared']
 
@@ -3110,10 +3102,17 @@ def compared_held(out, r, path):
     note = c['note']
     if note['state'] == 'not reported':
         no("step 0's note", None, note)
+    latest = c['latest']
+    if latest['state'] == 'not reported':
+        no("latest-elN's line", None, latest)
     if note['state'] == 'not run':
-        # Nothing, or latest-elN's lines alone (24.3c-2 makes them data).
-        if before and not LATEST_LINES.fullmatch(' '.join(before)):
-            no('before the block', before, note)
+        # Nothing, or latest-elN's lines.
+        want = [x for e in (latest.get('resolved') or ())
+                for x in g.latest_lines(e)]
+        if before != want:
+            no('before the block', before, want)
+    elif latest['state'] != 'not asked':
+        no("latest-elN's line beside the machines' files", None, latest)
     elif before != g.machine_note_lines(note):
         no("step 0's note", before, note)
     body = compared_text(out).split('\n')
@@ -3127,19 +3126,11 @@ def compared_held(out, r, path):
     body = [x for x in _without_bangs(body)
             if not x.startswith(('Cloning glibc (full history',
                                  'Refs not present locally: '))]
-    # Step 24.3c-2: the rebuilt builds' lines.
-    if c['builds']['state'] != 'none':
-        heads = [i for i, x in enumerate(body)
-                 if x.startswith('Build provenance (each build')]
-        if len(heads) != 1:
-            no('Build provenance', len(heads), c['builds'])
-        j = heads[0] + 2
-        while j < len(body) and body[j].startswith(' '):
-            j += 1
-        body = body[:heads[0]] + body[j:]
     want = g.tag_provenance_lines(c['tags'])
     if c['machines']:
         want += g.machine_provenance_lines(c['machines'])
+    if c['builds']['state'] != 'none':
+        want += g.build_provenance_lines(c['builds']['entries'])
     want += g.collation_version_lines(c['collation_version'])
     if body != want:
         no('the block', body, want)

@@ -181,11 +181,12 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # as before; one ignored when the run started (nohup) stays ignored.
 UNTOUCHED_OUT=1
 RESOLVED=""; NODE_TMP=""; ORDER_UNPRINTED=""; STEP0_WARNINGS=""
-STEP0_RECORD=""
+STEP0_RECORD=""; LATEST_RECORD=""
 on_exit() {
   [ -z "$RESOLVED" ] || rm -f "$RESOLVED"
   [ -z "$STEP0_WARNINGS" ] || rm -f "$STEP0_WARNINGS"
   [ -z "$STEP0_RECORD" ] || rm -f "$STEP0_RECORD"
+  [ -z "$LATEST_RECORD" ] || rm -f "$LATEST_RECORD"
   [ -z "$NODE_TMP" ] || rm -rf "$NODE_TMP"
   if [ -n "$UNTOUCHED_OUT" ]; then
     echo "       This run left nothing in $OUT_DIR;" >&2
@@ -203,6 +204,9 @@ trap 'trap - HUP; kill -HUP $$' HUP
 # of step 0 and step 11; never the reader's, which would have every other
 # call write its `!!` there too.
 unset PG_GLIBC_AUDIT_WARNINGS
+# The sides as the user typed them, for the run's data file when one is
+# latest-elN (report_data's --old-asked and --new-asked).
+ASKED_OLD=$OLD; ASKED_NEW=$NEW
 RESOLVED=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-resolve.XXXXXX")
 python3 "$SCRIPTS/glibc_locale_data.py" resolve --to "$RESOLVED" "$OLD" "$NEW"
 # A build typed as `rpm -q glibc` prints it, with the architecture, is read
@@ -316,7 +320,12 @@ if [ -n "$OLD_LATEST$NEW_LATEST" ]; then
   trap 'stop_latest HUP' HUP
   trap 'stop_latest INT' INT
   trap 'stop_latest QUIT' QUIT
-  python3 "$SCRIPTS/glibc_locale_data.py" latest --to "$RESOLVED" "$OLD" "$NEW" &
+  # What latest prints, as data (glibc_locale_data.LATEST_RECORD_ENV), for
+  # the run's data file.
+  LATEST_RECORD=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-latest.XXXXXX")
+  PG_GLIBC_AUDIT_LATEST_RECORD="$LATEST_RECORD" \
+    python3 "$SCRIPTS/glibc_locale_data.py" latest \
+    --to "$RESOLVED" "$OLD" "$NEW" &
   LATEST=$!
   wait "$LATEST"
   LATEST=""
@@ -494,7 +503,8 @@ rm -f "$STEP2_LIST" "$STEP2_NOT_COMPARED" "$STEP2_REMOVED" "$OLD_STEP2_KEYED" \
       "$OUT_DIR/step2_rules.$PAIR.json" \
       "$OUT_DIR/step2_character_sets.$PAIR.json" \
       "$OUT_DIR/step2_transliteration.$PAIR.json" \
-      "$OUT_DIR/step0.$PAIR.json" "$OUT_DIR/step1_compared.$PAIR.json"
+      "$OUT_DIR/step0.$PAIR.json" "$OUT_DIR/step1_compared.$PAIR.json" \
+      "$OUT_DIR/latest.$PAIR.json"
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log \
       "$OUT_DIR"/step[0-9]*."$PAIR".warnings.jsonl
 # The run's data file (scripts/report_data.py), written at the end from the
@@ -511,6 +521,8 @@ rm -f "$REPORT_DATA" "$REPORT_DATA.partial"
 # And its note as data (glibc_locale_data.machine_note), whenever step 0
 # ran, whether it printed one or not.
 [ -z "$STEP0_RECORD" ] || cp "$STEP0_RECORD" "$OUT_DIR/step0.$PAIR.json"
+# And what latest printed as data, whenever a side was latest-elN.
+[ -z "$LATEST_RECORD" ] || cp "$LATEST_RECORD" "$OUT_DIR/latest.$PAIR.json"
 
 # Step 11 is worked out before the sides are read, so that a measurement the
 # comparison refuses -- measured by another copy of locale_order.py over other
@@ -607,9 +619,9 @@ run_step() {
 # What was compared: each side, where it was read from, where PostgreSQL
 # warns about a collation's version between them, and what no step reads
 # (glibc_locale_data.compared_sides), with each machine's file named
-# as it was given. What it says of the tags, the machines and the glibc
-# versions is written as data too (glibc_locale_data.COMPARED_RECORD; a
-# build rebuilt from its packages not yet). Its log keeps the name step
+# as it was given. What it says of the tags, the machines, the rebuilt
+# builds and the glibc versions is written as data too
+# (glibc_locale_data.COMPARED_RECORD). Its log keeps the name step
 # 1's had: the warnings block below repeats the `!!` blocks of every
 # step*.$PAIR.log, and has to repeat these (CODE_NOT_COMPARED is the one
 # line that covers ko_KR without the machines' files), after step0's,
@@ -982,6 +994,7 @@ python3 "$SCRIPTS/report_data.py" --out-dir "$OUT_DIR" --pair "$PAIR" \
   --order-words "$ORDER $NOTHING $OLD_CLASS $NEW_CLASS $WORD" \
   ${OLD_NODE:+--old-node "$OLD_NODE" --new-node "$NEW_NODE"} \
   ${TAG_SIDE:+--tag-side "$TAG_SIDE"} \
+  ${LATEST_RECORD:+--old-asked "$ASKED_OLD" --new-asked "$ASKED_NEW"} \
   ${OLD_ORDER:+--step11}
 
 echo

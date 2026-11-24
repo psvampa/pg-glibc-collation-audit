@@ -572,7 +572,8 @@ ON_MACHINES = dict(route='builds', old_node='/a', new_node='/b',
 def args(d, **over):
     a = dict(out_dir=d, pair=PAIR, old='glibc-2.28', new='glibc-2.34',
              route='tags', order_words='forward none tag tag tags',
-             old_node='', new_node='', tag_side='', step11=False)
+             old_node='', new_node='', tag_side='', step11=False,
+             old_asked='', new_asked='')
     a.update(over)
     return SimpleNamespace(**a)
 
@@ -594,6 +595,8 @@ class _Folder(unittest.TestCase):
             argv += ['--tag-side', a.tag_side]
         if a.step11:
             argv.append('--step11')
+        if a.old_asked:
+            argv += ['--old-asked', a.old_asked, '--new-asked', a.new_asked]
         self.assertEqual(rd.main(argv), 0)
         self.assertEqual(sorted(n for n in os.listdir(self.d)
                                 if n.startswith('report.')),
@@ -2480,7 +2483,7 @@ class TheReaderIsStrict(_Folder):
                      '{"step": 11, "counts": []}\n', '{"step": 11, "co',
                      json.dumps({'step': 11, 'counts': COUNTS}),
                      json.dumps({**whole, 'findings': []}),
-                     json.dumps({**whole, 'findings': rd.NOT_YET}),
+                     json.dumps({**whole, 'findings': NOT_YET}),
                      json.dumps({k: v for k, v in whole.items()
                                  if k != 'checks'}),
                      json.dumps({**whole, 'checks': []}),
@@ -3557,11 +3560,11 @@ class TheReaderIsStrict(_Folder):
         step2 = lambda r: r['warnings']['step2']['items'][1]
         self.refuses(lambda r: step2(r).update(title='Nothing changed'))
         self.refuses(lambda r: step2(r)['data']['names'].pop())
-        self.refuses(lambda r: r['warnings'].update(step2=rd.NOT_YET))
+        self.refuses(lambda r: r['warnings'].update(step2=NOT_YET))
         step11 = lambda r: r['warnings']['step11']['items'][1]
         self.refuses(lambda r: step11(r).update(title='Nothing changed'))
         self.refuses(lambda r: step11(r)['data'].update(told='yes'))
-        self.refuses(lambda r: r['warnings'].update(step11=rd.NOT_YET))
+        self.refuses(lambda r: r['warnings'].update(step11=NOT_YET))
 
     def test_step11_warnings_not_run_exactly_when_step11_did_not_run(self):
         """Step 11's warnings are not run where step 11 is, and only
@@ -4564,6 +4567,10 @@ def _items(*pairs):
         {'kind': k, 'data': d, 'text': f'!! {k}'} for k, d in pairs]}
 
 
+# A state no section of the data file has.
+NOT_YET = {'state': 'not yet reported', 'why': 'x'}
+
+
 def compared_run(machines=False):
     """The parts of a report _compared reads, as a real run of 2.28 ->
     2.34 has them: on the tags, or on the two machines' files."""
@@ -4589,6 +4596,7 @@ def compared_run(machines=False):
             'compared': {'state': 'reported', 'tags': tags, 'machines': [],
                          'builds': {'state': 'none'},
                          'collation_version': version,
+                         'latest': {'state': 'not asked'},
                          'note': {'state': 'not run', 'why': 'x'}}}
     machine = lambda b, sha, n: {
         'build': b, 'commit': sha[:12], 'tag': b[:10], 'word': b + '.x86_64',
@@ -4608,8 +4616,82 @@ def compared_run(machines=False):
                                   machine(B9, 'b' * 64, 356)],
                      'builds': {'state': 'none'},
                      'collation_version': version,
+                     'latest': {'state': 'not asked'},
                      'note': {'state': 'printed', 'builds': [B8, B9],
                               'given': ['glibc-2.28', 'glibc-2.34']}}}
+
+
+R8, R9 = 'glibc-2.28-251.el8_10.40', 'glibc-2.34-275.el9_8'
+ROCKY = 'https://dl.rockylinux.org/'
+
+
+def build_entry(b, sha, listed=True):
+    """A rebuilt build as glibc_locale_data.build_entry gives it, its
+    files on Rocky's mirror (its SRPM in vault 9.3's listing when not
+    `listed`)."""
+    import build_sources as bs
+    ver, rel = b[len('glibc-'):].split('-', 1)
+    n = rel.split('.el')[1][:1] if '.el' in rel else '9'
+    tree = 'vault/rocky/9.3' if not listed else f'pub/rocky/{n}'
+    return {'build': b, 'commit': sha[:12], 'tag': 'glibc-' + ver,
+            'files': [
+                {'package': 'srpm', 'listed': listed, 'sha256': sha,
+                 'url': f'{ROCKY}{tree}/BaseOS/source/tree/Packages/g/'
+                        f'{b}.src.rpm'},
+                {'package': 'glibc-locale-source', 'listed': True,
+                 'sha256': 'c' * 64,
+                 'url': f'{ROCKY}{tree}/AppStream/x86_64/os/Packages/g/'
+                        f'glibc-locale-source-{ver}-{rel}.x86_64.rpm'},
+                {'package': 'glibc-common', 'listed': True,
+                 'sha256': 'd' * 64,
+                 'url': f'{ROCKY}{tree}/BaseOS/x86_64/os/Packages/g/'
+                        f'glibc-common-{ver}-{rel}.x86_64.rpm'}],
+            'checked': [bs.TARBALL_IS_TAG % ('glibc-' + ver),
+                        f'locale sources: 356, each the sha256 '
+                        f'glibc-locale-source-{ver}-{rel} records'],
+            'patches': {'applied': 21, 'of': 1109},
+            'charmaps_unchecked': []}
+
+
+def builds_run(old=R8, new=R9, latest=None):
+    """The parts of a report _compared reads, as a real run of two builds
+    rebuilt from their packages has them; `latest` the sides as typed,
+    each latest-elN resolved to its side."""
+    sig = ('signatures_unchecked', {'refs': [
+        {'ref': 'glibc-2.28', 'status': 'no-gpg'},
+        {'ref': 'glibc-2.34', 'status': 'no-gpg'}]})
+    tags = [{'ref': 'glibc-2.28', 'commit': '3c03baca37fd',
+             'status': 'no-gpg', 'detail': DETAIL},
+            {'ref': 'glibc-2.34', 'commit': 'ae37d06c7d12',
+             'status': 'no-gpg', 'detail': DETAIL}]
+    r = {
+        'pair': {'old': old, 'new': new, 'slug': PAIR},
+        'run': {'route': 'builds', 'old_class': 'build',
+                'new_class': 'build', 'nothing_compared': 'none',
+                'machines': {'state': 'not given', 'why': 'x'}},
+        'warnings': {'step0': {'state': 'not run', 'why': 'x'},
+                     'step1': _items(sig, ('build_not_checked', {
+                         'metadata': True, 'unlisted': []}),
+                         ('code_not_compared', {'step11': False}))},
+        'compared': {'state': 'reported', 'tags': tags, 'machines': [],
+                     'builds': {'state': 'rebuilt', 'entries': [
+                         build_entry(old, 'a' * 64),
+                         build_entry(new, 'b' * 64)]},
+                     'collation_version': {'state': 'differ', 'old': '2.28',
+                                           'new': '2.34'},
+                     'latest': {'state': 'not asked'},
+                     'note': {'state': 'not run', 'why': 'x'}}}
+    if latest:
+        r['compared']['latest'] = {
+            'state': 'reported', 'asked': list(latest),
+            'resolved': [{'name': t, 'build': b,
+                          'folder': f'{ROCKY}pub/rocky/{t[-1]}',
+                          'when': {'state': 'dated',
+                                   'utc': '2026-11-21 06:02 UTC'}}
+                         for t, b in dict(
+                             (t, b) for t, b in zip(latest, (old, new))
+                             if t.startswith('latest-')).items()]}
+    return r
 
 
 class WhatWasComparedHangsTogether(unittest.TestCase):
@@ -4748,21 +4830,234 @@ class WhatWasComparedHangsTogether(unittest.TestCase):
         self.refused(r, 'neither machines nor rebuilt builds')
 
     def test_the_builds(self):
+        self.ok(builds_run())
+
+        def builds(f):
+            r = builds_run()
+            f(r['compared']['builds']['entries'])
+            return r
+        self.refused(builds(lambda e: e.reverse()), 'are not the build sides')
+        self.refused(builds(lambda e: e.pop()), 'are not the build sides')
+        self.refused(builds(lambda e: e.append(dict(e[0]))),
+                     'are not the build sides')
+        self.refused(builds(lambda e: e.clear()), 'compared.builds is')
+        self.refused(builds(lambda e: e[0].update(tag='glibc-2.29')),
+                     'is not that of')
+        self.refused(builds(lambda e: e[1]['checked'].__setitem__(
+            0, 'the SRPM\'s tarball is glibc-2.28 in localedata/ and '
+               'locale/')), 'the tarball')
+        self.refused(builds(lambda e: e[0]['checked'].clear()), 'is')
+        self.refused(builds(lambda e: e[0].update(commit='4ad85b6ccbe')),
+                     r'entries\[0\] is')
+        self.refused(builds(lambda e: e[0]['patches'].update(applied=1110,
+                                                             of=1109)),
+                     'patches is')
+        self.refused(builds(lambda e: e[0]['patches'].update(of=None)),
+                     'patches is')
+        self.refused(builds(lambda e: e[0]['files'].reverse()), 'files are')
+        self.refused(builds(lambda e: e[0]['files'].pop()), 'files are')
+        self.refused(builds(lambda e: e[0]['files'][0].update(sha256='x')),
+                     r'files\[0\] is')
+        self.refused(builds(lambda e: e[0]['files'][1].update(listed=False)),
+                     r'files\[1\] is')
+        self.refused(builds(lambda e: e[0]['files'][0].update(listed='no')),
+                     r'files\[0\] is')
+        self.refused(builds(lambda e: e[0]['files'][0].update(x=1)),
+                     'has the keys')
+        # What is not checked for builds, as its `!!` says it.
+        r = builds_run()
+        for e in r['compared']['builds']['entries']:
+            e['files'] = []
+        self.refused(r, 'what is not checked for builds')
+        r = builds_run()
+        r['compared']['builds']['entries'][1]['files'][0]['listed'] = False
+        self.refused(r, 'what is not checked for builds')
+        r = builds_run()
+        r['warnings']['step1']['items'][1]['data']['unlisted'].append(
+            {'build': R9, 'folder': ROCKY + 'vault/rocky/9.3'})
+        self.refused(r, 'what is not checked for builds')
+        r = builds_run(new='glibc-2.34-83.el9.12')
+        r['compared']['builds']['entries'][1] = build_entry(
+            'glibc-2.34-83.el9.12', 'b' * 64, listed=False)
+        r['warnings']['step1']['items'][1]['data']['unlisted'].append(
+            {'build': 'glibc-2.34-83.el9.12',
+             'folder': ROCKY + 'vault/rocky/9.2'})
+        self.refused(r, 'what is not checked for builds')
+        r = builds_run()
+        r['warnings']['step1']['items'].pop(1)
+        self.refused(r, 'what is not checked for builds')
+        r = builds_run()
+        items = r['warnings']['step1']['items']
+        items.insert(1, dict(items[1]))
+        self.refused(r, 'what is not checked for builds')
+        # The `!!` of charmaps not checked are the builds', in order.
+        U = {'package': 'glibc-locale-source-2.34-275.el9_8',
+             'why': 'no zstd reader'}
+
+        def charmaps(warned, unchecked):
+            r = builds_run()
+            r['warnings']['step1']['items'] += [
+                {'kind': 'build_charmaps_unchecked',
+                 'data': dict(U, build=x), 'text': '!! x'} for x in warned]
+            for i in unchecked:
+                r['compared']['builds']['entries'][i][
+                    'charmaps_unchecked'].append(dict(U))
+            return r
+        self.ok(charmaps([R9], [1]))
+        self.ok(charmaps([R8, R9], [0, 1]))
+        for warned, unchecked in (([R9], []), ([], [1]), ([R8], [1]),
+                                  ([R9, R8], [0, 1]), ([R9, R9], [1]),
+                                  (['glibc-2.39-1.el10'], [1])):
+            with self.subTest(warned=warned, unchecked=unchecked):
+                self.refused(charmaps(warned, unchecked),
+                             'charmaps not checked')
+        r = charmaps([R9], [1])
+        r['compared']['builds']['entries'][1]['charmaps_unchecked'][0][
+            'why'] = 'x'
+        self.refused(r, 'charmaps not checked')
+        r = charmaps([R9], [1])
+        r['compared']['builds']['entries'][1]['charmaps_unchecked'][0][
+            'x'] = 1
+        self.refused(r, 'charmaps_unchecked is')
         r = compared_run()
-        r['compared']['builds'] = dict(rd.NOT_YET)
-        self.refused(r, 'not checked for builds')
-        r = compared_run()
-        r['compared']['builds'] = {'state': 'not yet reported', 'why': 'x'}
-        r['warnings']['step1']['items'].append(
-            {'kind': 'build_not_checked',
-             'data': {'metadata': True, 'unlisted': []}, 'text': '!! x'})
+        r['compared']['builds'] = {'state': 'rebuilt', 'entries': []}
         self.refused(r, 'compared.builds is')
         r = compared_run(True)
-        r['compared']['builds'] = dict(rd.NOT_YET)
+        r['compared']['builds'] = builds_run(B8, B9)['compared']['builds']
         r['warnings']['step1']['items'].append(
             {'kind': 'build_not_checked',
              'data': {'metadata': True, 'unlisted': []}, 'text': '!! x'})
-        self.refused(r, 'machines and rebuilt builds at once')
+        self.refused(r, 'are not the build sides')
+
+    def test_builds_no_run_of_the_suite_prints(self):
+        """A build whose SRPM no metadata lists (vault 9.3), its folder in
+        the `!!`; one build as both sides, its charmaps not checked on
+        each (an el9 build with no zstd reader, a `!!` a side); a Side
+        made with no file fetched."""
+        v = 'glibc-2.34-83.el9.12'
+        r = builds_run(new=v)
+        r['compared']['builds']['entries'][1] = build_entry(v, 'b' * 64,
+                                                            listed=False)
+        r['warnings']['step1']['items'][1]['data']['unlisted'] = [
+            {'build': v, 'folder': ROCKY + 'vault/rocky/9.3'}]
+        self.ok(r)
+        r = builds_run(new=R8)
+        r['compared']['builds']['entries'][1] = build_entry(R8, 'a' * 64)
+        r['compared']['tags'].pop()
+        r['warnings']['step1']['items'][0]['data']['refs'].pop()
+        r['compared']['collation_version'] = {'state': 'same',
+                                              'version': '2.28'}
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_same', 'data': {'version': '2.28'},
+             'text': '!! x'})
+        for e in r['compared']['builds']['entries']:
+            e['charmaps_unchecked'] = [{'package': 'p', 'why': 'w'}]
+        r['warnings']['step1']['items'] += [
+            {'kind': 'build_charmaps_unchecked',
+             'data': {'build': R8, 'package': 'p', 'why': 'w'},
+             'text': '!! x'}] * 2
+        self.ok(r)
+        r = builds_run()
+        for e in r['compared']['builds']['entries']:
+            e['files'] = []
+        r['warnings']['step1']['items'][1]['data']['metadata'] = False
+        self.ok(r)
+
+    def test_latest(self):
+        """Each latest-elN typed, once, resolved to its side's build; the
+        date as latest_entry writes it from the metadata's timestamp."""
+        import build_sources as bs
+        import glibc_locale_data as g
+        when = g.latest_entry('latest-el9', bs.Latest(
+            R9, ROCKY, 'pub/rocky/9', '1762000000'))['when']
+        self.assertEqual(when['state'], 'dated')
+        self.assertTrue(rd.LATEST_WHEN.fullmatch(when['utc']), when)
+        for typed in (('latest-el8', 'latest-el9'), (R8, 'latest-el9'),
+                      ('latest-el8', R9), (R8 + '.x86_64', 'latest-el9')):
+            with self.subTest(typed=typed):
+                self.ok(builds_run(latest=typed))
+        r = builds_run(new=R8, latest=('latest-el8', 'latest-el8'))
+        r['compared']['builds']['entries'][1] = build_entry(R8, 'a' * 64)
+        r['compared']['tags'].pop()
+        r['warnings']['step1']['items'][0]['data']['refs'].pop()
+        r['compared']['collation_version'] = {'state': 'same',
+                                              'version': '2.28'}
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_same', 'data': {'version': '2.28'},
+             'text': '!! x'})
+        self.assertEqual(len(r['compared']['latest']['resolved']), 1)
+        self.ok(r)
+        r = builds_run(latest=('latest-el8', 'latest-el9'))
+        r['compared']['latest']['resolved'][0]['when'] = {'state': 'no date'}
+        self.ok(r)
+        # One N typed two ways: one entry, named as first typed.
+        r = builds_run(new=R8, latest=('latest-el8', 'latest-el08'))
+        r['compared']['builds']['entries'][1] = build_entry(R8, 'a' * 64)
+        r['compared']['tags'].pop()
+        r['warnings']['step1']['items'][0]['data']['refs'].pop()
+        r['compared']['collation_version'] = {'state': 'same',
+                                              'version': '2.28'}
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_same', 'data': {'version': '2.28'},
+             'text': '!! x'})
+        r['compared']['latest']['resolved'].pop()
+        self.ok(r)
+        r['compared']['latest']['resolved'][0]['name'] = 'latest-el08'
+        self.refused(r, 'the sides typed')
+
+        def latest(f, typed=('latest-el8', 'latest-el9')):
+            r = builds_run(latest=typed)
+            f(r['compared']['latest'])
+            return r
+        self.refused(latest(lambda x: x['resolved'].reverse()),
+                     'the sides typed')
+        self.refused(latest(lambda x: x['resolved'].pop()), 'the sides typed')
+        self.refused(latest(lambda x: x['resolved'][1].update(
+            build='glibc-2.34-283.el9_8')), 'the sides typed')
+        self.refused(latest(lambda x: x['resolved'][1].update(
+            folder=ROCKY + 'pub/rocky/8')), r'resolved\[1\] is')
+        self.refused(latest(lambda x: x['resolved'][1].update(
+            name='latest-el10')), r'resolved\[1\] is')
+        self.refused(latest(lambda x: x['resolved'][0]['when'].update(
+            utc='2026-11-21')), 'when is')
+        self.refused(latest(lambda x: x.update(asked=['latest-el8'])),
+                     'asked is')
+        self.refused(latest(lambda x: x.update(asked=[R8, R9])),
+                     'no side typed')
+        self.refused(latest(lambda x: x.update(asked=['glibc-2.28', R9]),
+                            typed=(R8, 'latest-el9')), 'typed, the side')
+        self.refused(latest(lambda x: x.update(asked=[
+            'glibc-2.28-251.el8_10.41.x86_64', R9]),
+            typed=(R8, 'latest-el9')), 'typed, the side')
+        self.refused(latest(lambda x: x.update(state='not asked')),
+                     'has the keys')
+        # One N typed for two builds of that RHEL.
+        r8b = 'glibc-2.28-251.el8_10.41'
+        r = builds_run(new=r8b, latest=('latest-el8', 'latest-el8'))
+        r['compared']['builds']['entries'][1] = build_entry(r8b, 'b' * 64)
+        r['compared']['tags'].pop()
+        r['warnings']['step1']['items'][0]['data']['refs'].pop()
+        r['compared']['collation_version'] = {'state': 'same',
+                                              'version': '2.28'}
+        r['warnings']['step1']['items'].append(
+            {'kind': 'collation_version_same', 'data': {'version': '2.28'},
+             'text': '!! x'})
+        r['compared']['latest']['resolved'] = [
+            dict(r['compared']['latest']['resolved'][0], build=R8)]
+        self.refused(r, "'latest-el8' is")
+        # A latest-elN whose build is of another RHEL than N.
+        r = builds_run(latest=(R8, 'latest-el8'))
+        r['compared']['latest']['resolved'][0].update(
+            folder=ROCKY + 'pub/rocky/8')
+        self.refused(r, r'resolved\[0\] is')
+        # A latest-elN resolved to a side no rebuilt build is (a machine's).
+        r = compared_run(True)
+        r['compared']['latest'] = {
+            'state': 'reported', 'asked': ['latest-el8', B9],
+            'resolved': [{'name': 'latest-el8', 'build': B8,
+                          'folder': ROCKY + 'pub/rocky/8',
+                          'when': {'state': 'no date'}}]}
+        self.refused(r, 'not rebuilt')
 
     def test_the_glibc_versions(self):
         def version(v, *warned):
@@ -4858,6 +5153,44 @@ class WhatWasComparedAgainstTheText(unittest.TestCase):
             _harness.compared_held(self.text(r), r, 'x')
 
 
+class BuildsAgainstTheText(unittest.TestCase):
+    """_harness.compared_held on a run of two builds made here, for what
+    no audit.sh run of the suite prints: a SRPM no metadata lists (vault
+    9.3) and latest-elN whose metadata gives no date; held, and a line
+    the data does not give, refused."""
+
+    def text(self, r, before=None):
+        import glibc_locale_data as g
+        c, rule = r['compared'], '=' * 64
+        if before is None:
+            before = [x for e in c['latest'].get('resolved') or ()
+                      for x in g.latest_lines(e)]
+        return '\n'.join(
+            before + ['', rule, '== WHAT WAS COMPARED', rule]
+            + g.tag_provenance_lines(c['tags'])
+            + g.build_provenance_lines(c['builds']['entries'])
+            + g.collation_version_lines(c['collation_version'])
+            + ['', rule, '== STEP 2  x', rule, ''])
+
+    def test_held_and_refused(self):
+        v = 'glibc-2.34-83.el9.12'
+        r = builds_run(new=v, latest=('latest-el8', v))
+        r['compared']['builds']['entries'][1] = build_entry(v, 'b' * 64,
+                                                            listed=False)
+        r['compared']['latest']['resolved'][0]['when'] = {'state': 'no date'}
+        text = self.text(r)
+        self.assertIn('no metadata gives this sha256', _harness.flat(text))
+        self.assertIn('gives no date this reads', _harness.flat(text))
+        _harness.compared_held(text, r, 'x')
+        for before in ([], ['latest-el8 is x']):
+            with self.subTest(before=before):
+                with self.assertRaisesRegex(AssertionError, 'before'):
+                    _harness.compared_held(self.text(r, before), r, 'x')
+        bad = text.replace('no metadata gives this sha256', 'x', 1)
+        with self.assertRaisesRegex(AssertionError, 'the block'):
+            _harness.compared_held(bad, r, 'x')
+
+
 class WhatWasComparedRead(_Folder):
     """compared as the files of a run give it: the sides' record, step 0's
     note beside it on the machines' files, and each machine's measurement
@@ -4913,6 +5246,59 @@ class WhatWasComparedRead(_Folder):
                 write(self.d, f'build_sides.{PAIR}.txt', text)
                 with self.assertRaisesRegex(rd.ReportError, 'commit|a line'):
                     self.section()
+
+    def builds(self, latest=True):
+        """A run of two builds rebuilt from their packages, as its files
+        give it, latest-elN on its new side."""
+        step2_files(self.d)
+        run = builds_run(latest=(R8, 'latest-el9') if latest else None)
+        run['compared']['note']['why'] = 'no --old-node and --new-node'
+        es = run['compared']['builds']['entries']
+        write(self.d, f'build_sides.{PAIR}.txt', ''.join(
+            f"{e['build']}\t{e['commit']}{'0' * 28}\n" for e in es))
+        record = {k: run['compared'][k] for k in
+                  ('tags', 'machines', 'builds', 'collation_version')}
+        write(self.d, f'step1_compared.{PAIR}.json',
+              json.dumps(dict(record, step=1)) + '\n')
+        if latest:
+            write(self.d, f'latest.{PAIR}.json', json.dumps(
+                {'step': 'latest',
+                 'resolved': run['compared']['latest']['resolved']}) + '\n')
+        return run
+
+    def builds_section(self, asked=(R8, 'latest-el9')):
+        return rd.compared_section(args(
+            self.d, old=R8, new=R9, route='builds',
+            old_asked=asked[0] if asked else '',
+            new_asked=asked[1] if asked else ''))
+
+    def test_the_builds_and_latest(self):
+        run = self.builds()
+        self.assertEqual(self.builds_section(), run['compared'])
+        os.remove(os.path.join(self.d, f'latest.{PAIR}.json'))
+        self.assertEqual(self.builds_section()['latest']['state'],
+                         'not reported')
+        run = self.builds(latest=False)
+        self.assertEqual(self.builds_section(None), run['compared'])
+        for text, message in (
+                (f'{R8}\t{"9" * 40}\n{R9}\t{"b" * 40}\n', 'a build'),
+                (f'{R9}\t{"b" * 40}\n', 'a build')):
+            with self.subTest(text=text):
+                self.builds()
+                write(self.d, f'build_sides.{PAIR}.txt', text)
+                with self.assertRaisesRegex(rd.ReportError, message):
+                    self.builds_section()
+        good = json.dumps({'step': 'latest', 'resolved': []})
+        for text, message in (
+                ('{"step": 0, "resolved": []}\n', 'not what latest writes'),
+                ('{"step": "latest", "resolved": [], "x": 1}\n',
+                 'not what latest writes'),
+                (good + '\n{}\n', 'not one line')):
+            with self.subTest(text=text):
+                self.builds()
+                write(self.d, f'latest.{PAIR}.json', text)
+                with self.assertRaisesRegex(rd.ReportError, message):
+                    self.builds_section()
 
     def test_no_note_beside_the_machines(self):
         self.files()
