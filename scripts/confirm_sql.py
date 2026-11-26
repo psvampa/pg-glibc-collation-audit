@@ -122,7 +122,8 @@ def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
     kind, name, old answer, new answer)] (locale_order.ctype_tests, UTF8
     only), 'untested': [(count or None, why)], 'unstorable': pairs whose
     strings this encoding cannot store}].
-    not_checked: [(locales, why)] of changed locales no file tests.
+    not_checked: [(locales, why, about)] no file tests
+      (locale_order.confirm_groups).
     elsewhere: the other encodings a file was written for.
     gone: the locale names of the old machine the new one lacks.
     notes: more of what the file does not test, each a sentence.
@@ -152,7 +153,7 @@ def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
             w(comment('not tested: ' + ', '.join(g['locales'])
                       + f': {g["unstorable"]:,} pair(s) whose strings a '
                       f'{encoding} database cannot store'))
-    for locales, why in not_checked:
+    for locales, why, _about in not_checked:
         w(comment('not checked in PostgreSQL by this file: '
                   + ', '.join(locales) + ': ' + why))
     if elsewhere:

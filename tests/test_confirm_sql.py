@@ -54,6 +54,7 @@ A refusal is asserted by its message, and every case of a refusal is a
 real output with the one thing the case names changed.
 """
 import gzip
+import json
 import os
 import re
 import shutil
@@ -197,7 +198,8 @@ class WrittenFromTheRecordedMeasurements(unittest.TestCase):
                 [sys.executable, LOCALE_ORDER, '--compare', measurement(a),
                  measurement(b), '--sql-to', prefix, '--characters-to',
                  os.path.join(cls.dir, f'chars.{pair}.tsv')],
-                text=True, env=dict(os.environ, PYTHONIOENCODING='utf-8'))
+                text=True, env=dict(os.environ, PYTHONIOENCODING='utf-8'),
+                data_to=os.path.join(cls.dir, f'data.{pair}.json'))
             cls.runs[pair] = (p.returncode, p.stdout, p.stderr, prefix)
 
     def written(self, pair):
@@ -277,6 +279,14 @@ class WrittenFromTheRecordedMeasurements(unittest.TestCase):
         self.assertIn(line, self.notes('910', 'UTF8'))
         self.assertIn('Not checked in PostgreSQL by these files: th_TH, '
                       'th_TH.tis620, thai:', stdout)
+        # Written as the entry of that group's order (16.413), which the
+        # summary page marks on the group.
+        with open(os.path.join(self.dir, 'data.910.json')) as f:
+            sql = json.load(f)['sql']
+        self.assertEqual([(x['names'], x['about'])
+                          for x in sql['not_checked']],
+                         [(['aa_ER.utf8@saaho', 'aa_ER@saaho'], 'unknown'),
+                          (['th_TH', 'th_TH.tis620', 'thai'], 'order')])
 
     def test_a_locale_not_on_the_new_machine_is_named_in_every_file(self):
         for enc in ('UTF8', 'LATIN1', 'LATIN9'):
@@ -572,7 +582,34 @@ class Writer(unittest.TestCase):
         self.assertEqual(not_checked, [(['C.utf8'], 'none of its 1 test '
                                         'pair(s) can be stored in a UTF8 '
                                         'database; 3 pair(s) of neighbours '
-                                        'the measurement cannot decide')])
+                                        'the measurement cannot decide',
+                                        'order')])
+
+    def test_every_group_in_no_file_is_an_entry_of_its_order(self):
+        """confirm_groups: each way a group's order is in no file is an
+        entry about that order (16.413): its encoding not one PostgreSQL
+        imports a collation of, what a database of it stores not known
+        here, no name of it a SQL file can hold, no pair it can store."""
+        old = {'glibc_version': 'glibc 2.28', 'glibc_build': 'o'}
+        new = {'glibc_version': 'glibc 2.34', 'glibc_build': 'n'}
+        test = [('test', (b'a',), (b'b',), '<', '>', 'both')]
+        files, not_checked = m.confirm_groups(
+            [(['th_TH'], 'TIS-620', test), (['ja_JP.eucjp'], 'EUCJP', test),
+             (['xx_YY.utf8@caf\u00e9'], 'UTF-8', test),
+             (['C.utf8'], 'UTF-8', [('test', (b'\x80',), (b'a',), '<', '>',
+                                     'both')])],
+            {'C.utf8': (None, 'C.UTF-8')}, old, new, [], (),
+            {'groups': [], 'why': None, 'unknown': []})
+        self.assertEqual(files, [])
+        self.assertEqual(not_checked, [
+            (['C.utf8'], 'none of its 1 test pair(s) can be stored in a UTF8 '
+             'database', 'order'),
+            (['ja_JP.eucjp'], 'which strings a database of its encoding, '
+             'EUC_JP, stores is not known here', 'order'),
+            (['th_TH'], 'PostgreSQL imports no collation of its encoding, '
+             'TIS-620', 'order'),
+            ([m.ascii_name('xx_YY.utf8@caf\u00e9')], 'no name of it can be '
+             'written into a SQL file', 'order')])
 
     def ctype(self, *rows):
         return c.sql_text('UTF8', *self.MACHINES, [self.group(
@@ -670,7 +707,7 @@ class CtypeNotes(unittest.TestCase):
                 files, not_checked, notes = self.files(
                     {'groups': [], 'why': why, 'unknown': []}, sort=sort)
                 self.assertIn((['the character rules (LC_CTYPE) of every '
-                                'locale'], why), not_checked)
+                                'locale'], why, 'ctype'), not_checked)
                 self.assertEqual(len(files), int(sort))
                 if sort:
                     self.assertIn('not checked in PostgreSQL by this file: '
@@ -730,7 +767,7 @@ class CtypeNotes(unittest.TestCase):
                      'unknown': ['ab_CD.utf8', 'ef_GH']}, sort=sort)
                 self.assertIn((['ab_CD.utf8', 'ef_GH'], 'its character rules '
                                '(LC_CTYPE): step 11 could not compare them on '
-                               'both machines'), not_checked)
+                               'both machines', 'ctype'), not_checked)
 
     def test_code_points_no_utf8_text_holds_are_counted(self):
         files, not_checked, notes = self.files(
@@ -746,8 +783,8 @@ class CtypeNotes(unittest.TestCase):
         self.assertIn((['C.utf8', 'POSIX'], 'its character rules (LC_CTYPE): '
                        'every name of it is C.* or POSIX, which PostgreSQL '
                        'may answer itself, cannot be written into a SQL '
-                       'file, or already runs sort tests in this file'),
-                      not_checked)
+                       'file, or already runs sort tests in this file',
+                       'ctype'), not_checked)
         self.assertFalse(any('LC_CTYPE) of 1 more' in x for x in notes))
 
     def test_a_group_with_no_row_is_not_said_tested(self):
@@ -755,8 +792,8 @@ class CtypeNotes(unittest.TestCase):
             {'groups': [self.group('en_US.utf8', 'fr_FR.utf8')], 'why': None,
              'unknown': []}, rows=())
         self.assertIn((['en_US.utf8', 'fr_FR.utf8'], 'its character rules '
-                       '(LC_CTYPE): no change a UTF8 database can hold'),
-                      not_checked)
+                       '(LC_CTYPE): no change a UTF8 database can hold',
+                       'ctype'), not_checked)
         self.assertFalse(any('which this file tests' in x for x in notes))
 
     def test_the_other_locales_of_a_group_are_counted(self):
@@ -796,7 +833,8 @@ class CtypeNotes(unittest.TestCase):
         self.assertIn((['ww_WW.utf8'], 'its character rules (LC_CTYPE): every '
                        'name of it is C.* or POSIX, which PostgreSQL may '
                        'answer itself, cannot be written into a SQL file, or '
-                       'already runs sort tests in this file'), not_checked)
+                       'already runs sort tests in this file', 'ctype'),
+                      not_checked)
 
     def test_initcap_reads_the_first_character_mapped(self):
         """PostgreSQL maps the first character by towupper and asks
