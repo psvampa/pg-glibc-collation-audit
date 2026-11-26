@@ -26,8 +26,7 @@ gives each kind its list and its short title. Step 11's counts are
 data too, and so is each group of locales it found changed, with what
 moved in it and its sort table, each check beside the order, and what
 it prints of the SQL files it wrote, each file's number of tests and
-each entry no file checks (a group of locales, or the character rules
-of every locale), with its reason:
+each entry no file checks, with its reason and what it is about:
 step11.<pair>.data.json,
 beside the `!!` of its warnings file.
 
@@ -579,10 +578,9 @@ def step11_findings(path):
 def step11_sql(path, on_disk):
     """What step 11 wrote to PATH of its SQL files (locale_order.sql_data),
     as a block of the report: each file it printed, with its number of
-    tests and its name in the run's folder, and each entry no file checks
-    (a group of locales, or the character rules of every locale), with
-    its reason and, where the report prints it, what else PostgreSQL
-    calls those locales.
+    tests and its name in the run's folder, and each entry no file
+    checks, with its reason, what it is about (SQL_ABOUT) and, where the
+    report prints it, what else PostgreSQL calls those locales.
     ON_DISK is [{'encoding', 'file'}], the files the folder holds by
     encoding. audit.sh always asks for the files, so a record of a run not
     asked for them is refused, and so are files printed that the folder
@@ -638,14 +636,42 @@ CHECK_KINDS = ('control_failed', 'control_not_checked', 'money_earlier_format',
                'libc_not_checked', 'libc_no_process')
 
 
+# What an entry no SQL file checks is about (locale_order.confirm_groups):
+# the order of one group of step 11's findings, the character rules
+# (LC_CTYPE) of some locales or of every one, or locales step 11 could
+# not measure, glibc refuses or the new machine lacks.
+SQL_ABOUT = ('order', 'ctype', 'unknown')
+
+
+def _sql_groups_held(where, entries, groups):
+    """Each entry no SQL file checks that is about a group's order names
+    one group of step 11's findings, as the SQL files write its names
+    (locale_order.ascii_name), and no group has two."""
+    import locale_order
+    named = [[locale_order.ascii_name(x) for x in g['locales']]
+             for g in groups]
+    seen = set()
+    for i, x in enumerate(entries):
+        if x['about'] != 'order':
+            continue
+        if x['names'] not in named:
+            raise ReportError(f'{where}[{i}] is about the order of '
+                              f'{x["names"]!r}, which is no group of '
+                              'step 11')
+        k = named.index(x['names'])
+        if k in seen:
+            raise ReportError(f'{where}[{i}] is a second entry of group {k}')
+        seen.add(k)
+
+
 def _sql(where, s):
     """step 11's SQL files (step11_sql): each file's encoding, its name in
     the run's folder, which is that encoding's, and its number of tests,
     one or more (a file is written only with a test); and each entry no
-    file checks (a group of locales, or the character rules of every
-    locale), its names, one or more, none empty, its reason and what else PostgreSQL
-    calls those locales, words, where it says (the key left out where
-    not: a report holds no null)."""
+    file checks, its names, one or more, none empty, its reason, what it
+    is about (SQL_ABOUT) and what else PostgreSQL calls those locales,
+    words, where it says (the key left out where not: a report holds no
+    null)."""
     _keys(where, s, ['state', 'files', 'not_checked'])
     if not isinstance(s['files'], list):
         raise ReportError(f'{where}.files is {s["files"]!r}')
@@ -664,7 +690,10 @@ def _sql(where, s):
         raise ReportError(f'{where}.not_checked is {s["not_checked"]!r}')
     for i, g in enumerate(s['not_checked']):
         w = f'{where}.not_checked[{i}]'
-        _keys(w, g, ['names', 'why'] + (['also'] if 'also' in g else []))
+        _keys(w, g, ['names', 'why', 'about']
+              + (['also'] if 'also' in g else []))
+        if g['about'] not in SQL_ABOUT:
+            raise ReportError(f'{w}.about is {g["about"]!r}')
         if not _is_strs(g['names']):
             raise ReportError(f'{w}.names is {g["names"]!r}')
         if not _is_str(g['why']):
@@ -4741,6 +4770,10 @@ def load(path):
             _tables_only_held(f'{where}.findings.tables_only',
                               o['findings']['tables_only'], basis,
                               o['checks']['control'])
+        if o['findings']['state'] == 'reported' and \
+                o['sql']['state'] == 'reported':
+            _sql_groups_held(f'{where}.sql.not_checked',
+                             o['sql']['not_checked'], o['findings']['groups'])
         if o['findings']['state'] == 'reported' and \
                 o['checks']['state'] == 'reported':
             _charmaps_held(f'{where}.checks.charmaps',

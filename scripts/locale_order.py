@@ -10638,21 +10638,22 @@ def sql_data(files, not_checked, also=lambda names: None):
     """What step 11 says of the SQL files it wrote, as data
     (write_counts), which sql_lines prints: FILES, confirm_groups' files,
     as each one's encoding and number of tests, in their order; and
-    NOT_CHECKED, confirm_groups' not_checked, as each entry's names and
-    reason, in their order, and what else PostgreSQL calls those locales:
+    NOT_CHECKED, confirm_groups' not_checked, as each entry's names,
+    reason and what it is about, in their order, and what else PostgreSQL
+    calls those locales:
     the function ALSO, given the names as written there, gives the line
     the report prints, and its words after the constant ALSO go under
     'also', left out where it gives none. Two entries can give the same
     reason, so the entries are a list. Only for a run given --sql-to: a run that is not
     writes {'state': 'not asked'} (compare)."""
-    def entry(names, why):
+    def entry(names, why, about):
         said = also(names)
-        return {'names': list(names), 'why': why,
+        return {'names': list(names), 'why': why, 'about': about,
                 **({'also': said[len(ALSO):]} if said else {})}
     return {'state': 'written',
             'files': [{'encoding': encoding, 'tests': tests}
                       for encoding, text, ident, tests in files],
-            'not_checked': [entry(names, why) for names, why in not_checked]}
+            'not_checked': [entry(*x) for x in not_checked]}
 
 
 def sql_lines(prefix, sql):
@@ -11100,20 +11101,22 @@ def confirm_groups(groups, pg_names, old, new, only_old, unknown=(),
     """The SQL files of --sql-to: ([(encoding, text, id, tests)], not
     checked), from groups [(locales measured alike, their encoding, what
     describe_change gave the SQL, plus a changed table's lines)], and
-    ctype, what ctype_texts gave the SQL files.
+    ctype, what ctype_texts gave the SQL files. Not checked is [(names,
+    why, about)], about what the entry is: 'order', a group of GROUPS
+    whose order no file tests, its names as ascii_name writes them;
+    'ctype', the character rules (LC_CTYPE) of some locales or of every
+    one; 'unknown', locales of UNKNOWN.
 
     A group goes to the file of the database encoding PostgreSQL gives its
     encoding, under every name a database of that encoding knows it by: the
     names `locale -a` gives (pg_import_system_collations imports those of
     ASCII) and their aliases (postgres_names). Only the pairs both of whose
     strings that database stores are tested, and the others counted. A
-    group PostgreSQL imports no collation of (TIS-620; BIG5, allowed only
-    on the client), or with no pair a database stores, is in no file:
-    every file names it, and so does the report. So does every locale in
-    unknown, [(locales, why)]: those step 11 could not measure, glibc
-    refuses, or the new machine lacks, which are not known to be
-    unchanged and have no pair. An encoding with no test gets no file, so
-    that no file reads as "0 of 0".
+    group in no file (in_a_file says why) is named by every file, and by
+    the report. So is every locale in unknown, [(locales, why)]: those
+    step 11 could not measure, glibc refuses, or the new machine lacks,
+    which are not known to be unchanged and have no pair. An encoding with
+    no test gets no file, so that no file reads as "0 of 0".
 
     The characters whose rules (LC_CTYPE) change go to the UTF8 file, one
     group of locales with the same changes at a time, under one of its
@@ -11131,23 +11134,24 @@ def confirm_groups(groups, pg_names, old, new, only_old, unknown=(),
         machines.append({'label': machine_label(d),
                          'version': m.group(1) if m else None})
     by_encoding = {}
-    not_checked = [([ascii_name(x) for x in names], why)
+    not_checked = [([ascii_name(x) for x in names], why, 'unknown')
                    for names, why in unknown if names]
-    for names, codeset, items in sorted(groups):
+    def in_a_file(names, codeset, items):
+        """(encoding, the group's entry of that file) where the group of
+        locales NAMES is tested in a file; else (why not, None)."""
         shown_names = [ascii_name(x) for x in names]
         untested = [(count, why) for kind, count, why in
                     (x for x in items if x[0] == 'untested')]
         tests = [x[1:] for x in items if x[0] == 'test']
         reach = postgres_reach(codeset) if codeset else None
         if reach != 'imported':
-            not_checked.append((shown_names, {
+            return {
                 None: 'its encoding is not known',
                 'anywhere': f'PostgreSQL imports no collation of its '
                             f'encoding, {codeset}',
                 'superuser': f'PostgreSQL allows its encoding, {codeset}, '
                              'only on the client and imports no collation of '
-                             'it'}[reach]))
-            continue
+                             'it'}[reach], None
         encoding = collation_keys.SERVER_ENCODINGS[codeset.upper()]
         collations = set()
         for name in names:
@@ -11164,36 +11168,40 @@ def confirm_groups(groups, pg_names, old, new, only_old, unknown=(),
             else:
                 unstorable += 1
         if undecided:
-            not_checked.append((shown_names, 'which strings a database of its '
-                                f'encoding, {encoding}, stores is not known '
-                                'here'))
-            continue
+            return ('which strings a database of its encoding, '
+                    f'{encoding}, stores is not known here'), None
         if not collations:
-            not_checked.append((shown_names, 'no name of it can be written '
-                                'into a SQL file'))
-            continue
+            return 'no name of it can be written into a SQL file', None
         if not kept:
             why = (f'none of its {unstorable:,} test pair(s) can be stored in '
                    f'a {encoding} database' if unstorable else
                    'step 11 found no test pair for its change')
-            not_checked.append((shown_names, why + ''.join(
+            return why + ''.join(
                 f'; {count:,} {what}' if count is not None else f'; {what}'
-                for count, what in untested)))
-            continue
-        by_encoding.setdefault(encoding, []).append({
+                for count, what in untested), None
+        return encoding, {
             'locales': shown_names, 'collations': sorted(collations),
-            'tests': kept, 'untested': untested, 'unstorable': unstorable})
+            'tests': kept, 'untested': untested, 'unstorable': unstorable}
+
+    for names, codeset, items in sorted(groups):
+        said, entry = in_a_file(names, codeset, items)
+        if entry is None:
+            # Every way a group's order is in no file: an entry about it.
+            not_checked.append(([ascii_name(x) for x in names], said,
+                                'order'))
+        else:
+            by_encoding.setdefault(said, []).append(entry)
     utf8_notes = []
     ctype = ctype or {'groups': [], 'why': 'not compared', 'unknown': []}
     # Named among what no file checks, which the report prints whether or
     # not a file is written.
     if ctype['why']:
         not_checked.append((['the character rules (LC_CTYPE) of every '
-                             'locale'], ctype['why']))
+                             'locale'], ctype['why'], 'ctype'))
     if ctype['unknown']:
         not_checked.append(([ascii_name(x) for x in ctype['unknown']],
                             'its character rules (LC_CTYPE): step 11 could '
-                            'not compare them on both machines'))
+                            'not compare them on both machines', 'ctype'))
     taken = {x for g in by_encoding.get('UTF8', ()) for x in g['collations']}
     for members, tables in ctype['groups']:
         shown_members = [ascii_name(x) for x in members]
@@ -11206,14 +11214,14 @@ def confirm_groups(groups, pg_names, old, new, only_old, unknown=(),
                                 'of it is C.* or POSIX, which PostgreSQL may '
                                 'answer itself, cannot be written into a SQL '
                                 'file, or already runs sort tests in this '
-                                'file'))
+                                'file', 'ctype'))
             continue
         rows, skipped = ctype_tests(old['ctype'], tables[name][0],
                                     new['ctype'], tables[name][1])
         if not rows:
             not_checked.append((shown_members, 'its character rules '
                                 '(LC_CTYPE): no change a UTF8 database can '
-                                'hold'))
+                                'hold', 'ctype'))
             continue
         taken.add(name)
         by_encoding.setdefault('UTF8', []).append({

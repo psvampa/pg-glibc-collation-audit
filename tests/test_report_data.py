@@ -137,18 +137,18 @@ def step11_files(d):
 
 
 # What step 11 says of step11_files' SQL files (locale_order.sql_data):
-# two files, and two entries no file checks: a group of locales, with
-# what else PostgreSQL calls it, and the character rules of every
-# locale, without.
+# two files, and two entries no file checks: locales the new machine
+# lacks ('unknown'), with what else PostgreSQL calls them, and the
+# character rules of every locale ('ctype'), without.
 SQL = {'state': 'written',
        'files': [{'encoding': 'LATIN1', 'tests': 4},
                  {'encoding': 'UTF8', 'tests': 38761}],
        'not_checked': [
            {'names': ['en_US.utf8@ampm', 'en_US@ampm'],
-            'why': 'it is not on the new machine',
+            'why': 'it is not on the new machine', 'about': 'unknown',
             'also': 'database locale en_US.UTF-8@ampm'},
            {'names': ['the character rules (LC_CTYPE) of every locale'],
-            'why': 'not compared'}]}
+            'why': 'not compared', 'about': 'ctype'}]}
 
 
 # The findings of step11_files' changed locale, sv_SE, as
@@ -2544,6 +2544,13 @@ class TheReaderIsStrict(_Folder):
                          dict(SQL['not_checked'][0], also='')])}),
                      json.dumps({**whole, 'sql': dict(SQL, not_checked=[
                          dict(SQL['not_checked'][0], also=None)])}),
+                     # What an entry is about, left out or none of the
+                     # three.
+                     json.dumps({**whole, 'sql': dict(SQL, not_checked=[
+                         {k: v for k, v in SQL['not_checked'][0].items()
+                          if k != 'about'}])}),
+                     json.dumps({**whole, 'sql': dict(SQL, not_checked=[
+                         dict(SQL['not_checked'][0], about='sort')])}),
                      json.dumps({**whole, 'sql': {
                          k: v for k, v in SQL.items()
                          if k != 'not_checked'}})):
@@ -5485,7 +5492,7 @@ class TheSummaryPage(_Folder):
         text = self.page(self.on_machines())
         self.assertIn('1 locales sort differently', text)
         self.assertIn('1 locales unchanged 0 locales not compared', text)
-        self.assertNotIn('NOT MEASURED', text)
+        self.assertNotIn('NOT MEASURED: how many', text)
         text = self.page(self.on_tags())
         self.assertIn('NOT MEASURED: how many locales sort differently, '
                       "are gone or new the measured order NOT RUN - no "
@@ -5594,6 +5601,182 @@ class TheSummaryPage(_Folder):
         text = self.page(r)
         self.assertIn('1 locales unchanged of them only as far as '
                       'measured: 1', text)  # the count, then its words
+
+    def test_the_groups_whose_order_changed(self):
+        """Each group of locales whose order changed, in its section, said
+        whole: its names and encoding, its sort table, what moved drawn
+        with names, the pairs told apart differently, what did not move,
+        what compares differently against another, and what it leaves
+        unsettled; a list too long for the page as a sample, how many
+        more and the file that has them all."""
+        r = self.on_machines()
+        text = self.page(r)
+        self.assertIn(
+            'Locales whose sort order changed Indexes, ORDER BY, comparisons '
+            'and range partitions on text in these locales can give other '
+            'results after the upgrade. Open a group for its characters. '
+            'Every character, other string and pair found: '
+            f'measured_order_characters.{PAIR}.tsv sv_SE (ISO-8859-1) 1 '
+            'character(s) moved; 2 pair(s) told apart differently Its '
+            'compiled sort table changed: on one machine it has no levels, so '
+            'glibc compares bytes there. Moved: 1 They now sort in another '
+            'place. \u00e5 U+00E5 LATIN SMALL LETTER A WITH RING ABOVE Pairs '
+            'told apart differently: 2 one other before now \u00e4 U+00E4 '
+            'LATIN SMALL LETTER A WITH DIAERESIS \u00e5 U+00E5 LATIN SMALL '
+            'LETTER A WITH RING ABOVE like an accent or by case as different '
+            'letters', text)
+        self.assertIn(
+            'Among them, 1 string(s) that did not move \u00e4 U+00E4 2 '
+            'character(s) and 0 other string(s) now compare differently '
+            'against at least one other \u00e4 U+00E4 \u00e5 U+00E5 Not '
+            'settled for this group The pairs that tell letters, accents and '
+            'case apart here are told apart differently themselves: letters '
+            'accents case before a U+0061 / b U+0062 a U+0061 / \u00e1 U+00E1 '
+            'a U+0061 / A U+0041 now a U+0061 / b U+0062 NOT MEASURED a '
+            'U+0061 / A U+0041 Pairs compared only by letters and case; '
+            'accents NOT COMPARED here. 1 more pair(s) may be told apart '
+            'differently; what was measured cannot decide: a U+0061 and '
+            'bytes 80 Not verified', text)
+        self.assertIn('6 things NOT verified', text)
+        # A list longer than the page draws: a sample of what draws, how
+        # many more and where; and more undecided pairs than it shows.
+        f = {x['kind']: x for x in r['step11']['findings']['groups'][0]
+             ['findings']}
+        f['reversed'].update(count=256, characters=256,
+                             runs=[['U+0000', 'U+00FF']])
+        f['undecided'].update(count=12, pairs=[
+            [f'U+{0x41 + i:04X}', f'U+{0x42 + i:04X}'] for i in range(12)])
+        text = self.page(r)
+        self.assertIn(
+            'now compare differently against at least one other ! U+0021',
+            text)
+        self.assertIn(
+            '[ U+005B \\ U+005C A sample: the first 60 that draw as a '
+            'character. '
+            'and 196 more, all listed in measured_order_characters.'
+            f'{PAIR}.tsv Not settled', text)
+        self.assertIn('J U+004A and K U+004B and 2 more, all listed in '
+                      f'measured_order_characters.{PAIR}.tsv Not verified',
+                      text)
+        # The characters file not reported: said once, and no list points
+        # to it.
+        r['step11']['characters'] = {'state': 'not reported',
+                                     'why': 'no characters file'}
+        text = self.page(r)
+        self.assertIn('Every character, other string and pair found: NOT '
+                      'REPORTED - no characters file sv_SE', text)
+        self.assertIn('and 196 more Not settled', text)
+        self.assertNotIn('all listed in', text)
+
+    def test_what_no_sql_file_checks(self):
+        """16.413: an entry no SQL file checks is in Not verified, counted
+        there; a group whose locales it names says NOT VERIFIED in
+        PostgreSQL beside its names and why among what it leaves
+        unsettled. SQL files not reported: each group says it does not
+        know."""
+        r = self.on_machines()
+        r['step11']['sql']['not_checked'].append({
+            'names': ['sv_SE'], 'why': 'PostgreSQL imports no collation of '
+            'its encoding, ISO-8859-1', 'about': 'order'})
+        text = self.page(r)
+        self.assertIn('sv_SE (ISO-8859-1) NOT VERIFIED in PostgreSQL 1 '
+                      'character(s) moved', text)
+        self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks these '
+                      'locales - PostgreSQL imports no collation of its '
+                      'encoding, ISO-8859-1. Not verified', text)
+        self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks sv_SE '
+                      '- PostgreSQL imports no collation of its encoding, '
+                      'ISO-8859-1 How this was compared', text)
+        self.assertIn('7 things NOT verified', text)
+        self.assertEqual(text.count('NOT VERIFIED in PostgreSQL'), 5)
+        r['step11']['sql'] = {'state': 'not reported', 'why': 'no data file'}
+        text = self.page(r)
+        self.assertIn('Whether an SQL file checks these locales: NOT '
+                      'REPORTED (see Confirm in PostgreSQL). Not verified',
+                      text)
+        self.assertNotIn('NOT VERIFIED in PostgreSQL', text)
+        self.assertIn('4 things NOT verified', text)
+
+    def test_an_entry_of_a_group_names_it(self):
+        """load(): an entry no SQL file checks that is about a group's
+        order names one group of step 11, as the SQL files write its
+        names, and a group has one such entry at most; an entry about the
+        character rules (LC_CTYPE) of the same locales is not that group's
+        (16.413): the group is not marked, the entry is counted in Not
+        verified."""
+        r = self.on_machines()
+        x = {'names': ['sv_SE'], 'why': 'w', 'about': 'order'}
+        for entries, why in (
+                ([dict(x, names=['xx_YY'])], 'is no group of step 11'),
+                ([x, dict(x, why='v')], 'second entry of group 0')):
+            with self.subTest(why=why):
+                r['step11']['sql']['not_checked'] = entries
+                with self.assertRaisesRegex(rd.ReportError, why):
+                    self.loaded(r)
+        r['step11']['sql']['not_checked'] = [dict(x, about='ctype')]
+        text = self.page(r)
+        self.assertNotIn('NOT VERIFIED in PostgreSQL 1', text)
+        self.assertNotIn('no SQL file checks these locales', text)
+        self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks sv_SE '
+                      '- w How this', text)
+        self.assertIn('5 things NOT verified', text)
+
+    def test_a_short_list_of_bytes_and_every_string(self):
+        """A run of strings named by their bytes in a list the page shows
+        whole, drawn first..last; "all" said where every string compares
+        differently, as the text says it; no level compared, said so."""
+        r = self.on_machines()
+        f = {x['kind']: x for x in r['step11']['findings']['groups'][0]
+             ['findings']}
+        f['reversed'].update(count=5, characters=2, other_strings=3,
+                             all=True, runs=[['U+00E4', 'U+00E5'],
+                                             ['bytes 80', 'bytes 82']])
+        text = self.page(r)
+        self.assertIn('all 2 character(s) and 3 other string(s) now compare '
+                      'differently against at least one other \u00e4 U+00E4 '
+                      '\u00e5 U+00E5 bytes 80..82 Not settled', text)
+        g = r['step11']['findings']['groups'][0]
+        g['findings'] = [x for x in g['findings']
+                         if x['kind'] not in ('told apart', 'did not move')]
+        f['left out'].update(compared=[],
+                             left_out=['letters', 'accents', 'case'])
+        self.assertIn('No pair can be compared; letters and accents and case '
+                      'NOT COMPARED here.', self.page(r))
+
+    def test_groups_not_known_or_none(self):
+        """Step 11 not run, its findings not reported: the section says so,
+        with the reason, and shows no group; no group changed: "(none)";
+        an encoding a machine did not give, in capitals, and one that
+        changed, old to new."""
+        text = self.page(self.on_tags())
+        self.assertIn("Locales whose sort order changed NOT RUN - no "
+                      "machines' files Only the measurements of the two "
+                      "machines show which locales sort differently. Not "
+                      "verified", text)
+        r = self.on_machines()
+        r['step11']['findings'] = {'state': 'not reported',
+                                   'why': 'no data file'}
+        text = self.page(r)
+        self.assertIn('Locales whose sort order changed NOT REPORTED - no '
+                      'data file Not verified', text)
+        r = self.on_machines()
+        r['step11']['findings']['groups'] = []
+        r['step11']['verdicts']['sv_SE'] = {
+            'verdict': 'firm', 'words': 'unchanged by its compiled sort table'}
+        r['step11']['counts'].update(changed=0, unchanged=2)
+        r['step11']['characters']['rows'] = []
+        r['step11']['checks']['charmaps'] = {
+            'state': 'not needed', 'by_table': 1, 'builtin': ['C']}
+        text = self.page(r)
+        self.assertIn('Locales whose sort order changed (none) Not verified',
+                      text)
+        r = self.on_machines()
+        cs = r['step11']['findings']['groups'][0]['locales']['sv_SE'][
+            'codeset']
+        cs['old'] = 'unknown'
+        self.assertIn('sv_SE (UNKNOWN \u2192 ISO-8859-1) 1', self.page(r))
+        cs['old'] = 'ISO-8859-15'
+        self.assertIn('sv_SE (ISO-8859-15 \u2192 ISO-8859-1) 1', self.page(r))
 
     def test_a_page_broken_is_refused(self):
         """One break at a time, each a way a page can say what the data
@@ -5723,6 +5906,22 @@ class TheSummaryPage(_Folder):
             ('on_machines', r'(<li data-l="sql">.*?</li>)'
              r'(<li data-l="sql">.*?</li>)',
              lambda m: m.group(2) + m.group(1), 'shows the entries'),
+            # 24.4-2a: a group said otherwise, out of its order, out of its
+            # section; an entry no SQL file checks left out of Not verified.
+            ('on_machines', r'U\+00E5</code> <span class="nm">',
+             lambda m: 'U+00E4</code> <span class="nm">', 'group 0 said'),
+            ('on_machines', r'data-grp="0"', lambda m: 'data-grp="1"',
+             'groups shown'),
+            ('on_machines', r'<details class="grp" data-grp="0">.*?</details>'
+             r'(?=</div></details>)', lambda m: '', 'groups shown'),
+            ('on_machines', r'(<details class="grp" data-grp="0">.*?'
+             r'</details>)(?=</div></details>)(.*?<h2>Not verified</h2>'
+             r'</summary><div class="secb">)',
+             lambda m: m.group(2) + m.group(1), 'shown under'),
+            ('on_machines', r'<div class="card nd-card" data-l="nv not '
+             r'checked">.*?</div></div>', lambda m: '', 'labels'),
+            ('on_machines', r'(data-d="characters file">)measured',
+             lambda m: m.group(1) + 'Measured', 'characters file'),
             ('on_tags', r'font-size:22px', lambda m: 'font-size:23px',
              None))
         for n, (base, rx, repl, why) in enumerate(cases):

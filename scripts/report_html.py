@@ -5,13 +5,16 @@ strict reader) and written beside it. The text the run prints is not
 changed.
 
 A summary, not a copy of the text: the counts at the top, the locales
-added and removed, what the run did not verify, how it compared and how
-to confirm in PostgreSQL. So that a check can hold the page to the data
-file (tests/_harness.report_page_held):
-  - a value of the data file shown in the body is marked with its place
-    there (data-p="step11/counts/changed": '/' a key, '#' an index); a
-    closed word of the file shown in the page's own words also carries
-    the word (data-v); a name a map is keyed by carries the map (data-k);
+added and removed, the locales whose sort order changed (each group step
+11 found, with its characters drawn, what step 11 could not settle for it
+and whether an SQL file checks its order), what the run did not verify,
+how it compared and how to confirm in PostgreSQL. So that a check can
+hold the page to the data file (tests/_harness.report_page_held):
+  - a value of the data file shown in the body outside a group of
+    locales (data-grp, below) is marked with its place there
+    (data-p="step11/counts/changed": '/' a key, '#' an index); a closed
+    word of the file shown in the page's own words also carries the word
+    (data-v); a name a map is keyed by carries the map (data-k);
   - a value the page works out of the file is marked data-d with its
     rule;
   - each group of values sits under a label (data-l, the label's words
@@ -23,6 +26,9 @@ file (tests/_harness.report_page_held):
     capitals, with its reason where the data file gives one, never a 0 or
     an empty list. (A locale step 2 found new and could not spell is a
     state of that locale, shown in lower case beside its name.)
+  - a group of locales whose sort order changed is marked data-grp with
+    its place among step 11's groups; the check holds its text whole,
+    rebuilt from that group's data.
 The page's <title> repeats the two sides unmarked.
 
 usage: report_html.py REPORT_JSON
@@ -31,7 +37,9 @@ usage: report_html.py REPORT_JSON
 import html
 import os
 import sys
+import unicodedata
 
+import locale_order
 import report_data
 
 esc = html.escape
@@ -132,8 +140,9 @@ def placed(r, kind):
 
 def not_verified(r):
     """The entries of the Not verified section: each warnings block not
-    reported, step 11 when it did not run or was not reported, and each
-    warning of class "not checked"."""
+    reported, step 11 when it did not run or was not reported, each
+    warning of class "not checked", and each entry no SQL file of step 11
+    checks (16.413)."""
     out = []
     for st in ('step0', 'step1', 'step2', 'step11'):
         b = r['warnings'][st]
@@ -145,6 +154,9 @@ def not_verified(r):
     for path, w in items(r):
         if w['class'] == 'not checked':
             out.append(('card', path, w))
+    if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
+        for i, g in enumerate(s11['sql']['not_checked']):
+            out.append(('sql', f'step11/sql/not_checked#{i}', g))
     return out
 
 
@@ -161,6 +173,13 @@ def nv_html(entry):
     kind, path, x = entry
     if kind == 'card':
         return card(path, x)
+    if kind == 'sql':
+        return label(
+            'nv not checked',
+            '<b>NOT VERIFIED in PostgreSQL</b>: no SQL file checks',
+            ' ' + unchecked(path, x),
+            cls='card nd-card',
+        )
     if kind == 'block':
         p = f'warnings/{path}'
         return (
@@ -656,13 +675,24 @@ def compared(r):
     return ''.join(out)
 
 
+def unchecked(p, g):
+    """An entry no SQL file checks, at P: its names, its reason and, where
+    the data gives it, what else PostgreSQL calls those locales."""
+    return (
+        ', '.join(mark(f'{p}/names#{j}', n) for j, n in enumerate(g['names']))
+        + ' &mdash; ' + mark(p + '/why', g['why'])
+        + ('<div class="hint">also, in PostgreSQL: '
+           + mark(p + '/also', g['also']) + '</div>' if 'also' in g else '')
+    )
+
+
 def confirm(r):
     """The SQL files step 11 wrote, each with its number of tests, or
     "(no SQL file was written)" where none was; then each entry no file
-    checks (a group of locales, or the character rules of every locale),
-    NOT VERIFIED, with its reason and, where the data gives it, what else
-    PostgreSQL calls those locales. Where step 11, or what it wrote of the
-    SQL files, is not reported: its state and reason instead."""
+    checks, NOT VERIFIED, with its reason and, where the data gives it,
+    what else PostgreSQL calls those locales. Where step 11, or what it
+    wrote of the SQL files, is not reported: its state and reason
+    instead."""
     s11 = r['step11']
     out = [
         '<details class="sec"><summary><h2>Confirm in PostgreSQL</h2>'
@@ -706,21 +736,315 @@ def confirm(r):
         out.append('</ul>')
     if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
         for i, g in enumerate(s11['sql']['not_checked']):
-            p = f'step11/sql/not_checked#{i}'
             out.append(
                 label(
                     'not checked',
                     '<b>NOT VERIFIED</b> by these files:',
-                    ' '
-                    + ', '.join(mark(f'{p}/names#{j}', n)
-                                for j, n in enumerate(g['names']))
-                    + ' &mdash; ' + mark(p + '/why', g['why'])
-                    + ('<div class="hint">also, in PostgreSQL: '
-                       + mark(p + '/also', g['also']) + '</div>'
-                       if 'also' in g else ''),
+                    ' ' + unchecked(f'step11/sql/not_checked#{i}', g),
                     cls='nd',
                 )
             )
+    out.append('</div></details>')
+    return ''.join(out)
+
+
+# How many strings a list of a group draws before "and N more"; past it,
+# a sample of the code points that draw as a character.
+SAMPLE = 60
+# How many pairs step 11 could not decide the page shows.
+UNDECIDED_SHOWN = 10
+
+
+def glyph(cp):
+    """A code point drawn: a letter, number, punctuation or symbol as
+    itself, a mark that combines over a dotted circle (U+25CC), anything
+    else (a control, a space, a code point not assigned or past Unicode)
+    as nothing."""
+    if cp > 0x10FFFF:
+        return ''
+    cat = unicodedata.category(chr(cp))
+    if cat[0] in 'LNPS':
+        return chr(cp)
+    if cat[0] == 'M':
+        return '\u25cc' + chr(cp)
+    return ''
+
+
+def code_point(tok):
+    """The code point a string of step 11 names, or None for one named by
+    its bytes (report_data.STRING)."""
+    m = report_data.STRING.fullmatch(tok)
+    return int(m[1], 16) if m[1] else None
+
+
+def cell(tok, named=False):
+    """One string, drawn: the character where it draws, its code, and its
+    Unicode name where NAMED and it has one; a string named by its bytes,
+    as its bytes."""
+    cp = code_point(tok)
+    if cp is None:
+        return f'<span class="ch"><code>{esc(tok)}</code></span>'
+    g = glyph(cp)
+    name = unicodedata.name(chr(cp), '') if cp <= 0x10FFFF else ''
+    return (
+        '<span class="ch">'
+        + (f'<span class="g">{esc(g)}</span> ' if g else '')
+        + f'<code>{esc(tok)}</code>'
+        + (f' <span class="nm">{esc(name)}</span>' if named and name else '')
+        + '</span>'
+    )
+
+
+def strings(runs, sample):
+    """The strings of RUNS [first, last] in order, each as (first, last,
+    how many strings it stands for): a code point alone, a run of strings
+    named by their bytes whole, first..last; every one, or with SAMPLE
+    only the first SAMPLE code points that draw."""
+    out = []
+    for a, b in runs:
+        n = report_data._run_size('run', [a, b])
+        ca = code_point(a)
+        if ca is None:
+            if not sample:
+                out.append((a, b, n))
+            continue
+        for c in range(ca, ca + n):
+            if len(out) >= SAMPLE:
+                return out
+            if not sample or glyph(c):
+                out.append((f'U+{c:04X}', f'U+{c:04X}', 1))
+    return out
+
+
+def run_cell(a, b, named=False):
+    """A string drawn (cell), or a run of strings named by their bytes,
+    first..last."""
+    if a == b:
+        return cell(a, named)
+    return (f'<span class="ch"><code>{esc(a)}..{esc(b[len("bytes "):])}'
+            '</code></span>')
+
+
+def drawn(r, runs, count, named=False):
+    """A list of a group drawn: all of it up to SAMPLE strings, else a
+    sample; then how many more and the file that holds them all."""
+    sample = count > SAMPLE
+    shown = strings(runs, sample)
+    out = (
+        '<div class="chars' + (' named' if named else '') + '">'
+        + ' '.join(run_cell(a, b, named) for a, b, _ in shown)
+        + '</div>'
+    )
+    if sample:
+        out += (f'<p class="hint">A sample: the first {len(shown)} that '
+                'draw as a character.</p>')
+    more = count - sum(n for _, _, n in shown)
+    if more:
+        out += f'<p class="more">and {more:,} more' + all_in(r) + '</p>'
+    return out
+
+
+def characters_file(r):
+    return 'measured_order_characters.' + r['pair']['slug'] + '.tsv'
+
+
+def all_in(r):
+    """Where every string of a group is listed: the characters file, where
+    step 11 reported it."""
+    if r['step11']['characters']['state'] != 'reported':
+        return ''
+    return f', all listed in <code>{esc(characters_file(r))}</code>'
+
+
+def sql_of(r, g):
+    """The entry no SQL file checks that is about this group's order, if
+    any: the one whose names are its locales as the SQL files write them
+    (locale_order.ascii_name; report_data.load holds that each such entry
+    names one group)."""
+    names = [locale_order.ascii_name(x) for x in g['locales']]
+    return [(i, x) for i, x in enumerate(r['step11']['sql']['not_checked'])
+            if x['about'] == 'order' and x['names'] == names]
+
+
+def encodings(g):
+    out = []
+    for v in g['locales'].values():
+        o, n = (x.upper() if x == 'unknown' else x
+                for x in (v['codeset']['old'], v['codeset']['new']))
+        w = n if o == n else f'{o} \u2192 {n}'
+        if w not in out:
+            out.append(w)
+    return ', '.join(out)
+
+
+def group_html(r, i, g):
+    """One group of locales whose order changed (step11/findings/groups#I),
+    held whole by the check: its names and encodings, what PostgreSQL
+    also calls them, its compiled sort table, what moved, the pairs told
+    apart differently, what did not move, what compares differently
+    against another; and what step 11 could not settle for it (pairs that
+    tell levels apart changed, levels not compared, pairs undecided) and
+    whether an SQL file checks its order."""
+    f = {x['kind']: x for x in g['findings']}
+    s11 = r['step11']
+    sql = s11['sql']
+    unchecked_here = sql_of(r, g) if sql['state'] == 'reported' else []
+    head = []
+    if g['found_by'] != 'step 11':
+        head.append('found by its compiled sort table alone')
+    mv = f.get('moved')
+    if mv is not None:
+        head.append(
+            'no character moved' if not mv['count'] else
+            f'{mv["characters"]:,} character(s)'
+            + (f' and {mv["other_strings"]:,} other string(s)'
+               if mv['other_strings'] else '') + ' moved')
+    ta = f.get('told apart')
+    if ta is not None:
+        head.append(f'{ta["count"]:,} pair(s) told apart differently')
+    summary = (
+        '<span class="loc">' + esc(', '.join(g['locales'])) + '</span> '
+        f'<span class="enc">({esc(encodings(g))})</span>'
+        + (' <span class="badge warn">NOT VERIFIED in PostgreSQL</span>'
+           if unchecked_here else '')
+        + ' <span class="what">' + esc('; '.join(head)) + '</span>'
+    )
+    body = []
+    pg = []
+    for v in g['locales'].values():
+        q = v['postgres']
+        for w in ((f'collation "{q["alias"]}"' if q['alias'] != 'none'
+                   else None),
+                  (f'database locale {q["spelling"]}'
+                   if q['spelling'] != 'none' else None)):
+            if w and w not in pg:
+                pg.append(w)
+    if pg:
+        body.append('<p class="hint">Also, in PostgreSQL: '
+                    + esc('; '.join(pg)) + '.</p>')
+    st = g['sort_table']
+    if st['state'] == 'changed':
+        said = locale_order.table_change_lines(st)[2]
+        body.append('<p class="hint">' + esc(said[0].upper() + said[1:])
+                    + '.</p>')
+    if mv is not None:
+        if mv['count']:
+            body.append(
+                f'<h4>Moved: {mv["count"]:,}</h4>'
+                '<p class="hint">They now sort in another place.</p>'
+                + drawn(r, mv['runs'], mv['count'], mv['listed'] == 'each'))
+        else:
+            body.append('<p>No character moved.</p>')
+    if ta is not None:
+        body.append(f'<h4>Pairs told apart differently: {ta["count"]:,}</h4>')
+        if ta['listed'] == 'each':
+            body.append(
+                '<table><tr><th>one</th><th>other</th><th>before</th>'
+                '<th>now</th></tr>'
+                + ''.join(
+                    f'<tr><td>{cell(x["strings"][0], True)}</td>'
+                    f'<td>{cell(x["strings"][1], True)}</td>'
+                    f'<td>{esc(locale_order.RELATION_WORDS[x["before"]])}</td>'
+                    f'<td>{esc(locale_order.RELATION_WORDS[x["now"]])}</td>'
+                    '</tr>' for x in ta['pairs'])
+                + '</table>')
+        else:
+            body.append('<p class="hint">Too many to list here'
+                        + all_in(r) + '.</p>')
+    dm = f.get('did not move')
+    if dm is not None:
+        body.append(
+            '<details class="sub"><summary>Among them, '
+            f'{dm["count"]:,} string(s) that did not move</summary>'
+            + drawn(r, dm['runs'], dm['count']) + '</details>')
+    rv = f.get('reversed')
+    if rv is not None:
+        body.append(
+            '<details class="sub"><summary>'
+            + ('all ' if rv['all'] else '')
+            + f'{rv["characters"]:,} '
+            f'character(s) and {rv["other_strings"]:,} other string(s) now '
+            'compare differently against at least one other</summary>'
+            + drawn(r, rv['runs'], rv['count']) + '</details>')
+    gaps = []
+    pc = f.get('probes changed')
+    if pc is not None:
+        def side(k):
+            return (f'<tr><th>{k}</th>' + ''.join(
+                '<td>' + (cell(x['pair'][0]) + ' / ' + cell(x['pair'][1])
+                          if x['state'] == 'pair' else
+                          f'<b>{esc(x["state"].upper())}</b>') + '</td>'
+                for x in pc[k]) + '</tr>')
+        gaps.append(
+            'The pairs that tell letters, accents and case apart here are '
+            'told apart differently themselves:<table><tr><th></th>'
+            '<th>letters</th><th>accents</th><th>case</th></tr>'
+            + side('before') + side('now') + '</table>')
+    lo = f.get('left out')
+    if lo is not None:
+        gaps.append(('Pairs compared only by '
+                     + esc(' and '.join(lo['compared'])) + '; '
+                     if lo['compared'] else 'No pair can be compared; ')
+                    + esc(' and '.join(lo['left_out']))
+                    + ' <b>NOT COMPARED</b> here.')
+    ud = f.get('undecided')
+    if ud is not None:
+        gaps.append(
+            f'{ud["count"]:,} more pair(s) may be told apart differently; '
+            'what was measured cannot decide:<ul class="pairs">'
+            + ''.join(f'<li>{cell(a)} and {cell(b)}</li>'
+                      for a, b in ud['pairs'][:UNDECIDED_SHOWN])
+            + '</ul>'
+            + (f'<p class="more">and {ud["count"] - UNDECIDED_SHOWN:,} more'
+               + all_in(r) + '</p>'
+               if ud['count'] > UNDECIDED_SHOWN else ''))
+    if sql['state'] != 'reported':
+        gaps.append('Whether an SQL file checks these locales: <b>NOT '
+                    'REPORTED</b> (see Confirm in PostgreSQL).')
+    for _, x in unchecked_here:
+        gaps.append('<b>NOT VERIFIED in PostgreSQL</b>: no SQL file checks '
+                    'these locales &mdash; ' + esc(x['why']) + '.')
+    if gaps:
+        body.append('<div class="gap"><b>Not settled for this group</b><ul>'
+                    + ''.join(f'<li>{x}</li>' for x in gaps) + '</ul></div>')
+    return (f'<details class="grp" data-grp="{i}"><summary>{summary}'
+            '</summary>' + ''.join(body) + '</details>')
+
+
+def changed_order(r):
+    """The locales whose sort order changed, one group of locales measured
+    alike at a time, in step 11's order; or why the run does not know:
+    step 11 not run or not reported, its findings not reported."""
+    s11 = r['step11']
+    out = ['<details class="sec" open><summary><h2>Locales whose sort order '
+           'changed</h2></summary><div class="secb">']
+    if s11['state'] != 'reported':
+        out.append(not_done(s11['state'], 'step11', why_of('step11', s11)))
+        out.append(fixed('changed not run', 'Only the measurements of the '
+                         'two machines show which locales sort differently.',
+                         'p', 'hint'))
+    elif s11['findings']['state'] != 'reported':
+        fi = s11['findings']
+        out.append(not_done(fi['state'], 'step11/findings',
+                            why_of('step11/findings', fi)))
+    elif not s11['findings']['groups']:
+        out.append(empty('step11/findings/groups'))
+    else:
+        out.append(fixed(
+            'changed', 'Indexes, ORDER BY, comparisons and range partitions '
+            'on text in these locales can give other results after the '
+            'upgrade. Open a group for its characters.', 'p', 'hint'))
+        ch = s11['characters']
+        out.append(label(
+            'characters file',
+            'Every character, other string and pair found:',
+            ' <code>' + made('characters file', characters_file(r))
+            + '</code>' if ch['state'] == 'reported' else ' '
+            + not_done(ch['state'], 'step11/characters',
+                       why_of('step11/characters', ch)),
+            tag='p', cls='hint'))
+        out += [group_html(r, i, g)
+                for i, g in enumerate(s11['findings']['groups'])]
     out.append('</div></details>')
     return ''.join(out)
 
@@ -745,6 +1069,14 @@ details.sec{border:1px solid var(--line);border-radius:10px;margin:12px 0}
 details.sec>summary{padding:12px 14px;cursor:pointer;list-style:none;display:flex;gap:10px;align-items:baseline}
 details.sec>summary::before{content:"\\25B8";color:var(--mute)}details.sec[open]>summary::before{content:"\\25BE"}
 .secb{padding:0 14px 14px}
+details.grp{border-top:1px solid var(--line);padding:8px 0}details.grp>summary{cursor:pointer}
+details.sub{padding:4px 0}details.sub>summary{cursor:pointer;font-size:14px}
+.loc{font-weight:600}.enc{font-size:12px;color:var(--mute)}.what{color:var(--bad);font-size:14px;margin-left:6px}
+.chars{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}.ch{display:inline-flex;align-items:baseline;gap:6px;background:var(--card);border-radius:6px;padding:2px 8px}
+.chars.named .ch{flex-basis:100%;background:none;padding:2px 0}.g{font-size:20px;min-width:1.2em;text-align:center}
+.nm{font-size:12px;color:var(--mute)}.more{font-size:13px;color:var(--mute)}
+.gap{background:var(--warnbg);border-radius:8px;padding:8px 12px;margin-top:10px;font-size:14px}.gap ul{margin:4px 0 0;padding-left:18px}.gap b{color:var(--warn)}
+ul.pairs{columns:2 240px;padding-left:18px}
 details.card{border-top:1px solid var(--line);padding:8px 0}details.card>summary{cursor:pointer}
 .nd-card{border-top:1px solid var(--line);padding:8px 0}
 .nd{background:var(--warnbg);border-radius:8px;padding:6px 10px;margin:6px 0;font-size:14px}.nd b{color:var(--warn)}
@@ -834,6 +1166,7 @@ def render(r):
     body = [
         tiles(r),
         added_removed(r),
+        changed_order(r),
         '<details class="sec" open><summary><h2>Not verified</h2></summary>'
         '<div class="secb">'
         + fixed(

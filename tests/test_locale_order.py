@@ -5785,7 +5785,7 @@ class WherePostgresUsesALocale(unittest.TestCase):
                               locales),
             m.also_known_as([odd], m.postgres_names(locales), locales))
         lines = m.sql_lines('p', m.sql_data(
-            [], [(thai, 'a reason'), ([every], 'why')],
+            [], [(thai, 'a reason', 'order'), ([every], 'why', 'ctype')],
             lambda names: m.also_of_written(names, pg, self.LOCALES)))
         at = lines.index('Not checked in PostgreSQL by these files: th_TH, '
                          'th_TH.tis620, thai: a reason.')

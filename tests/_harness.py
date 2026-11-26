@@ -942,6 +942,189 @@ def check_report(returncode, out, out_dir):
     report_page_held(path, r)
 
 
+def page_group_said(r, i):
+    """The words a summary page says of step 11's group I of locales whose
+    order changed (report_html.group_html), rebuilt here from that group's
+    data by this check's own rules, blanks collapsed: so a group that says
+    another's values, leaves one out, adds one or orders them otherwise is
+    refused. As (all its words, [(the words of its <summary>, the words
+    of its own body) for the group and each list folded in it, in
+    order]): what a reader sees with each closed, and what opening each
+    shows, so no word sits under another fold than its own. Only the
+    words of the text that the page repeats are taken from it: how two
+    strings are told apart
+    (locale_order.RELATION_WORDS), what a changed sort table is
+    (locale_order.table_change_lines) and how the SQL files write a
+    locale's name (locale_order.ascii_name)."""
+    import locale_order as lo
+    import report_data as rd
+    g = r['step11']['findings']['groups'][i]
+    f = {x['kind']: x for x in g['findings']}
+    sql = r['step11']['sql']
+    reported = r['step11']['characters']['state'] == 'reported'
+    where = (', all listed in measured_order_characters.'
+             + r['pair']['slug'] + '.tsv' if reported else '')
+    cap = 60
+
+    def drawn_as(cp):
+        if cp > 0x10FFFF:
+            return ''
+        c = unicodedata.category(chr(cp))
+        return (chr(cp) if c[0] in 'LNPS' else
+                '\u25cc' + chr(cp) if c[0] == 'M' else '')
+
+    def one(tok, named=False):
+        m = rd.STRING.fullmatch(tok)
+        if not m[1]:
+            return tok
+        cp = int(m[1], 16)
+        name = unicodedata.name(chr(cp), '') if cp <= 0x10FFFF else ''
+        return ' '.join(x for x in (drawn_as(cp), tok,
+                                    name if named else '') if x)
+
+    def listed(runs, count, named=False):
+        # Every string while there are no more than `cap`; past that, the
+        # first `cap` code points that draw, as a sample.
+        sample, out, stands = count > cap, [], 0
+        for a, b in runs:
+            ka, kb = rd.STRING.fullmatch(a), rd.STRING.fullmatch(b)
+            if not ka[1]:
+                if not sample:
+                    out.append(a if a == b else a + '..' + b[6:])
+                    stands += rd._run_size('run', [a, b])
+                continue
+            for cp in range(int(ka[1], 16), int(kb[1], 16) + 1):
+                if len(out) == cap:
+                    break
+                if not sample or drawn_as(cp):
+                    out.append(one(f'U+{cp:04X}', named))
+                    stands += 1
+        words = ' '.join(out)
+        if sample:
+            words += f' A sample: the first {len(out)} that draw as a ' \
+                     'character.'
+        if count > stands:
+            words += f' and {count - stands:,} more' + where
+        return words
+
+    names = list(g['locales'])
+    encs = []
+    for v in g['locales'].values():
+        o, n = (x.upper() if x == 'unknown' else x
+                for x in (v['codeset']['old'], v['codeset']['new']))
+        e = n if o == n else f'{o} \u2192 {n}'
+        if e not in encs:
+            encs.append(e)
+    shown = [lo.ascii_name(x) for x in names]
+    unchecked = ([x for x in sql['not_checked']
+                  if x['about'] == 'order' and x['names'] == shown]
+                 if sql['state'] == 'reported' else [])
+    head = []
+    if g['found_by'] == 'its sort table alone':
+        head.append('found by its compiled sort table alone')
+    if 'moved' in f:
+        m = f['moved']
+        head.append(f'{m["characters"]:,} character(s)'
+                    + (f' and {m["other_strings"]:,} other string(s)'
+                       if m['other_strings'] else '') + ' moved'
+                    if m['count'] else 'no character moved')
+    if 'told apart' in f:
+        head.append(f'{f["told apart"]["count"]:,} pair(s) told apart '
+                    'differently')
+    said = [', '.join(names), '(' + ', '.join(encs) + ')']
+    if unchecked:
+        said.append('NOT VERIFIED in PostgreSQL')
+    said.append('; '.join(head))
+    folds = [[' '.join(said), []]]
+    body = folds[0][1]
+    also = []
+    for v in g['locales'].values():
+        q = v['postgres']
+        if q['alias'] != 'none' and f'collation "{q["alias"]}"' not in also:
+            also.append(f'collation "{q["alias"]}"')
+        if q['spelling'] != 'none' and \
+                f'database locale {q["spelling"]}' not in also:
+            also.append(f'database locale {q["spelling"]}')
+    def say(words):
+        said.append(words)
+        body.append(words)
+
+    if also:
+        say('Also, in PostgreSQL: ' + '; '.join(also) + '.')
+    if g['sort_table']['state'] == 'changed':
+        t = lo.table_change_lines(g['sort_table'])[2]
+        say(t[:1].upper() + t[1:] + '.')
+    if 'moved' in f:
+        m = f['moved']
+        say(f'Moved: {m["count"]:,} They now sort in another place. '
+            + listed(m['runs'], m['count'], m['listed'] == 'each')
+            if m['count'] else 'No character moved.')
+    if 'told apart' in f:
+        t = f['told apart']
+        say(f'Pairs told apart differently: {t["count"]:,}')
+        if t['listed'] == 'each':
+            say('one other before now')
+            for x in t['pairs']:
+                for w in (one(x['strings'][0], True),
+                          one(x['strings'][1], True),
+                          lo.RELATION_WORDS[x['before']],
+                          lo.RELATION_WORDS[x['now']]):
+                    say(w)
+        else:
+            say('Too many to list here' + where + '.')
+    # Each folded list: its own summary and words, apart from the group's.
+    if 'did not move' in f:
+        d = f['did not move']
+        folds.append([f'Among them, {d["count"]:,} string(s) that did not '
+                      'move', [listed(d['runs'], d['count'])]])
+        said += [folds[-1][0]] + folds[-1][1]
+    if 'reversed' in f:
+        v = f['reversed']
+        folds.append([('all ' if v['all'] else '')
+                      + f'{v["characters"]:,} character(s) and '
+                      f'{v["other_strings"]:,} other string(s) now compare '
+                      'differently against at least one other',
+                      [listed(v['runs'], v['count'])]])
+        said += [folds[-1][0]] + folds[-1][1]
+    gaps = []
+    if 'probes changed' in f:
+        pc = f['probes changed']
+        gaps.append('The pairs that tell letters, accents and case apart '
+                    'here are told apart differently themselves: letters '
+                    'accents case')
+        for k in ('before', 'now'):
+            gaps.append(k + ' ' + ' '.join(
+                one(x['pair'][0]) + ' / ' + one(x['pair'][1])
+                if x['state'] == 'pair' else x['state'].upper()
+                for x in pc[k]))
+    if 'left out' in f:
+        x = f['left out']
+        gaps.append(('Pairs compared only by ' + ' and '.join(x['compared'])
+                     + '; ' if x['compared'] else 'No pair can be compared; ')
+                    + ' and '.join(x['left_out']) + ' NOT COMPARED here.')
+    if 'undecided' in f:
+        u = f['undecided']
+        gaps.append(f'{u["count"]:,} more pair(s) may be told apart '
+                    'differently; what was measured cannot decide: '
+                    + ' '.join(f'{one(a)} and {one(b)}'
+                               for a, b in u['pairs'][:10])
+                    + (f' and {u["count"] - 10:,} more' + where
+                       if u['count'] > 10 else ''))
+    if sql['state'] != 'reported':
+        gaps.append('Whether an SQL file checks these locales: NOT REPORTED '
+                    '(see Confirm in PostgreSQL).')
+    for x in unchecked:
+        gaps.append('NOT VERIFIED in PostgreSQL: no SQL file checks these '
+                    'locales \u2014 ' + x['why'] + '.')
+    if gaps:
+        say('Not settled for this group ' + ' '.join(gaps))
+
+    def flat(t):
+        return re.sub(r'\s+', ' ', t).strip()
+    return flat(' '.join(said)), [(flat(h), flat(' '.join(b)))
+                                  for h, b in folds]
+
+
 def report_page_held(path, r):
     """The summary page report.<pair>.html beside the data file `path`,
     held to the report `r` read from it (scripts/report_html.py).
@@ -961,26 +1144,39 @@ def report_page_held(path, r):
       said, as does a machine's "compared as"; a latest-elN's whole line
       is held to its entry, its date or NO DATE included, and so are an
       SQL file's (its number of tests) and each entry no SQL file checks
-      (its names, reason and "also" line). So a value under the
-      wrong words, the wrong side or in another order is refused.
+      (its names, reason and "also" line), in Confirm in PostgreSQL and
+      in Not verified. So a value under the wrong words, the wrong side
+      or in another order is refused.
     - The labels the data calls for are there, as many times as it calls
       for each: the counts or NOT MEASURED, the locales on one machine
       only, step 2's files gone and new, each machine, build, latest-elN,
-      tag, SQL file and entry no SQL file checks, those two kinds each
-      entry once and in the data's order. So are the sentences the page says whole (data-f),
-      each in this check's words, the one at the top the route's; the
-      cards it places outside Not verified; and every member of step 2's
-      rows and of step 11's list of what it did not do.
+      tag, SQL file and entry no SQL file checks (in each of its two
+      places), those last kinds each entry once and in the data's order,
+      and the characters file where a group is shown. So are the
+      sentences the page says whole (data-f), each in this check's
+      words, the one at the top the route's; the cards it places outside
+      Not verified; and every member of step 2's rows and of step 11's
+      list of what it did not do.
     - The Not verified entries are which and in which order the data
       gives; each block not done shows its state in the section the data
       calls for; the lists that hold nothing are the ones marked data-e,
       compared as a set, not by where each sits.
     - Each list that holds nothing says "(none)" ("(no SQL file was
       written)" for the SQL files).
+    - Each group of locales whose order changed (data-grp) is shown
+      once, in step 11's order, in its section, and says, blanks
+      collapsed, exactly the words page_group_said rebuilds from that
+      group's data; and so does each fold of it, the group and each list
+      folded in it, its <summary> what shows with it closed and its own
+      body what opening it shows, so no word sits under another fold.
+    - Every <details> has one <summary>; a list folded in a group sits in
+      the group's own body; no element carries a hidden or a style
+      attribute.
     - Every other word of the page outside marks, labels' words, data-e,
-      data-f, <title> and <style> is one of this check's own list, so a
-      sentence the data does not call for is refused; a label whose words
-      are its first value says that value and this check's word after it."""
+      data-f, data-grp, <title> and <style> is one of this check's own
+      list, so a sentence the data does not call for is refused; a label
+      whose words are its first value says that value and this check's
+      word after it."""
     import html.parser
     page_path = path[:-len('.json')] + '.html'
     if not os.path.exists(page_path):
@@ -993,11 +1189,13 @@ def report_page_held(path, r):
 
     class Page(html.parser.HTMLParser):
         VOID = {'meta', 'br', 'hr', 'img', 'input', 'link'}
+        BLOCKS = {'p', 'div', 'h4', 'li', 'ul', 'table', 'tr', 'td', 'th',
+                  'summary', 'details'}
 
         def __init__(self):
             super().__init__(convert_charrefs=True)
             self.stack, self.marks, self.labels, self.loose = [], [], [], []
-            self.fixed, self.empties = [], []
+            self.fixed, self.empties, self.groups = [], [], []
             self.section = None
 
         def handle_starttag(self, tag, attrs):
@@ -1017,6 +1215,37 @@ def report_page_held(path, r):
                 self.fixed.append(node)
             if 'data-e' in a:
                 self.empties.append(node)
+            if 'hidden' in a or 'style' in a:
+                # A word the page hides, or styles out of sight, is not
+                # said: the page uses neither.
+                fail(f'<{tag}> hidden or styled: {sorted(a)}')
+            if 'data-grp' in a:
+                node['folds'] = []
+                self.groups.append(node)
+            if tag == 'details':
+                node['fold'] = {'summary': [], 'body': [], 'heads': 0}
+                g = next((x for x in reversed(self.stack + [node])
+                          if 'data-grp' in x['a']), None)
+                if g is not None:
+                    # A list folded in a group sits in the group's own
+                    # body: never inside another list folded there, nor
+                    # in the group's <summary>.
+                    up = next((x for x in reversed(self.stack)
+                               if x['tag'] == 'details'), None)
+                    if g is not node and (up is not g or any(
+                            x['tag'] == 'summary' for x in
+                            self.stack[self.stack.index(g) + 1:])):
+                        fail(f'a <details> of group {g["a"]["data-grp"]} '
+                             'outside its own body')
+                    g['folds'].append(node['fold'])
+            if tag == 'summary':
+                if not self.stack or self.stack[-1]['tag'] != 'details':
+                    fail('a <summary> outside a <details>')
+                self.stack[-1]['fold']['heads'] += 1
+            if tag in self.BLOCKS:
+                # Inside a group, a block's words are apart from the ones
+                # before it, as the reader sees them.
+                self.said(' ', node)
             if 'data-t' in a:
                 owner = next((x for x in reversed(self.stack)
                               if 'data-l' in x['a']), None)
@@ -1032,16 +1261,37 @@ def report_page_held(path, r):
                 return
             if not self.stack or self.stack[-1]['tag'] != tag:
                 fail(f'</{tag}> closes nothing open')
-            self.stack.pop()
+            node = self.stack.pop()
+            if tag == 'details' and node['fold']['heads'] != 1:
+                # Folded with no words to open it by, or with two.
+                fail(f'a <details> with {node["fold"]["heads"]} <summary>')
+
+        def said(self, d, starting=None):
+            """D inside a group: to the group's words, and to the fold it
+            is under, its summary or its own body."""
+            stack = self.stack + ([starting] if starting else [])
+            for x in self.stack:
+                if 'data-grp' in x['a']:
+                    x['text'].append(d)
+            k = next((i for i in range(len(stack) - 1, -1, -1)
+                      if stack[i]['tag'] == 'details'), None)
+            if k is None or not any('data-grp' in x['a']
+                                    for x in stack[:k + 1]):
+                return
+            part = ('summary' if any(x['tag'] == 'summary'
+                                     for x in stack[k + 1:]) else 'body')
+            stack[k]['fold'][part].append(d)
 
         def handle_data(self, d):
             if self.stack and self.stack[-1]['tag'] == 'h2':
                 self.section += d
             for x in self.stack:
-                x['text'].append(d)
+                if 'data-grp' not in x['a']:
+                    x['text'].append(d)
+            self.said(d)
             held = any(('data-p' in x['a'] or 'data-d' in x['a']
                         or 'data-e' in x['a'] or 'data-f' in x['a']
-                        or 'data-t' in x['a']
+                        or 'data-t' in x['a'] or 'data-grp' in x['a']
                         or x['tag'] in ('style', 'title'))
                        for x in self.stack)
             if not held:
@@ -1077,7 +1327,8 @@ def report_page_held(path, r):
         'Whatever that step warned about is not on this page.',
         "\u2014 a machine's file made both sides read their upstream tags; "
         'why is under Not verified', ', and its metadata gives',
-        'this reads', 'test(s)', 'also, in PostgreSQL:'}
+        'this reads', 'test(s)', 'also, in PostgreSQL:',
+        'Locales whose sort order changed'}
     for d in p.loose:
         d = re.sub(r'\s+', ' ', d).strip()
         if d and d not in loose_words:
@@ -1222,6 +1473,11 @@ def report_page_held(path, r):
         'sql': (None, r'step11/sql/files#(\d+)/'),
         'not checked': ('NOT VERIFIED by these files:',
                         r'step11/sql/not_checked#(\d+)/'),
+        'nv not checked': ('NOT VERIFIED in PostgreSQL: no SQL file checks',
+                           r'step11/sql/not_checked#(\d+)/'),
+        'characters file': ('Every character, other string and pair found:',
+                            r'd:characters file$|step11/characters/'
+                            r'(state|why)$'),
         'cv old': ('old side:', r'compared/collation_version/old$'),
         'cv new': ('new side:', r'compared/collation_version/new$'),
         'cv same': ('both sides:', r'compared/collation_version/version$'),
@@ -1247,7 +1503,7 @@ def report_page_held(path, r):
     seen = {}
     # Which entry each SQL file's and each unchecked entry's label shows,
     # in page order: each once, in the data's order (shown_order below).
-    shown_order = {'sql': [], 'not checked': []}
+    shown_order = {'sql': [], 'not checked': [], 'nv not checked': []}
     for lab in p.labels:
         key = lab['a']['data-l']
         if lab['label'] is None:
@@ -1303,7 +1559,7 @@ def report_page_held(path, r):
             if key == 'commit' and [x.rsplit('/', 1)[1] for x in places] != [
                     'tag', 'commit']:
                 fail(f'label {key!r} holds {places}')
-            if key == 'not checked':
+            if key in ('not checked', 'nv not checked'):
                 # One entry, whole, in its order: its names, its reason
                 # and what else PostgreSQL calls it, where it says.
                 i = re.match(rx, places[0]).group(1) if places else None
@@ -1316,7 +1572,7 @@ def report_page_held(path, r):
                         + [p0 + 'why']
                         + ([p0 + 'also'] if 'also' in g else [])):
                     fail(f'label {key!r} holds {places}')
-                whole = ('NOT VERIFIED by these files: '
+                whole = (want + ' '
                          + ', '.join(g['names']) + ' \u2014 ' + g['why']
                          # its own line (a div), joined with no blank
                          + ('also, in PostgreSQL: ' + g['also']
@@ -1344,7 +1600,12 @@ def report_page_held(path, r):
             texts.add(w['text'])
             if w['class'] == 'not checked':
                 nc.append(f'warnings/{st}/items#{i}')
-    rules = {'not_verified': len(nc)}
+    if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
+        nc += [f'step11/sql/not_checked#{i}'
+               for i in range(len(s11['sql']['not_checked']))]
+    rules = {'not_verified': len(nc),
+             'characters file': 'measured_order_characters.'
+                                + r['pair']['slug'] + '.tsv'}
     measured = s11['state'] == 'reported' and counts.get('state') == 'reported'
     if measured:
         rules['not_measured+refused'] = (counts['not_measured']
@@ -1383,6 +1644,11 @@ def report_page_held(path, r):
     if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
         need += ['sql'] * len(s11['sql']['files'])
         need += ['not checked'] * len(s11['sql']['not_checked'])
+        need += ['nv not checked'] * len(s11['sql']['not_checked'])
+    groups = (s11['findings']['groups'] if s11['state'] == 'reported'
+              and s11['findings']['state'] == 'reported' else [])
+    if groups:
+        need.append('characters file')
     want = {}
     for k in need:
         want[k] = want.get(k, 0) + 1
@@ -1393,6 +1659,8 @@ def report_page_held(path, r):
     # shown twice and another left out keeps the count.
     for key, entries in (('sql', s11.get('sql', {}).get('files', [])),
                          ('not checked',
+                          s11.get('sql', {}).get('not_checked', [])),
+                         ('nv not checked',
                           s11.get('sql', {}).get('not_checked', []))):
         if shown_order[key] != list(range(len(entries) if s11['state'] ==
                                           'reported' else 0)):
@@ -1408,6 +1676,25 @@ def report_page_held(path, r):
             if got != names:
                 fail(f'{verdict} shows {got}, the data gives {names}')
 
+    # The groups of locales whose order changed: each once, in step 11's
+    # order, in their section, each said whole.
+    got = [int(n['a']['data-grp']) for n in p.groups]
+    if got != list(range(len(groups))):
+        fail(f'groups shown {got}, the data gives {len(groups)} in order')
+    for n in p.groups:
+        if n['section'] != 'Locales whose sort order changed':
+            fail(f'group {n["a"]["data-grp"]} shown under {n["section"]!r}')
+        said = re.sub(r'\s+', ' ', text(n)).strip()
+        want, folds = page_group_said(r, int(n['a']['data-grp']))
+        if said != want:
+            fail(f'group {n["a"]["data-grp"]} said {said!r}, not {want!r}')
+        # What shows with the group, or a list folded in it, closed, and
+        # what opening each shows: no word under another fold.
+        got = [tuple(re.sub(r'\s+', ' ', ''.join(x[k])).strip()
+                     for k in ('summary', 'body')) for x in n['folds']]
+        if got != folds:
+            fail(f'group {n["a"]["data-grp"]} folds {got!r}, not {folds!r}')
+
     # Fixed sentences, and each value whose data calls for it.
     fixed = sorted(re.findall(r'data-f="([^"]*)"', page))
     sub = ('sub measured' if measured else 'sub unreported'
@@ -1417,6 +1704,9 @@ def report_page_held(path, r):
                        else [])
                     + (['nd-list'] if s11['state'] != 'reported'
                        and s11.get('not_done') else [])
+                    + (['changed not run'] if s11['state'] != 'reported'
+                       else [])
+                    + (['changed'] if groups else [])
                     + (['psql'] if s11['state'] == 'reported'
                        and s11['sql']['state'] == 'reported'
                        and s11['sql']['files'] else [])
@@ -1438,6 +1728,11 @@ def report_page_held(path, r):
                 'old.out new.out',
         'block step0': "the machines' files", 'block step1': 'the two sides',
         'block step2': 'step 2', 'block step11': 'step 11',
+        'changed not run': 'Only the measurements of the two machines show '
+                           'which locales sort differently.',
+        'changed': 'Indexes, ORDER BY, comparisons and range partitions on '
+                   'text in these locales can give other results after the '
+                   'upgrade. Open a group for its characters.',
         'sub unreported': "The two machines' files were given; what they "
                           'measured is not reported (see below).',
         'sub sources': 'Compared as ' + run['word'] + ' from their glibc '
@@ -1504,13 +1799,20 @@ def report_page_held(path, r):
     states = []
     if s11['state'] != 'reported':
         states += [('step11/state', s) for s in
-                   (None, 'Locales added and removed', 'Not verified',
+                   (None, 'Locales added and removed',
+                    'Locales whose sort order changed', 'Not verified',
                     'Confirm in PostgreSQL')]
     else:
         if counts.get('state') != 'reported':
             states.append(('step11/counts/state', None))
         if s11['sql']['state'] != 'reported':
             states.append(('step11/sql/state', 'Confirm in PostgreSQL'))
+        if s11['findings']['state'] != 'reported':
+            states.append(('step11/findings/state',
+                           'Locales whose sort order changed'))
+        elif groups and s11['characters']['state'] != 'reported':
+            states.append(('step11/characters/state',
+                           'Locales whose sort order changed'))
     for st in ('step0', 'step1', 'step2', 'step11'):
         if r['warnings'][st]['state'] == 'not reported':
             states.append((f'warnings/{st}/state', 'Not verified'))
@@ -1552,6 +1854,8 @@ def report_page_held(path, r):
                 gaps.append('step11/verdicts:' + verdict)
         if s11['sql']['state'] == 'reported' and not s11['sql']['files']:
             gaps.append('step11/sql/files')
+        if s11['findings']['state'] == 'reported' and not groups:
+            gaps.append('step11/findings/groups')
     if rm['state'] == 'reported' and not rm['rows']:
         gaps.append('step2/removed/rows')
     if ru['state'] == 'reported' and not ru['added']['rows']:
@@ -1577,6 +1881,8 @@ def report_page_held(path, r):
         place = m['a'].get('data-p', '')
         if place.endswith('/title') and 'items#' in place:
             entries.append(place[:-len('/title')])
+        elif re.fullmatch(r'step11/sql/not_checked#\d+/names#0', place):
+            entries.append(place[:-len('/names#0')])
         elif place in ('step11/state', 'warnings/step0/state',
                        'warnings/step1/state', 'warnings/step2/state',
                        'warnings/step11/state'):
@@ -3791,7 +4097,7 @@ def held_main(main, stdout):
     return rc
 
 
-def held_compare(argv, *, counts_unread=None, **kw):
+def held_compare(argv, *, counts_unread=None, data_to=None, **kw):
     """subprocess.run(argv, capture_output=True, **kw) of a
     `locale_order.py --compare`, under glibc_locale_data.WARNINGS_ENV and
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
@@ -3802,8 +4108,9 @@ def held_compare(argv, *, counts_unread=None, **kw):
     with a --verdicts-to in its temporary folder where it has none
     (_with_verdicts), whose verdicts step11_counts_held holds the data to.
     COUNTS_UNREAD is why the readers cannot read its report
-    (step11_counts_held's unread). Returns the CompletedProcess, whose args
-    are those run."""
+    (step11_counts_held's unread); DATA_TO, where to keep a copy of the
+    data file it wrote. Returns the CompletedProcess, whose args are those
+    run."""
     import tempfile
     import glibc_locale_data as g
     import locale_order
@@ -3826,6 +4133,8 @@ def held_compare(argv, *, counts_unread=None, **kw):
                            warnings={'state': 'reported', 'items': recs},
                            verdicts=_verdicts_of(vpath),
                            sql_to=_sql_to_of(argv))
+        if data_to is not None:
+            shutil.copy(data, data_to)
     return p
 
 
