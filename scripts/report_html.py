@@ -8,9 +8,14 @@ A summary, not a copy of the text: the counts at the top, the locales
 added and removed, the locales whose sort order changed (each group step
 11 found, with its characters drawn, what step 11 could not settle for it
 and whether an SQL file checks its order), what changed in the sort rules
-of the locale sources (step 2, in the words it prints them), what the run
-did not verify, how it compared and how to confirm in PostgreSQL. So
-that a check can hold the page to the data file
+of the locale sources (step 2: its totals and groups in the words it
+prints them), the other
+changes the run found, what the run did not verify, how it compared and
+how to confirm in PostgreSQL, each section open. Each warning of the
+text is on the page once, as its card: of class "not checked" under Not
+verified, of class "change" in the section WARN_HOME gives its kind, or
+under "Other changes the run found". So that a check can hold the page
+to the data file
 (tests/_harness.report_page_held):
   - a value of the data file shown in the body outside a group of
     locales (data-grp, below) is marked with its place there
@@ -31,9 +36,9 @@ that a check can hold the page to the data file
     state of that locale, shown in lower case beside its name.)
   - a group of locales whose sort order changed is marked data-grp with
     its place among step 11's groups; the check holds its text whole,
-    rebuilt from that group's data; so are step 2's totals, each of its
-    groups of locales whose rules differ and its entries not read
-    (data-s2, with their place).
+    rebuilt from that group's data; so are step 2's totals, what they
+    count as not compared, each of its groups of locales whose rules
+    differ and its entries not read (data-s2, with their place).
 The page's <title> repeats the two sides unmarked.
 
 usage: report_html.py REPORT_JSON
@@ -139,9 +144,24 @@ def card(path, w):
     )
 
 
-def placed(r, kind):
-    """The cards of one kind of warning, wherever the page places them."""
-    return ''.join(card(p, w) for p, w in items(r) if w['kind'] == kind)
+# The section a warning of class "change" is shown in, as its card, by
+# its kind; any other kind of that class in "Other changes the run found"
+# ('other'), so that none is left off the page.
+WARN_HOME = {
+    'not_on_new_machine': 'added',
+    'glibc_refused': 'added',
+    'collation_version_same': 'how',
+    'c_utf8_differs': 'step2',
+    'charmap_distro_buildable': 'step2',
+}
+
+
+def homed(r, home):
+    """The cards of the warnings of class "change" whose section is HOME,
+    in step order, each once."""
+    return ''.join(card(p, w) for p, w in items(r)
+                   if w['class'] == 'change'
+                   and WARN_HOME.get(w['kind'], 'other') == home)
 
 
 def not_verified(r):
@@ -364,12 +384,12 @@ def added_removed(r):
     out.append('<h3>On the machines (what each machine measured)</h3>')
     if s11['state'] != 'reported':
         out.append(not_done(s11['state'], 'step11', why_of('step11', s11)))
-        out.append(placed(r, 'not_on_new_machine'))
+        out.append(homed(r, 'added'))
     else:
         out.append(
             verdict_list(r, 'only old', 'only old', 'Not on the new machine')
         )
-        out.append(placed(r, 'not_on_new_machine'))
+        out.append(homed(r, 'added'))
         out.append(
             verdict_list(r, 'only new', 'only new', 'Only on the new machine')
         )
@@ -547,11 +567,12 @@ def machines(r, c):
 def compared(r):
     c = r['compared']
     out = [
-        '<details class="sec"><summary><h2>How this was compared</h2>'
+        '<details class="sec" open><summary><h2>How this was compared</h2>'
         '</summary><div class="secb">'
     ]
     if c['state'] != 'reported':
         out.append(not_done(c['state'], 'compared', why_of('compared', c)))
+        out.append(homed(r, 'how'))
         out.append('</div></details>')
         return ''.join(out)
     out.append('<h4>Machines</h4>' + machines(r, c))
@@ -676,7 +697,7 @@ def compared(r):
                 ),
             )
         )
-    out.append(placed(r, 'collation_version_same'))
+    out.append(homed(r, 'how'))
     out.append('</div></details>')
     return ''.join(out)
 
@@ -701,7 +722,7 @@ def confirm(r):
     instead."""
     s11 = r['step11']
     out = [
-        '<details class="sec"><summary><h2>Confirm in PostgreSQL</h2>'
+        '<details class="sec" open><summary><h2>Confirm in PostgreSQL</h2>'
         '</summary><div class="secb">'
     ]
     if s11['state'] != 'reported':
@@ -1109,27 +1130,35 @@ def rules_row(r, i, d):
 
 def sources(r):
     """What step 2 found of the sort rules in each locale's sources, under
-    the text's title for it, in the words it prints them: its totals,
-    what it does not compare and what this page does not show of it (the
-    character sets), each group of locales whose rules differ with the
-    characters of the changed rules, and the entries of a machine's
-    sources it did not read, each with its reason; or its state and
-    reason where it compared nothing or its record is not reported. Its
-    totals, its groups and its entries not read are marked data-s2 with
-    their place, each said whole."""
+    the text's title for it, in the words it prints them: its totals (and,
+    in the page's own words, what their "not compared" counts), what it
+    does not compare and that of its comparison of the character sets
+    only its warnings are on this page, each group of locales whose rules
+    differ with the characters of the changed rules, and the entries of a
+    machine's sources it did not read, each with its reason; or its state
+    and reason where it compared nothing or its record is not reported;
+    and the cards of its warnings of class "change". Its totals, what they
+    count as not compared, its groups and its entries not read are marked
+    data-s2 with their place, each said whole."""
     ru = r['step2']['rules']
     out = ['<details class="sec" open><summary><h2>Which locales&#x27; '
            'sort rules changed (step 2)</h2></summary><div class="secb">']
     if ru['state'] != 'reported':
         out.append(not_done(ru['state'], 'step2/rules',
                             why_of('step2/rules', ru)))
+        out.append(homed(r, 'step2'))
         out.append('</div></details>')
         return ''.join(out)
     t = ru['totals']
     out.append('<p data-s2="totals">' + esc(flc.TOTALS_WORDS.format(
         **{k: f'{v:,}' for k, v in t.items()})) + '</p>')
+    nc = not_compared_parts(r)
+    if nc:
+        out.append('<p class="hint" data-s2="not compared">'
+                   + esc(nc) + '</p>')
     out.append(fixed('step2 not here', esc(flc.CODE_NOT_COMPARED_HERE)
-                     + '; the character sets are not on this page.', 'p',
+                     + "; of step 2's comparison of the character sets, "
+                     'only its warnings are on this page.', 'p',
                      'hint'))
     if ru['differ']:
         rc = r['step2']['rules_characters']
@@ -1155,6 +1184,68 @@ def sources(r):
             f'({len(ru["unread"]):,}):</b><ul>' + ''.join(
                 f'<li>{esc(u["name"])} ({esc("; ".join(u["why"]))})</li>'
                 for u in ru['unread']) + '</ul></div>')
+    out.append(homed(r, 'step2'))
+    out.append('</div></details>')
+    return ''.join(out)
+
+
+def not_compared_parts(r):
+    """What step 2's "N not compared" counts, worked out of its rules: the
+    files only the new side has, those only the old side has, the entries
+    of a machine's sources it did not read and counted, and the rest, the
+    names its warnings say it did not compare, each with its reason: a sum
+    report_data.load holds where those warnings are reported; where they
+    are not, the rest is said as named in warnings NOT REPORTED, never
+    worked out as a number of names. '' where it counts none."""
+    ru = r['step2']['rules']
+    n = ru['totals']['not_compared']
+    if not n:
+        return ''
+    pair = r['pair']
+    new, old = len(ru['added']['rows']), len(ru['removed'])
+    unread = sum(1 for u in ru['unread'] if u['counted'])
+    rest = n - new - old - unread
+    told = r['warnings']['step2']['state'] == 'reported'
+    # report_data.load refuses such a run first (its tie of the totals to
+    # step 2's warnings, where they are reported): this stop is never
+    # reached by a run load() accepts.
+    if told and rest < 0:
+        raise report_data.ReportError(
+            f'step2.rules.totals.not_compared {n}: {new} only at the new '
+            f'side, {old} only at the old, {unread} not read')
+    parts = [f'{new:,} only at {pair["new"]}' if new else '',
+             f'{old:,} only at {pair["old"]}' if old else '',
+             f"{unread:,} not read among a machine's sources" if unread
+             else '',
+             (f'{rest:,} not compared, each with its reason under Not '
+              'verified' if told else 'any other, named in the warnings of '
+              'step 2, which are NOT REPORTED') if rest > 0 else '']
+    return f'Of the {n:,} not compared: ' + '; '.join(
+        x for x in parts if x) + '.'
+
+
+def other_changes(r):
+    """The section of the warnings of class "change" no other section
+    holds: each as its card; and, for each warnings block the run did not
+    report or run, its state and reason, since its warnings cannot be
+    here; "(none)" only where every block was reported and none is
+    here."""
+    out = ['<details class="sec" open><summary><h2>Other changes the run '
+           'found</h2></summary><div class="secb">']
+    nd = []
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        b = r['warnings'][st]
+        if b['state'] != 'reported':
+            p = f'warnings/{st}'
+            nd.append('<div class="nd-card">The warnings of '
+                      + fixed('other ' + st, esc(BLOCK_WORDS[st]))
+                      + ' ' + not_done(b['state'], p, why_of(p, b))
+                      + '</div>')
+    cards = homed(r, 'other')
+    out += nd
+    out.append(cards)
+    if not nd and not cards:
+        out.append(empty('other changes'))
     out.append('</div></details>')
     return ''.join(out)
 
@@ -1278,6 +1369,7 @@ def render(r):
         added_removed(r),
         changed_order(r),
         sources(r),
+        other_changes(r),
         '<details class="sec" open><summary><h2>Not verified</h2></summary>'
         '<div class="secb">'
         + fixed(

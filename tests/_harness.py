@@ -1150,12 +1150,167 @@ _CHANGED = 'Locales whose sort order changed'
 _NV = 'Not verified'
 _HOW = 'How this was compared'
 _CONFIRM = 'Confirm in PostgreSQL'
+_OTHER = 'Other changes the run found'
+# The section each warning of class "change" is shown in, as its card, by
+# its kind: this check's own table; any other kind in _OTHER, so none is
+# left off the page.
+WARN_HOME = {'not_on_new_machine': _ADDED, 'glibc_refused': _ADDED,
+             'collation_version_same': _HOW,
+             'c_utf8_differs': STEP2_SECTION,
+             'charmap_distro_buildable': STEP2_SECTION}
+# The properties the page's style is written with and the values
+# style_hides allows them (a size of 10px and up, a colour from its
+# tokens, no length below 0): a help for reviewing PAGE_STYLE, which is
+# what holds the page. It does not know every way a style hides a word
+# (a text colour set to a background token passes it).
+_LEN = r'(0|\d+(\.\d+)?(px|em|%))'
+_LENS = rf'{_LEN}( {_LEN}){{0,3}}( auto)?|0 auto'
+_VAR = r'var\(--(bg|fg|mute|line|card|bad|badbg|ok|okbg|warn|warnbg)\)'
+STYLE_VALUES = {
+    'align-items': r'baseline', 'background': rf'none|{_VAR}',
+    'border': rf'\d+px solid {_VAR}', 'border-bottom': rf'\d+px solid {_VAR}',
+    'border-left': rf'\d+px solid {_VAR}',
+    'border-top': rf'\d+px solid {_VAR}',
+    'border-collapse': r'collapse', 'border-radius': _LEN,
+    'color': _VAR, 'columns': r'\d+ \d+px', 'content': r'"\\25B[0-9A-F]"',
+    'cursor': r'pointer', 'display': r'block|flex|grid|inline|inline-flex',
+    'flex-basis': r'100%', 'flex-wrap': r'wrap',
+    'font': r'(\d+)px(/[\d.]+)? [-\w ,"]+', 'font-size': r'(\d+)px',
+    'font-weight': r'600|normal|bold', 'gap': _LEN,
+    'grid-template-columns': r'repeat\(auto-fit,minmax\(\d+px,1fr\)\)',
+    'list-style': r'none', 'margin': _LENS, 'margin-left': _LEN,
+    'margin-top': _LEN, 'max-width': r'(\d{3,})px', 'min-width': _LEN,
+    'overflow-x': r'auto', 'padding': _LENS, 'padding-left': _LEN,
+    'text-align': r'center|left', 'vertical-align': r'top',
+    'white-space': r'pre-wrap', 'width': r'100%'}
+STYLE_TOKENS = {'fore': ('fg', 'mute', 'bad', 'ok', 'warn'),
+                'back': ('bg', 'card', 'badbg', 'okbg', 'warnbg')}
+
+
+def _luminance(hexcolour):
+    h = hexcolour.lstrip('#')
+    if len(h) == 3:
+        h = ''.join(c * 2 for c in h)
+    out = []
+    for i in (0, 2, 4):
+        c = int(h[i:i + 2], 16) / 255
+        out.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+
+
+# The page's <style>, as reviewed: the page must carry exactly this.
+# A rule list cannot say every way a style hides a word (a text colour
+# set to a background token, a margin that moves it off the page...), so
+# the style is pinned: a deliberate change of report_html.CSS changes
+# this copy too, in the same change, where a reviewer reads it, and
+# style_hides must find nothing in it
+# (test_report_data.TheSummaryPage.test_the_pinned_style_hides_nothing).
+PAGE_STYLE = r'''
+:root{--bg:#fff;--fg:#1d1d1f;--mute:#6b6b70;--line:#e3e3e6;--card:#f6f6f8;--bad:#b42318;--badbg:#fef3f2;--ok:#067647;--okbg:#ecfdf3;--warn:#b54708;--warnbg:#fffaeb}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#151517;--fg:#ececee;--mute:#a0a0a8;--line:#2e2e33;--card:#1e1e22;--bad:#ff8a80;--badbg:#2a1715;--ok:#6ce9a6;--okbg:#10241a;--warn:#fdb022;--warnbg:#2a210f}}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif;margin:0}
+main{max-width:980px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:18px;margin:0}h3{font-size:15px;margin:16px 0 4px}h4{margin:12px 0 4px;font-size:14px}
+.sub0{color:var(--mute);margin:0 0 6px}
+.disc{font-size:13px;color:var(--mute);border-left:3px solid var(--line);padding-left:10px;margin:10px 0 18px}
+.banner{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:10px 14px;margin:10px 0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:14px 0 22px}
+.tile{background:var(--card);border-radius:10px;padding:12px}
+.tile b{display:block;font-size:26px}.tile span{font-size:13px;color:var(--mute)}
+.tile-note{font-size:12px;color:var(--mute);margin-top:4px}.tile-note span{font-size:12px}.tile-note b{display:inline;font-size:12px}
+.side{margin:6px 0}.side ul{margin:2px 0}
+.tile.nm span[data-t]{display:block;font-weight:600;color:var(--warn);font-size:15px}.tile.nm>b{font-size:13px;font-weight:normal;color:var(--mute)}
+.tile.bad b{color:var(--bad)}.tile.ok b{color:var(--ok)}.tile.warn b{color:var(--warn)}
+details.sec{border:1px solid var(--line);border-radius:10px;margin:12px 0}
+details.sec>summary{padding:12px 14px;cursor:pointer;list-style:none;display:flex;gap:10px;align-items:baseline}
+details.sec>summary::before{content:"\25B8";color:var(--mute)}details.sec[open]>summary::before{content:"\25BE"}
+.secb{padding:0 14px 14px}
+details.grp{border-top:1px solid var(--line);padding:8px 0}details.grp>summary{cursor:pointer}
+details.sub{padding:4px 0}details.sub>summary{cursor:pointer;font-size:14px}
+.loc{font-weight:600}.enc{font-size:12px;color:var(--mute)}.what{color:var(--bad);font-size:14px;margin-left:6px}
+.chars{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}.ch{display:inline-flex;align-items:baseline;gap:6px;background:var(--card);border-radius:6px;padding:2px 8px}
+.chars.named .ch{flex-basis:100%;background:none;padding:2px 0}.g{font-size:20px;min-width:1.2em;text-align:center}
+.nm{font-size:12px;color:var(--mute)}.more{font-size:13px;color:var(--mute)}
+.gap{background:var(--warnbg);border-radius:8px;padding:8px 12px;margin-top:10px;font-size:14px}.gap ul{margin:4px 0 0;padding-left:18px}.gap b{color:var(--warn)}
+ul.pairs{columns:2 240px;padding-left:18px}
+details.card{border-top:1px solid var(--line);padding:8px 0}details.card>summary{cursor:pointer}
+.nd-card{border-top:1px solid var(--line);padding:8px 0}
+.nd{background:var(--warnbg);border-radius:8px;padding:6px 10px;margin:6px 0;font-size:14px}.nd b{color:var(--warn)}
+.nd ul{margin:4px 0 0;padding-left:18px}
+.hint{font-size:13px;color:var(--mute);margin:4px 0}.none{color:var(--mute);font-size:14px}
+ul.names{columns:3 180px;padding-left:18px;margin:4px 0}ul.plain{padding-left:18px}
+code{font:12px ui-monospace,Menlo,monospace;color:var(--mute)}
+table{border-collapse:collapse;font-size:13px;margin:6px 0;width:100%}td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+.badge{font-size:12px;padding:1px 8px;border-radius:10px}.badge.ok{background:var(--okbg);color:var(--ok)}.badge.warn{background:var(--warnbg);color:var(--warn)}
+pre{white-space:pre-wrap;font:12px/1.45 ui-monospace,Menlo,monospace;background:var(--card);padding:10px;border-radius:8px;overflow-x:auto}
+'''
+
+
+def style_hides(css):
+    """What STYLE_VALUES and the colour tokens refuse in a <style>: each
+    declaration not in STYLE_VALUES (its property, or a value it does not
+    allow), `content` outside a ::before, a font below 10px, a theme whose
+    text colours read on its backgrounds at a contrast below 3, or text
+    this reader cannot take as rules. [] where none. A help for reviewing
+    PAGE_STYLE, not a proof that a style hides nothing: it does not know,
+    for one, which token a colour should take."""
+    bad = []
+    body = re.sub(r'/\*.*?\*/', '', css, flags=re.S)
+    themes = []
+    # @media blocks open one brace more; take every rule `sel{decls}`.
+    flat_css = re.sub(r'@media[^{]*\{', '', body)
+    rules = re.findall(r'([^{}]+)\{([^{}]*)\}', flat_css)
+    rest = re.sub(r'([^{}]+)\{([^{}]*)\}', '', flat_css)
+    if rest.strip(' \n}'):
+        bad.append(f'text not read as rules: {rest.strip()[:80]!r}')
+    for sel, decls in rules:
+        sel = sel.strip()
+        tokens = {}
+        for d in decls.split(';'):
+            if not d.strip():
+                continue
+            if ':' not in d:
+                bad.append(f'{sel}: {d.strip()!r}')
+                continue
+            prop, val = (x.strip() for x in d.split(':', 1))
+            if prop.startswith('--'):
+                if not re.fullmatch(r'#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?', val):
+                    bad.append(f'{sel}: {prop}:{val}')
+                tokens[prop[2:]] = val
+                continue
+            rx = STYLE_VALUES.get(prop)
+            m = re.fullmatch(rx, val) if rx else None
+            if m is None:
+                bad.append(f'{sel}: {prop}:{val}')
+                continue
+            if prop == 'content' and not sel.endswith('::before'):
+                bad.append(f'{sel}: content outside ::before')
+            if prop in ('font', 'font-size') and int(m.group(1)) < 10:
+                bad.append(f'{sel}: {prop}:{val}')
+        if tokens:
+            themes.append((sel, tokens))
+    if not themes:
+        bad.append('no colour tokens')
+    for sel, t in themes:
+        for f in STYLE_TOKENS['fore']:
+            for b in STYLE_TOKENS['back']:
+                if f not in t or b not in t:
+                    bad.append(f'{sel}: no --{f} or --{b}')
+                    continue
+                hi, lo = sorted((_luminance(t[f]), _luminance(t[b])),
+                                reverse=True)
+                if (hi + 0.05) / (lo + 0.05) < 3:
+                    bad.append(f'{sel}: --{f} {t[f]} on --{b} {t[b]}')
+    return bad
+
 HOME = {
     'data-f': {'disc': None, 'nothing': None, 'sub measured': None,
                'sub sources': None, 'sub unreported': None,
                'changed': _CHANGED, 'changed not run': _CHANGED,
                'step2 not here': STEP2_SECTION, 'step2 heads': STEP2_SECTION,
                'nv': _NV, 'nd-list': _NV, 'block step0': _NV,
+               'other step0': _OTHER, 'other step1': _OTHER,
+               'other step2': _OTHER, 'other step11': _OTHER,
                'block step1': _NV, 'block step2': _NV, 'block step11': _NV,
                'psql': _CONFIRM},
     'data-l': dict(
@@ -1177,17 +1332,19 @@ HOME = {
                'step2/removed/rows': _ADDED,
                'step2/rules/added/rows': _ADDED,
                'step2/rules/differ': STEP2_SECTION,
-               'not verified': _NV}}
+               'not verified': _NV, 'other changes': _OTHER}}
 
 
 def page_rules_said(r):
     """The words a summary page says of step 2's rules
     (report_html.sources), rebuilt here from the data by this check's own
     rules, blanks collapsed, as [(its place, its words)] in the order the
-    page must say them: the totals, each group of locales whose rules
-    differ, the entries not read. Only the words step 2 prints are taken
-    from it (filter_lc_collate_changes' *_WORDS); how a character is
-    drawn, the sample and how many more are this check's own."""
+    page must say them: the totals, what their "not compared" counts
+    (where it counts any), each group of locales whose rules differ, the
+    entries not read. Only the words step 2 prints are taken from it
+    (filter_lc_collate_changes' *_WORDS); how a character is drawn, the
+    sample, how many more and what "not compared" counts are this
+    check's own."""
     import filter_lc_collate_changes as flc
     ru = r['step2']['rules']
     if ru['state'] != 'reported':
@@ -1210,6 +1367,25 @@ def page_rules_said(r):
     t = ru['totals']
     out = [('totals', flc.TOTALS_WORDS.format(
         **{k: f'{v:,}' for k, v in t.items()}))]
+    if t['not_compared']:
+        # What it counts, by this check's own rule: the files of one side
+        # only, the entries not read and counted, and the rest, the names
+        # step 2's warnings give a reason for.
+        pair = r['pair']
+        n_new, n_old = len(ru['added']['rows']), len(ru['removed'])
+        n_un = len([u for u in ru['unread'] if u['counted']])
+        n_rest = t['not_compared'] - n_new - n_old - n_un
+        told = r['warnings']['step2']['state'] == 'reported'
+        said = [w for k, w in (
+            (n_new, f'{n_new:,} only at {pair["new"]}'),
+            (n_old, f'{n_old:,} only at {pair["old"]}'),
+            (n_un, f"{n_un:,} not read among a machine's sources"),
+            (n_rest > 0, f'{n_rest:,} not compared, each with its reason '
+                         'under Not verified' if told else 'any other, '
+                         'named in the warnings of step 2, which are NOT '
+                         'REPORTED')) if k]
+        out.append(('not compared', f'Of the {t["not_compared"]:,} not '
+                    'compared: ' + '; '.join(said) + '.'))
     for i, d in enumerate(ru['differ']):
         c = d['characters']
         words = [', '.join(d['names'])]
@@ -1241,6 +1417,20 @@ def page_rules_said(r):
                     + ' '.join(f'{u["name"]} ({"; ".join(u["why"])})'
                                for u in ru['unread'])))
     return [(k, re.sub(r'\s+', ' ', w).strip()) for k, w in out]
+
+
+def want_w_of(r):
+    """Each warning of class "change" of `r`, once by its text, with the
+    section of the summary page it is shown in (WARN_HOME)."""
+    out, texts = [], set()
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        for i, w in enumerate(r['warnings'][st].get('items', [])):
+            if w['text'] not in texts:
+                texts.add(w['text'])
+                if w['class'] == 'change':
+                    out.append((f'warnings/{st}/items#{i}',
+                                WARN_HOME.get(w['kind'], _OTHER)))
+    return out
 
 
 def report_page_held(path, r):
@@ -1291,13 +1481,15 @@ def report_page_held(path, r):
       group's data; and so does each fold of it, the group and each list
       folded in it, its <summary> what shows with it closed and its own
       body what opening it shows, so no word sits under another fold.
-    - Step 2's totals, each of its groups of locales whose rules differ
-      and its entries not read (data-s2) are shown once each, in the
+    - Step 2's totals, what their "not compared" counts, each of its
+      groups of locales whose rules differ and its entries not read
+      (data-s2) are shown once each, in the
       data's order, in their section, each saying, blanks collapsed,
       exactly the words page_rules_said rebuilds from the data.
-    - The six sections are there, once each, in the page's order; step
-      2's under the text's own title for it (audit.sh), with nothing
-      folded inside it. A part's section is the one whose <details>
+    - The seven sections are there, once each, in the page's order, each
+      open; step 2's under the text's own title for it (audit.sh), with
+      nothing folded inside it but a warning's card. A part's section is
+      the one whose <details>
       holds it; each sentence said whole, label and list said empty sits
       in its own (HOME). The page uses only the tags it is written with
       (PAGE_TAGS). Each section is a <details> right in the page's
@@ -1307,7 +1499,17 @@ def report_page_held(path, r):
       and each of its rows has two cells.
     - Every <details> has one <summary>; a list folded in a group sits in
       the group's own body; no element carries a hidden or a style
-      attribute.
+      attribute; the page has one <style>, with no attribute, and it is
+      PAGE_STYLE, the one reviewed.
+    - Each warning's card holds its <summary> with its own title, and its
+      own text, and no other element nor word.
+      Each warning of class "change" (each text once) is shown once, as
+      its card, in the section WARN_HOME gives its kind, any other kind
+      under "Other changes the run found", in each section in the order
+      the text gives them; that section also shows the state and
+      reason of each warnings block not reported or not run, and says
+      "(none)" only where every block was reported and none is there.
+    - Each tag, build and latest-elN is shown once, in the data's order.
     - Every other word of the page outside marks, labels' words, data-e,
       data-f, data-grp, data-s2, <title> and <style> is one of this
       check's own
@@ -1333,12 +1535,32 @@ def report_page_held(path, r):
             super().__init__(convert_charrefs=True)
             self.stack, self.marks, self.labels, self.loose = [], [], [], []
             self.fixed, self.empties, self.groups = [], [], []
-            self.s2, self.sections = [], []
+            self.s2, self.sections, self.cards = [], [], []
+            self.styles = []
             self.section = None
 
         def handle_starttag(self, tag, attrs):
             if tag not in PAGE_TAGS:
                 fail(f'a <{tag}>, which the page is not written with')
+            card = next((x for x in reversed(self.stack)
+                         if 'data-w' in x['a']), None)
+            if card is not None:
+                # A warning's card holds its <summary> with its title in
+                # it, and its text, nothing else: not a part of the page
+                # folded away under it.
+                w, at = card['a']['data-w'], dict(attrs)
+                up = self.stack[-1]
+                if not ((tag == 'summary' and up is card)
+                        or (tag == 'span' and up['tag'] == 'summary'
+                            and up['parent'] is card
+                            and at == {'data-p': w + '/title'})
+                        or (tag == 'pre' and up is card
+                            and at == {'data-p': w + '/text'})):
+                    fail(f'the card of {w} holds a <{tag}> {at}')
+            if tag == 'style':
+                # Its words read whole: exactly one <style>, no
+                # attributes, PAGE_STYLE.
+                self.styles.append([attrs, ''])
             if tag in self.VOID:
                 return
             a = {k: (v or '') for k, v in attrs}
@@ -1361,8 +1583,10 @@ def report_page_held(path, r):
             if 'data-p' in a or 'data-d' in a:
                 self.marks.append(node)
                 for x in self.stack:
-                    if 'data-l' in x['a']:
+                    if 'data-l' in x['a'] or 'data-w' in x['a']:
                         x['marks'].append(node)
+            if 'data-w' in a:
+                self.cards.append(node)
             if 'data-l' in a:
                 self.labels.append(node)
             if 'data-f' in a:
@@ -1379,7 +1603,12 @@ def report_page_held(path, r):
             if 'data-s2' in a:
                 self.s2.append(node)
             if tag == 'details':
-                if home == STEP2_SECTION:
+                up0 = self.stack[-1] if self.stack else None
+                card_in_body = ('data-w' in a and up0 is not None
+                                and 'secb' in up0['a'].get('class', '')
+                                .split() and up0['parent'] is not None
+                                and 'sec' in up0['parent'])
+                if home == STEP2_SECTION and not card_in_body:
                     # Step 2's parts are said open, none folded away.
                     fail("a <details> inside step 2's section")
                 node['fold'] = {'summary': [], 'body': [], 'heads': 0}
@@ -1439,6 +1668,10 @@ def report_page_held(path, r):
                     fail(f'the section {self.section!r} is not a <details> '
                          'of its own right in the page')
                 sec['sec'] = self.section
+                if 'open' not in sec['a']:
+                    # A section closed keeps its NOT RUN, its NOT VERIFIED
+                    # or its "(none)" from a reader until clicked.
+                    fail(f'the section {self.section!r} is not open')
             if tag == 'summary':
                 if not ''.join(node['text']).strip():
                     fail('a <summary> with no words to open it by')
@@ -1491,6 +1724,15 @@ def report_page_held(path, r):
         def handle_data(self, d):
             if self.stack and self.stack[-1]['tag'] == 'h2':
                 self.section += d
+            if self.stack and self.stack[-1]['tag'] == 'style':
+                self.styles[-1][1] += d
+            card = next((x for x in reversed(self.stack)
+                         if 'data-w' in x['a']), None)
+            if card is not None and d.strip():
+                w = card['a']['data-w']
+                if self.stack[-1]['a'].get('data-p') not in (
+                        w + '/title', w + '/text'):
+                    fail(f'the card of {w} holds the words {d.strip()!r}')
             for x in self.stack:
                 if 'data-grp' not in x['a']:
                     x['text'].append(d)
@@ -1512,10 +1754,16 @@ def report_page_held(path, r):
     # Every section, once, in its order: "is in the next section" says
     # where step 2's is.
     order = ['Locales added and removed', 'Locales whose sort order changed',
-             STEP2_SECTION, 'Not verified', 'How this was compared',
+             STEP2_SECTION, _OTHER, 'Not verified', 'How this was compared',
              'Confirm in PostgreSQL']
     if p.sections != order:
         fail(f'sections {p.sections}, not {order}')
+    # The styles: none that can keep a word out of sight.
+    if len(p.styles) != 1:
+        fail(f'{len(p.styles)} <style> elements')
+    if p.styles[0][0] or p.styles[0][1] != PAGE_STYLE:
+        fail('the <style> is not the one reviewed (PAGE_STYLE), or has '
+             f'attributes: {p.styles[0][0]}')
     # The page's own words outside marks, labels and fixed sentences: each
     # one of these, so that no sentence the data does not call for (a
     # count, "none", "sorts as before") reaches the page unseen.
@@ -1542,7 +1790,7 @@ def report_page_held(path, r):
         "\u2014 a machine's file made both sides read their upstream tags; "
         'why is under Not verified', ', and its metadata gives',
         'this reads', 'test(s)', 'also, in PostgreSQL:',
-        'Locales whose sort order changed', STEP2_SECTION}
+        'Locales whose sort order changed', STEP2_SECTION, _OTHER}
     for d in p.loose:
         d = re.sub(r'\s+', ' ', d).strip()
         if d and d not in loose_words:
@@ -1728,7 +1976,8 @@ def report_page_held(path, r):
     seen = {}
     # Which entry each SQL file's and each unchecked entry's label shows,
     # in page order: each once, in the data's order (shown_order below).
-    shown_order = {'sql': [], 'not checked': [], 'nv not checked': []}
+    shown_order = {'sql': [], 'not checked': [], 'nv not checked': [],
+                   'tag': [], 'build': [], 'latest': []}
     for lab in p.labels:
         key = lab['a']['data-l']
         if lab['label'] is None:
@@ -1887,6 +2136,16 @@ def report_page_held(path, r):
              f'{sorted(want.items())}')
     # A count of labels is not which entries they show: one file or group
     # shown twice and another left out keeps the count.
+    c_ok = r['compared']['state'] == 'reported'
+    for key, entries in (
+            ('tag', r['compared'].get('tags', []) if c_ok else []),
+            ('build', r['compared'].get('builds', {}).get('entries', [])
+             if c_ok else []),
+            ('latest', r['compared'].get('latest', {}).get('resolved', [])
+             if c_ok else [])):
+        if shown_order[key] != list(range(len(entries))):
+            fail(f'label {key!r} shows the entries {shown_order[key]}, the '
+                 f'data gives {len(entries)} in order')
     for key, entries in (('sql', s11.get('sql', {}).get('files', [])),
                          ('not checked',
                           s11.get('sql', {}).get('not_checked', [])),
@@ -1941,6 +2200,8 @@ def report_page_held(path, r):
 
     # Fixed sentences, and each value whose data calls for it.
     fixed = sorted(re.findall(r'data-f="([^"]*)"', page))
+    other_f = ['other ' + st for st in ('step0', 'step1', 'step2', 'step11')
+               if r['warnings'][st]['state'] != 'reported']
     sub = ('sub measured' if measured else 'sub unreported'
            if run['machines']['state'] == 'given' else 'sub sources')
     want_f = sorted(['disc', 'nv', sub]
@@ -1962,7 +2223,8 @@ def report_page_held(path, r):
                        and s11['sql']['files'] else [])
                     + ['block ' + st for st in ('step0', 'step1', 'step2',
                                                 'step11')
-                       if r['warnings'][st]['state'] == 'not reported'])
+                       if r['warnings'][st]['state'] == 'not reported']
+                    + other_f)
     if fixed != want_f:
         fail(f'fixed sentences {fixed}, the data calls for {want_f}')
     said_f = {
@@ -1978,12 +2240,15 @@ def report_page_held(path, r):
                 'old.out new.out',
         'block step0': "the machines' files", 'block step1': 'the two sides',
         'block step2': 'step 2', 'block step11': 'step 11',
+        'other step0': "the machines' files", 'other step1': 'the two sides',
+        'other step2': 'step 2', 'other step11': 'step 11',
         'changed not run': 'Only the measurements of the two machines show '
                            "which locales sort differently. Which locales' "
                            'sort rules changed is in the next section.',
         'step2 not here': __import__('filter_lc_collate_changes')
-                          .CODE_NOT_COMPARED_HERE + '; the character sets '
-                          'are not on this page.',
+                          .CODE_NOT_COMPARED_HERE + "; of step 2's "
+                          'comparison of the character sets, only its '
+                          'warnings are on this page.',
         'step2 heads': 'locales whose rules differ characters in the '
                        'changed rules',
         'changed': 'Indexes, ORDER BY, comparisons and range partitions on '
@@ -2072,6 +2337,8 @@ def report_page_held(path, r):
     for st in ('step0', 'step1', 'step2', 'step11'):
         if r['warnings'][st]['state'] == 'not reported':
             states.append((f'warnings/{st}/state', 'Not verified'))
+        if r['warnings'][st]['state'] != 'reported':
+            states.append((f'warnings/{st}/state', _OTHER))
     for place, b in (('step2/removed', rm), ('step2/rules', ru)):
         if b['state'] != 'reported':
             states.append((place + '/state', 'Locales added and removed'))
@@ -2139,6 +2406,10 @@ def report_page_held(path, r):
         gaps.append('compared/machines')
     if not nc:
         gaps.append('not verified')
+    if not [x for x in want_w_of(r) if x[1] == _OTHER] and all(
+            r['warnings'][st]['state'] == 'reported'
+            for st in ('step0', 'step1', 'step2', 'step11')):
+        gaps.append('other changes')
     said = re.findall(r'data-e="([^"]*)"', page)
     for n in p.empties:
         import filter_lc_collate_changes as flc
@@ -2168,24 +2439,35 @@ def report_page_held(path, r):
     for place in nc:
         if 'items#' in place and len(shown(place + '/text')) != 1:
             fail(f'{place} without its text')
+    # Each warning's card whole: its own title and its text, nothing
+    # else; with each title once in its section (below), each text is.
+    for card_node in p.cards:
+        w = card_node['a']['data-w']
+        held_here = [m['a'].get('data-p') for m in card_node['marks']]
+        if held_here != [w + '/title', w + '/text']:
+            fail(f'the card of {w} holds {held_here}')
 
     # The warnings of class "change" this part places, each once in its
     # section; no other warning outside Not verified.
-    homes = {'not_on_new_machine': 'Locales added and removed',
-             'collation_version_same': 'How this was compared'}
     want_w, texts = [], set()
     for st in ('step0', 'step1', 'step2', 'step11'):
         for i, w in enumerate(r['warnings'][st].get('items', [])):
             if w['text'] not in texts:
                 texts.add(w['text'])
-                if w['kind'] in homes:
+                if w['class'] == 'change':
                     want_w.append((f'warnings/{st}/items#{i}',
-                                   homes[w['kind']]))
+                                   WARN_HOME.get(w['kind'], _OTHER)))
     got_w = [(m['a']['data-p'][:-len('/title')], m['section'])
              for m in p.marks if m['a'].get('data-p', '').endswith('/title')
              and 'items#' in m['a']['data-p']
              and m['section'] != 'Not verified']
-    if got_w != want_w:
+    # One list per section, the page's against the data's, in the order
+    # the text gives the warnings (steps in order, each step's in its
+    # own): a card missing, doubled, in another section or out of order
+    # changes one.
+    if any([x for x, s in got_w if s == sec]
+           != [x for x, s in want_w if s == sec]
+           for sec in {s for _, s in want_w + got_w}):
         fail(f'warnings placed {got_w}, the data gives {want_w}')
     if not measured and [m for m in p.marks if m['a'].get('data-p', '')
                          .startswith('step11/counts/')

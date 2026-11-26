@@ -5393,8 +5393,8 @@ class TheSummaryPage(_Folder):
     of a report that no run of the suite prints, each a report load()
     accepts: written by report_data.main() from this module's files of a
     run, then one part changed and read back through load(). And pages
-    broken one way at a time, each refused, beside a change of style the
-    check does not hold; and report_html.main()."""
+    broken one way at a time, each refused, beside a change the check
+    does not hold (a line break); and report_html.main()."""
 
     def loaded(self, r):
         """`r` written as the run's data file and read back by load()."""
@@ -5469,11 +5469,29 @@ class TheSummaryPage(_Folder):
         warnings_file(self.d, 2, ['same_commit'])
         return self.written(order_words='same commit tag tag tags')
 
-    def page(self, r):
-        """The page of `r` (read back by load() first), where the check
-        looks for it, held; its text, the tags taken out."""
+    def on_every_kind(self):
+        """Two machines' files, and a warning of every kind
+        report_data.KINDS knows, each block reported: so the page shows
+        each warning of class "change" in its section and each of class
+        "not checked" under Not verified. Not read back by load(), whose
+        check of each warning's data against the run these do not pass;
+        the page check reads only their kind, class, title and text."""
+        r = self.on_machines()
+        for st in ('step0', 'step1', 'step2'):
+            r['warnings'][st] = {'state': 'reported', 'items': []}
+        r['warnings']['step11'] = {'state': 'reported', 'items': [
+            {'kind': k, 'class': v[0], 'title': f'The title of {k}',
+             'data': {}, 'text': f'!! The text of {k}.'}
+            for k, v in rd.KINDS.items()]}
+        return r
+
+    def page(self, r, load=True):
+        """The page of `r` (read back by load() first, unless not
+        `load`), where the check looks for it, held; its text, the tags
+        taken out."""
         import report_html
-        r = self.loaded(r)
+        if load:
+            r = self.loaded(r)
         path = os.path.join(self.d, f'report.{PAIR}.json')
         with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
             f.write(report_html.render(r))
@@ -5832,15 +5850,17 @@ class TheSummaryPage(_Folder):
         self.assertIn(
             "Which locales' sort rules changed (step 2) 13 name(s), locale "
             'files and locale.alias aliases: 10 the same, 1 differ, 2 not '
-            "compared. Not compared here: the code that compiles and "
-            "compares the rules (localedef's and strcoll's); the character "
-            'sets are not on this page. Every character'
+            'compared. Of the 2 not compared: 2 only at glibc-2.28. '
+            "Not compared here: the code that compiles and "
+            "compares the rules (localedef's and strcoll's); of step 2's "
+            'comparison of the character sets, only its warnings are on '
+            'this page. Every character'
             f' of the changed rules: {f} locales '
             'whose rules differ characters in the changed rules or_IN 2 '
             'character(s) named by the lines that changed or are read '
             f'otherwise; listed in {f} a changed line decides how other '
             'lines are read or where other rules sort, so every rule can '
-            'change Not verified', self.page(self.on_tags()))
+            'change Other changes the run found', self.page(self.on_tags()))
         text = self.page(self.on_rules())
         self.assertIn(
             '15 name(s), locale files and locale.alias aliases: 10 the '
@@ -5858,7 +5878,7 @@ class TheSummaryPage(_Folder):
         r['step2']['rules_characters']['rows'][2] = [
             'sv_SE', 'differs', 'no', 'not known: a copy names no file']
         self.assertIn('sv_SE which characters is not known: a copy names no '
-                      'file Not verified', self.page(r))
+                      'file Other changes the run found', self.page(r))
         r['step2']['rules_characters'] = {
             'state': 'not reported',
             'why': f'the step wrote no step2_rules_characters.{PAIR}.tsv'}
@@ -5867,10 +5887,12 @@ class TheSummaryPage(_Folder):
                       self.page(r))
         r = self.on_tags()
         self.with_rules(r, [], [])
-        self.assertIn('not on this page. Rules differ: none. Not verified',
+        self.assertIn('are on this page. Rules differ: none. Other changes '
+                      'the run found',
                       self.page(r))
         self.assertIn("Which locales' sort rules changed (step 2) NOT "
-                      'COMPARED - the two tags are one commit Not verified',
+                      'COMPARED - the two tags are one commit Other changes '
+                      'the run found',
                       self.page(self.on_one_commit()))
 
     def test_the_characters_of_the_changed_rules(self):
@@ -5888,7 +5910,7 @@ class TheSummaryPage(_Folder):
         self.assertIn(
             'or_IN characters in the changed rules (5): \u25cc\u0300 U+0300 '
             'COMBINING GRAVE ACCENT A U+0041 LATIN CAPITAL LETTER A U+0001 '
-            'U+110000 U+12345678 Not verified', self.page(r))
+            'U+110000 U+12345678 Other changes the run found', self.page(r))
         cps = [0x0001] * 3 + list(range(0x0100, 0x0100 + 70))
         r = self.with_rules(self.on_tags(), [
             {'names': ['or_IN'], 'every_rule': False,
@@ -5903,7 +5925,8 @@ class TheSummaryPage(_Folder):
         self.assertIn('U+013B LATIN CAPITAL LETTER L WITH CEDILLA A sample: '
                       'the first 60 that draw as a '
                       'character. and 13 more, all listed in '
-                      f'step2_rules_characters.{PAIR}.tsv Not verified', text)
+                      f'step2_rules_characters.{PAIR}.tsv Other changes the '
+                      'run found', text)
         self.assertNotIn('U+013C', text)
         r['step2']['rules_characters'] = {
             'state': 'not reported',
@@ -5911,7 +5934,8 @@ class TheSummaryPage(_Folder):
         text = self.page(r)
         self.assertIn('Every character of the changed rules: NOT REPORTED - '
                       'the step wrote no step2_rules_characters.', text)
-        self.assertIn('character. and 13 more Not verified', text)
+        self.assertIn('character. and 13 more Other changes the run found',
+                      text)
 
     def on_unread(self):
         """Two machines, and two entries of a machine's sources step 2 did
@@ -5931,7 +5955,7 @@ class TheSummaryPage(_Folder):
         self.assertIn(
             "Not compared, not read among a machine's locale sources (2): "
             'de_DE~ (a backup on the old machine) xx (a link on the old '
-            'machine; a link on the new machine) Not verified',
+            'machine; a link on the new machine) Other changes the run found',
             self.page(self.on_unread()))
 
     def test_a_page_broken_is_refused(self):
@@ -5940,8 +5964,9 @@ class TheSummaryPage(_Folder):
         values, values of an entry in another order, a card, a warning's
         text, a state, a sentence the data calls for or the sentence of
         another route, words the page never says, 0 for what was not
-        measured, a list emptied without saying so. And a change of style,
-        which the check does not hold and passes."""
+        measured, a list emptied without saying so, a warning's card
+        without its text or out of order, a style not the one reviewed. And
+        a line break, which the check does not hold and passes."""
         import report_html
         path = os.path.join(self.d, f'report.{PAIR}.json')
         cases = (
@@ -6135,7 +6160,7 @@ class TheSummaryPage(_Folder):
             ('on_tags', r'(<h2>Not verified</h2></summary><div class="secb">)',
              lambda m: m.group(1) + '<p>locales whose rules differ</p>',
              'does not know'),
-            ('on_tags', r'are not on this page\.', lambda m: 'are compared '
+            ('on_tags', r'are on this page\.', lambda m: 'are compared '
              'below.', 'fixed sentence'),
             ('on_tags', r'<p class="hint" data-f="step2 not here">.*?</p>',
              lambda m: '', 'fixed sentences'),
@@ -6200,7 +6225,7 @@ class TheSummaryPage(_Folder):
             ('on_rules', r'(<tr data-f="step2 heads">.*?</tr>)(.*?)'
              r'(</table>)', lambda m: m.group(2) + m.group(1) + m.group(3),
              'first row'),
-            ('on_tags', r'</div></details><details class="sec"><summary>'
+            ('on_tags', r'</div></details><details class="sec" open><summary>'
              r'(<h2>How this was compared</h2>)</summary>', lambda m:
              '</div>' + m.group(1), 'of its own right in the page'),
             ('on_cv_unknown', r' <span data-p="compared/collation_version/'
@@ -6214,8 +6239,63 @@ class TheSummaryPage(_Folder):
              'not written with'),
             ('on_rules', r'<tr data-s2="differ#0">', lambda m:
              '<tr data-s2="differ#0"><td></td>', 'cells'),
-            ('on_tags', r'font-size:22px', lambda m: 'font-size:23px',
-             None))
+            ('on_every_kind', r'<details class="card" data-w="[^"]*">'
+             r'<summary><span[^>]*>The title of use_error_new</span>.*?'
+             r'</details>', lambda m: '', 'placed'),
+            ('on_every_kind', r'<details class="card" data-w="[^"]*">'
+             r'<summary><span[^>]*>The title of glibc_refused</span>.*?'
+             r'</details>', lambda m: '', 'placed'),
+            ('on_every_kind', r'<details class="card" data-w="[^"]*">'
+             r'<summary><span[^>]*>The title of c_utf8_differs</span>.*?'
+             r'</details>', lambda m: m.group(0) * 2, 'placed'),
+            ('on_tags', r'<details class="sec" open>(<summary><h2>Confirm)',
+             lambda m: '<details class="sec">' + m.group(1), 'not open'),
+            ('on_tags', r'<style>', lambda m: '<style>.nd{display:none}',
+             'not the one reviewed'),
+            ('on_tags', r'<style>', lambda m: '<style>main{color:var(--bg)}',
+             'not the one reviewed'),
+            ('on_every_kind', r'(<span data-p="(warnings/step11/items#\d+)/'
+             r'title">The title of use_error_new</span></summary>)<pre '
+             r'data-p="[^"]*">.*?</pre>', lambda m: m.group(1),
+             'holds'),
+            ('on_every_kind', r'(<span data-p="warnings/step11/items#\d+/'
+             r'title">The title of not_on_new_machine</span></summary>)(<pre '
+             r'data-p="[^"]*">.*?</pre>)(</details>)',
+             lambda m: m.group(1) + m.group(3) + m.group(2), 'holds'),
+            ('on_every_kind', r'(<details class="card" data-w="[^"]*">'
+             r'<summary><span[^>]*>The title of use_error_new</span>.*?'
+             r'</details>)'
+             r'(<details class="card" data-w="[^"]*"><summary><span[^>]*>The '
+             r'title of use_error_both</span>.*?</details>)',
+             lambda m: m.group(2) + m.group(1), 'placed'),
+            ('on_tags', r'<div class="nd-card">The warnings of <span '
+             r'data-f="other step11">.*?</div></div>', lambda m: '',
+             'fixed sentences'),
+            ('on_tags', r'(data-f="other step11">step 11</span> <div '
+             r'class="nd">)<b data-p="warnings/step11/state">NOT RUN</b>',
+             lambda m: m.group(1), 'warnings/step11/state not shown once'),
+            ('on_tags', r'(data-f="other step11">step 11</span> <div '
+             r'class="nd"><b data-p="warnings/step11/state">NOT RUN</b>) '
+             r'&mdash; <span data-p="warnings/step11/why">[^<]*</span>',
+             lambda m: m.group(1), 'warnings/step11/why not shown once'),
+            ('on_tags', r'Of the 2 not compared: 2 only',
+             lambda m: 'Of the 2 not compared: 1 only',
+             'step 2 not compared said'),
+            ('on_tags', r'(<li data-l="tag">.*?</li>)<li data-l="tag">.*?'
+             r'</li>', lambda m: m.group(1) * 2, 'shows the entries'),
+            ('on_builds', r'(<li data-l="build">.*?</li>)<li data-l="build">'
+             r'.*?</li>', lambda m: m.group(1) * 2, 'shows the entries'),
+            ('on_every_kind', r'(The title of c_utf8_differs</span>'
+             r'</summary>)', lambda m: m.group(1) + '<p class="hint" data-f='
+             '"step2 not here">x</p>', 'holds a <p>'),
+            ('on_every_kind', r'(The title of c_utf8_differs</span>'
+             r'</summary><pre data-p="[^"]*">[^<]*</pre>)',
+             lambda m: m.group(1) + 'test(s)', 'holds the words'),
+            ('on_tags', r'</head>', lambda m: '<style media="all">[data-s2]'
+             '{display:none}</style></head>', '2 <style>'),
+            ('on_tags', r'</head>', lambda m: '<STYLE>[data-s2]{display:none}'
+             '</STYLE></head>', '2 <style>'),
+            ('on_tags', r'<main>', lambda m: '<main>\n', None))
         for n, (base, rx, repl, why) in enumerate(cases):
             with self.subTest(n=n, rx=rx):
                 r = getattr(self, base)()
@@ -6229,6 +6309,121 @@ class TheSummaryPage(_Folder):
                 else:
                     with self.assertRaisesRegex(AssertionError, why):
                         _harness.report_page_held(path, r)
+
+    def test_every_warning_in_its_section(self):
+        """A warning of every kind: each of class "change" once, as its
+        card, in its section (the locales gone, the comparison, step 2's,
+        or "Other changes the run found" for every other kind); each of
+        class "not checked" under Not verified. And both tables of where
+        a warning goes, the page's and the check's, name only kinds of
+        class "change"."""
+        import report_html
+        text = self.page(self.on_every_kind(), load=False)
+
+        def section(kind):
+            i = text.index(f'The title of {kind} ')
+            heads = [h for h in (
+                'Locales added and removed', 'Locales whose sort order '
+                'changed', "Which locales' sort rules changed (step 2)",
+                'Other changes the run found', 'Not verified', 'How this was '
+                'compared', 'Confirm in PostgreSQL')
+                if text.rfind(h, 0, i) >= 0]
+            return max(heads, key=lambda h: text.rfind(h, 0, i))
+        for kind, where in (
+                ('not_on_new_machine', 'Locales added and removed'),
+                ('glibc_refused', 'Locales added and removed'),
+                ('collation_version_same', 'How this was compared'),
+                ('c_utf8_differs', "Which locales' sort rules changed "
+                                   '(step 2)'),
+                ('charmap_distro_buildable', "Which locales' sort rules "
+                                             'changed (step 2)'),
+                ('use_error_new', 'Other changes the run found'),
+                ('ctype_characters_changed', 'Other changes the run found'),
+                ('libc_stale', 'Other changes the run found'),
+                ('same_commit', 'Not verified'),
+                ('ctype_not_checked', 'Not verified')):
+            with self.subTest(kind=kind):
+                self.assertEqual(text.count(f'The title of {kind} '), 1)
+                self.assertEqual(section(kind), where)
+        # And where the record of how it compared, or of step 2's rules,
+        # is not reported: their cards are still in their section (the
+        # locales gone, with step 11 not reported: on_machines_unreported).
+        step2 = "Which locales' sort rules changed (step 2)"
+        for part, kinds in (
+                ('compared', (('collation_version_same',
+                               'How this was compared'),)),
+                ('rules', (('c_utf8_differs', step2),
+                           ('charmap_distro_buildable', step2)))):
+            r = self.on_every_kind()
+            off = {'state': 'not reported', 'why': 'no file'}
+            if part == 'compared':
+                r['compared'] = off
+            else:
+                r['step2']['rules'] = off
+            text = self.page(r, load=False)
+            for kind, where in kinds:
+                with self.subTest(part=part, kind=kind):
+                    self.assertEqual(text.count(f'The title of {kind} '), 1)
+                    self.assertEqual(section(kind), where)
+        change = {k for k, v in rd.KINDS.items() if v[0] == 'change'}
+        self.assertEqual(len(change), 21)
+        for table in (report_html.WARN_HOME, _harness.WARN_HOME):
+            self.assertLessEqual(set(table), change)
+
+    def test_other_changes_says_what_it_could_not_hold(self):
+        """"Other changes the run found": each warnings block the run did
+        not report or run, with its state and reason, since its warnings
+        cannot be there; "(none)" only where every block was reported and
+        no warning is there. Every section open."""
+        text = self.page(self.on_tags())
+        self.assertIn(
+            "Other changes the run found The warnings of the machines' "
+            'files NOT RUN - no --old-node and --new-node The warnings of '
+            'the two sides NOT REPORTED - the step wrote no '
+            f'step1.{PAIR}.warnings.jsonl', text)
+        self.assertIn("The warnings of step 11 NOT RUN - no machines' files "
+                      'Not verified', text)
+        r = self.on_every_kind()
+        r['warnings']['step11']['items'] = [
+            x for x in r['warnings']['step11']['items']
+            if x['class'] == 'not checked']
+        self.assertIn('Other changes the run found (none) Not verified',
+                      self.page(r, load=False))
+        import report_html
+        page = report_html.render(self.on_tags())
+        self.assertEqual(page.count('<details class="sec" open>'), 7)
+        self.assertEqual(page.count('<details class="sec"'), 7)
+
+    def test_the_pinned_style_hides_nothing(self):
+        """The style every page must carry (_harness.PAGE_STYLE) is one
+        style_hides finds nothing in."""
+        self.assertEqual(_harness.style_hides(_harness.PAGE_STYLE), [])
+
+    def test_what_not_compared_counts(self):
+        """Under step 2's totals, what their "not compared" counts: the
+        files of one side only and, the rest, the names step 2's
+        warnings give a reason for, a number only where those warnings
+        are reported (load() holds the sum), else said as named in
+        warnings NOT REPORTED."""
+        r = self.on_tags()
+        t = r['step2']['rules']['totals']
+        t.update(names=t['names'] + 1, not_compared=t['not_compared'] + 1)
+        self.assertIn('Of the 3 not compared: 2 only at glibc-2.28; any '
+                      'other, named in the warnings of step 2, which are NOT '
+                      'REPORTED. Not compared here', self.page(r))
+        # As load() holds it: step 2's warnings name the one left.
+        r['warnings']['step2'] = {'state': 'reported', 'items': [
+            {'kind': 'rules_not_compared', 'class': 'not checked',
+             'title': 'Sort rules of 1 locale, listed in the summary',
+             'data': {'groups': [{'names': ['xx_YY'], 'why': 'w'}]},
+             'text': '!! Sort rules not compared: xx_YY (w).'}]}
+        text = self.page(r, load=False)
+        self.assertIn('Of the 3 not compared: 2 only at glibc-2.28; 1 not '
+                      'compared, each with its reason under Not verified. '
+                      'Not compared here', text)
+        self.assertIn('Sort rules of 1 locale, listed in the summary Sort '
+                      'rules not compared: xx_YY (w).',
+                      text[text.index('Not verified What this run'):])
 
     def test_written_beside_the_data_file(self):
         """main(): the page beside the data file it reads, nothing
