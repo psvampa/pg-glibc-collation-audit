@@ -617,11 +617,29 @@ def step2_words(noun, machines=False):
 # result is code, which no step compares: a `!!` under "What was compared"
 # says so once (glibc_locale_data.CODE_NOT_COMPARED), and this line points to
 # it.
-NOT_COMPARED_HERE = (
+# The summary page says its first part too (report_html.sources).
+CODE_NOT_COMPARED_HERE = (
     "Not compared here: the code that compiles and compares the rules "
-    "(localedef's and strcoll's), as said under 'What was compared'; the "
+    "(localedef's and strcoll's)")
+NOT_COMPARED_HERE = (
+    CODE_NOT_COMPARED_HERE + ", as said under 'What was compared'; the "
     "character sets are "
     "compared below.")
+
+# The words this step prints of its rules, which the summary page
+# (report_html.sources) says too, so the two cannot drift apart.
+TOTALS_WORDS = ("{names} name(s), locale files and locale.alias aliases: "
+                "{same} the same, {differ} differ, {not_compared} not "
+                "compared.")
+LISTED_WORDS = 'characters in the changed rules'
+COUNTED_WORDS = ("character(s) named by the lines that changed or are read "
+                 "otherwise")
+NONE_NAMED_WORDS = "the lines that count name no character"
+NOT_KNOWN_WORDS = "which characters is not known:"
+EVERY_RULE_WORDS = ("a changed line decides how other lines are read or "
+                    "where other rules sort, so every rule can change")
+UNREAD_WORDS = "Not compared, not read among a machine's locale sources"
+NONE_DIFFER_WORDS = "Rules differ: none."
 
 
 # What PostgreSQL does with C.UTF-8, said once, by this step: a libc
@@ -729,28 +747,26 @@ def print_differs(groups, tsv_path):
     is said in words."""
     print()
     if not groups:
-        print("Rules differ: none.")
+        print(NONE_DIFFER_WORDS)
         return
     print(f"Rules differ ({sum(len(x['names']) for x in groups)}):")
     for x in groups:
         print(_fill(', '.join(x['names']), '  '))
         c = x['characters']
         if c['state'] == 'not known':
-            print(_fill(f"which characters is not known: {c['why']}"))
+            print(_fill(f"{NOT_KNOWN_WORDS} {c['why']}"))
         elif c['state'] == 'none named':
-            print(_fill("the lines that count name no character"))
+            print(_fill(NONE_NAMED_WORDS))
         elif c['state'] == 'counted':
-            print(_fill(f"{c['count']} character(s) named by the lines that "
-                        f"changed or are read otherwise; listed in "
+            print(_fill(f"{c['count']} {COUNTED_WORDS}; listed in "
                         f"{tsv_path}"))
         elif c['state'] == 'listed':
             print_characters([chr(v) if v < 0x110000 else v
-                              for v in c['codepoints']])
+                              for v in c['codepoints']], label=LISTED_WORDS)
         else:
             raise ValueError(f"characters {c!r}")
         if x['every_rule']:
-            print(_fill("a changed line decides how other lines are read or "
-                        "where other rules sort, so every rule can change"))
+            print(_fill(EVERY_RULE_WORDS))
 
 
 def characters_rows(got, differs):
@@ -1138,10 +1154,7 @@ def _main(opts):
         totals = {'names': len(got), 'same': n_same,
                   'differ': len(differs),
                   'not_compared': len(got) - n_same - len(differs)}
-        print(_fill(f"{totals['names']} name(s), locale files and "
-                    f"locale.alias aliases: {totals['same']} the same, "
-                    f"{totals['differ']} differ, "
-                    f"{totals['not_compared']} not compared.", '  '))
+        print(_fill(TOTALS_WORDS.format(**totals), '  '))
         print(_fill(NOT_COMPARED_HERE, '  '))
         groups = differ_groups(got, differs)
         print_differs(groups, tsv)
@@ -1164,8 +1177,7 @@ def _main(opts):
                       for n, w in sorted(unread.items())]
         if unread_rec:
             print()
-            print(_fill(f"Not compared, not read among a machine's locale "
-                        f"sources ({len(unread_rec)}): "
+            print(_fill(f"{UNREAD_WORDS} ({len(unread_rec)}): "
                         + ', '.join(f"{x['name']} ({'; '.join(x['why'])})"
                                     for x in unread_rec),
                         '', '  '))

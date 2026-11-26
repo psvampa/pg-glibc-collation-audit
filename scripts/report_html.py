@@ -7,9 +7,11 @@ changed.
 A summary, not a copy of the text: the counts at the top, the locales
 added and removed, the locales whose sort order changed (each group step
 11 found, with its characters drawn, what step 11 could not settle for it
-and whether an SQL file checks its order), what the run did not verify,
-how it compared and how to confirm in PostgreSQL. So that a check can
-hold the page to the data file (tests/_harness.report_page_held):
+and whether an SQL file checks its order), what changed in the sort rules
+of the locale sources (step 2, in the words it prints them), what the run
+did not verify, how it compared and how to confirm in PostgreSQL. So
+that a check can hold the page to the data file
+(tests/_harness.report_page_held):
   - a value of the data file shown in the body outside a group of
     locales (data-grp, below) is marked with its place there
     (data-p="step11/counts/changed": '/' a key, '#' an index); a closed
@@ -21,14 +23,17 @@ hold the page to the data file (tests/_harness.report_page_held):
     marked data-t), so the words beside a value can be held too;
   - a sentence the page says whole is marked data-f with its name;
   - a list that holds nothing says so where the list would be ("(none)",
-    or "(no SQL file was written)"), marked data-e with what the list is;
+    "(no SQL file was written)", or step 2's "Rules differ: none."),
+    marked data-e with what the list is;
   - a block the run did not do or could not know shows its state in
     capitals, with its reason where the data file gives one, never a 0 or
     an empty list. (A locale step 2 found new and could not spell is a
     state of that locale, shown in lower case beside its name.)
   - a group of locales whose sort order changed is marked data-grp with
     its place among step 11's groups; the check holds its text whole,
-    rebuilt from that group's data.
+    rebuilt from that group's data; so are step 2's totals, each of its
+    groups of locales whose rules differ and its entries not read
+    (data-s2, with their place).
 The page's <title> repeats the two sides unmarked.
 
 usage: report_html.py REPORT_JSON
@@ -39,6 +44,7 @@ import os
 import sys
 import unicodedata
 
+import filter_lc_collate_changes as flc
 import locale_order
 import report_data
 
@@ -784,6 +790,13 @@ def cell(tok, named=False):
     cp = code_point(tok)
     if cp is None:
         return f'<span class="ch"><code>{esc(tok)}</code></span>'
+    return cp_cell(cp, tok, named)
+
+
+def cp_cell(cp, tok, named=False):
+    """Code point CP drawn as cell draws it, its code spelt TOK. Step 2
+    gives its characters as whole numbers with no upper bound
+    (report_data._rules), past what report_data.STRING reads."""
     g = glyph(cp)
     name = unicodedata.name(chr(cp), '') if cp <= 0x10FFFF else ''
     return (
@@ -1021,8 +1034,9 @@ def changed_order(r):
     if s11['state'] != 'reported':
         out.append(not_done(s11['state'], 'step11', why_of('step11', s11)))
         out.append(fixed('changed not run', 'Only the measurements of the '
-                         'two machines show which locales sort differently.',
-                         'p', 'hint'))
+                         'two machines show which locales sort differently. '
+                         "Which locales' sort rules changed is in the next "
+                         'section.', 'p', 'hint'))
     elif s11['findings']['state'] != 'reported':
         fi = s11['findings']
         out.append(not_done(fi['state'], 'step11/findings',
@@ -1045,6 +1059,102 @@ def changed_order(r):
             tag='p', cls='hint'))
         out += [group_html(r, i, g)
                 for i, g in enumerate(s11['findings']['groups'])]
+    out.append('</div></details>')
+    return ''.join(out)
+
+
+def rules_file(r):
+    return 'step2_rules_characters.' + r['pair']['slug'] + '.tsv'
+
+
+def rules_row(r, i, d):
+    """One group of step 2's locales whose rules differ, in the words step
+    2 prints it (filter_lc_collate_changes.print_differs): its names, and
+    the characters of its changed rules: drawn where step 2 lists them
+    (past SAMPLE, a sample of the first that draw, then how many more);
+    their count where every rule can change; or the words for none named
+    or not known, with the reason; then, where every rule can change,
+    step 2's sentence saying so. Where the characters file is not
+    reported, the row does not name it: the label above says its state."""
+    c = d['characters']
+    listed = r['step2']['rules_characters']['state'] == 'reported'
+    if c['state'] == 'listed':
+        cps = c['codepoints']
+        sample = len(cps) > SAMPLE
+        shown = [x for x in cps if glyph(x)][:SAMPLE] if sample else cps
+        what = (f'<div>{esc(flc.LISTED_WORDS)} ({len(cps):,}):</div>'
+                '<div class="chars named">'
+                + ' '.join(cp_cell(x, f'U+{x:04X}', True) for x in shown)
+                + '</div>')
+        if sample:
+            what += (f'<p class="hint">A sample: the first {len(shown)} that '
+                     'draw as a character.</p>')
+        if len(cps) > len(shown):
+            what += (f'<p class="more">and {len(cps) - len(shown):,} more'
+                     + (f', all listed in <code>{esc(rules_file(r))}</code>'
+                        if listed else '') + '</p>')
+    elif c['state'] == 'counted':
+        what = (f'{c["count"]:,} {esc(flc.COUNTED_WORDS)}'
+                + (f'; listed in <code>{esc(rules_file(r))}</code>'
+                   if listed else ''))
+    elif c['state'] == 'none named':
+        what = esc(flc.NONE_NAMED_WORDS)
+    else:
+        what = f'{esc(flc.NOT_KNOWN_WORDS)} {esc(c["why"])}'
+    if d['every_rule']:
+        what += f'<p class="hint">{esc(flc.EVERY_RULE_WORDS)}</p>'
+    return (f'<tr data-s2="differ#{i}"><td>{esc(", ".join(d["names"]))}'
+            f'</td><td>{what}</td></tr>')
+
+
+def sources(r):
+    """What step 2 found of the sort rules in each locale's sources, under
+    the text's title for it, in the words it prints them: its totals,
+    what it does not compare and what this page does not show of it (the
+    character sets), each group of locales whose rules differ with the
+    characters of the changed rules, and the entries of a machine's
+    sources it did not read, each with its reason; or its state and
+    reason where it compared nothing or its record is not reported. Its
+    totals, its groups and its entries not read are marked data-s2 with
+    their place, each said whole."""
+    ru = r['step2']['rules']
+    out = ['<details class="sec" open><summary><h2>Which locales&#x27; '
+           'sort rules changed (step 2)</h2></summary><div class="secb">']
+    if ru['state'] != 'reported':
+        out.append(not_done(ru['state'], 'step2/rules',
+                            why_of('step2/rules', ru)))
+        out.append('</div></details>')
+        return ''.join(out)
+    t = ru['totals']
+    out.append('<p data-s2="totals">' + esc(flc.TOTALS_WORDS.format(
+        **{k: f'{v:,}' for k, v in t.items()})) + '</p>')
+    out.append(fixed('step2 not here', esc(flc.CODE_NOT_COMPARED_HERE)
+                     + '; the character sets are not on this page.', 'p',
+                     'hint'))
+    if ru['differ']:
+        rc = r['step2']['rules_characters']
+        out.append(label(
+            'rules file', 'Every character of the changed rules:',
+            ' <code>' + made('rules file', rules_file(r)) + '</code>'
+            if rc['state'] == 'reported' else ' '
+            + not_done(rc['state'], 'step2/rules_characters',
+                       why_of('step2/rules_characters', rc)),
+            tag='p', cls='hint'))
+        out.append('<table>'
+                   + fixed('step2 heads', '<th>locales whose rules differ'
+                           '</th> <th>' + esc(flc.LISTED_WORDS) + '</th>',
+                           'tr')
+                   + ''.join(rules_row(r, i, d)
+                             for i, d in enumerate(ru['differ']))
+                   + '</table>')
+    else:
+        out.append(empty('step2/rules/differ', flc.NONE_DIFFER_WORDS))
+    if ru['unread']:
+        out.append(
+            f'<div class="gap" data-s2="unread"><b>{esc(flc.UNREAD_WORDS)} '
+            f'({len(ru["unread"]):,}):</b><ul>' + ''.join(
+                f'<li>{esc(u["name"])} ({esc("; ".join(u["why"]))})</li>'
+                for u in ru['unread']) + '</ul></div>')
     out.append('</div></details>')
     return ''.join(out)
 
@@ -1167,6 +1277,7 @@ def render(r):
         tiles(r),
         added_removed(r),
         changed_order(r),
+        sources(r),
         '<details class="sec" open><summary><h2>Not verified</h2></summary>'
         '<div class="secb">'
         + fixed(

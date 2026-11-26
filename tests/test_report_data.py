@@ -5636,7 +5636,7 @@ class TheSummaryPage(_Folder):
             'U+0061 / A U+0041 Pairs compared only by letters and case; '
             'accents NOT COMPARED here. 1 more pair(s) may be told apart '
             'differently; what was measured cannot decide: a U+0061 and '
-            'bytes 80 Not verified', text)
+            "bytes 80 Which locales' sort rules changed (step 2)", text)
         self.assertIn('6 things NOT verified', text)
         # A list longer than the page draws: a sample of what draws, how
         # many more and where; and more undecided pairs than it shows.
@@ -5656,7 +5656,8 @@ class TheSummaryPage(_Folder):
             'and 196 more, all listed in measured_order_characters.'
             f'{PAIR}.tsv Not settled', text)
         self.assertIn('J U+004A and K U+004B and 2 more, all listed in '
-                      f'measured_order_characters.{PAIR}.tsv Not verified',
+                      f'measured_order_characters.{PAIR}.tsv Which '
+                      "locales' sort rules changed (step 2)",
                       text)
         # The characters file not reported: said once, and no list points
         # to it.
@@ -5683,7 +5684,8 @@ class TheSummaryPage(_Folder):
                       'character(s) moved', text)
         self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks these '
                       'locales - PostgreSQL imports no collation of its '
-                      'encoding, ISO-8859-1. Not verified', text)
+                      "encoding, ISO-8859-1. Which locales' sort rules "
+                      'changed (step 2)', text)
         self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks sv_SE '
                       '- PostgreSQL imports no collation of its encoding, '
                       'ISO-8859-1 How this was compared', text)
@@ -5692,7 +5694,8 @@ class TheSummaryPage(_Folder):
         r['step11']['sql'] = {'state': 'not reported', 'why': 'no data file'}
         text = self.page(r)
         self.assertIn('Whether an SQL file checks these locales: NOT '
-                      'REPORTED (see Confirm in PostgreSQL). Not verified',
+                      'REPORTED (see Confirm in PostgreSQL). Which '
+                      "locales' sort rules changed (step 2)",
                       text)
         self.assertNotIn('NOT VERIFIED in PostgreSQL', text)
         self.assertIn('4 things NOT verified', text)
@@ -5751,14 +5754,16 @@ class TheSummaryPage(_Folder):
         text = self.page(self.on_tags())
         self.assertIn("Locales whose sort order changed NOT RUN - no "
                       "machines' files Only the measurements of the two "
-                      "machines show which locales sort differently. Not "
-                      "verified", text)
+                      "machines show which locales sort differently. Which "
+                      "locales' sort rules changed is in the next section. "
+                      "Which locales' sort rules changed (step 2)", text)
         r = self.on_machines()
         r['step11']['findings'] = {'state': 'not reported',
                                    'why': 'no data file'}
         text = self.page(r)
         self.assertIn('Locales whose sort order changed NOT REPORTED - no '
-                      'data file Not verified', text)
+                      "data file Which locales' sort rules changed (step "
+                      "2)", text)
         r = self.on_machines()
         r['step11']['findings']['groups'] = []
         r['step11']['verdicts']['sv_SE'] = {
@@ -5768,7 +5773,8 @@ class TheSummaryPage(_Folder):
         r['step11']['checks']['charmaps'] = {
             'state': 'not needed', 'by_table': 1, 'builtin': ['C']}
         text = self.page(r)
-        self.assertIn('Locales whose sort order changed (none) Not verified',
+        self.assertIn("Locales whose sort order changed (none) Which "
+                      "locales' sort rules changed (step 2)",
                       text)
         r = self.on_machines()
         cs = r['step11']['findings']['groups'][0]['locales']['sv_SE'][
@@ -5777,6 +5783,156 @@ class TheSummaryPage(_Folder):
         self.assertIn('sv_SE (UNKNOWN \u2192 ISO-8859-1) 1', self.page(r))
         cs['old'] = 'ISO-8859-15'
         self.assertIn('sv_SE (ISO-8859-15 \u2192 ISO-8859-1) 1', self.page(r))
+
+    def with_rules(self, r, differ, rows):
+        """`r` with step 2's groups of locales whose rules differ, its
+        totals and the rows of its characters file to match."""
+        ru = r['step2']['rules']
+        t = ru['totals']
+        n = sum(len(x['names']) for x in differ)
+        t.update(names=t['names'] - t['differ'] + n, differ=n)
+        ru['differ'] = differ
+        r['step2']['rules_characters']['rows'] = rows
+        return r
+
+    def on_rules(self):
+        """Two tags, and two of step 2's ways of a group's characters not
+        listed: counted (with every rule) and none named."""
+        return self.with_rules(self.on_tags(), [
+            {'names': ['C.UTF-8', 'or_IN'], 'every_rule': True,
+             'characters': {'state': 'counted', 'count': 1234}},
+            {'names': ['sv_SE'], 'every_rule': True,
+             'characters': {'state': 'none named'}},
+        ], [['C.UTF-8', 'differs', 'yes', ' '.join(['U+0041'] * 1234)],
+            ['or_IN', 'differs', 'yes', ' '.join(['U+0041'] * 1234)],
+            ['sv_SE', 'differs', 'yes', '']])
+
+    def on_rules_unlisted(self):
+        """Two tags, and step 2's characters file not reported."""
+        r = self.on_tags()
+        r['step2']['rules_characters'] = {
+            'state': 'not reported',
+            'why': f'the step wrote no step2_rules_characters.{PAIR}.tsv'}
+        return self.loaded(r)
+
+    def on_cv_unknown(self):
+        """Two tags, the collation version of one side unknown."""
+        r = self.on_tags()
+        r['compared']['collation_version'] = {'state': 'unknown',
+                                              'sides': ['glibc-2.34']}
+        return self.loaded(r)
+
+    def test_what_changed_in_the_sources(self):
+        """Step 2's rules, after the locales whose order changed: the
+        totals, each group with its characters in step 2's words, the
+        characters file; counted with its count and file, none named,
+        not known with its reason, every rule can change; no group,
+        "Rules differ: none."; nothing compared, its state and reason."""
+        f = f'step2_rules_characters.{PAIR}.tsv'
+        self.assertIn(
+            "Which locales' sort rules changed (step 2) 13 name(s), locale "
+            'files and locale.alias aliases: 10 the same, 1 differ, 2 not '
+            "compared. Not compared here: the code that compiles and "
+            "compares the rules (localedef's and strcoll's); the character "
+            'sets are not on this page. Every character'
+            f' of the changed rules: {f} locales '
+            'whose rules differ characters in the changed rules or_IN 2 '
+            'character(s) named by the lines that changed or are read '
+            f'otherwise; listed in {f} a changed line decides how other '
+            'lines are read or where other rules sort, so every rule can '
+            'change Not verified', self.page(self.on_tags()))
+        text = self.page(self.on_rules())
+        self.assertIn(
+            '15 name(s), locale files and locale.alias aliases: 10 the '
+            'same, 3 differ, 2 not compared.', text)
+        self.assertIn(
+            'C.UTF-8, or_IN 1,234 character(s) named by the lines that '
+            f'changed or are read otherwise; listed in {f} a changed line '
+            'decides how other lines are read or where other rules sort, so '
+            'every rule can change sv_SE the lines that count name no '
+            'character a changed line decides', text)
+        r = self.on_rules()
+        r['step2']['rules']['differ'][1].update(
+            every_rule=False, characters={'state': 'not known',
+                                          'why': 'a copy names no file'})
+        r['step2']['rules_characters']['rows'][2] = [
+            'sv_SE', 'differs', 'no', 'not known: a copy names no file']
+        self.assertIn('sv_SE which characters is not known: a copy names no '
+                      'file Not verified', self.page(r))
+        r['step2']['rules_characters'] = {
+            'state': 'not reported',
+            'why': f'the step wrote no step2_rules_characters.{PAIR}.tsv'}
+        self.assertIn('C.UTF-8, or_IN 1,234 character(s) named by the lines '
+                      'that changed or are read otherwise a changed line',
+                      self.page(r))
+        r = self.on_tags()
+        self.with_rules(r, [], [])
+        self.assertIn('not on this page. Rules differ: none. Not verified',
+                      self.page(r))
+        self.assertIn("Which locales' sort rules changed (step 2) NOT "
+                      'COMPARED - the two tags are one commit Not verified',
+                      self.page(self.on_one_commit()))
+
+    def test_the_characters_of_the_changed_rules(self):
+        """A group whose characters step 2 lists: each drawn with its code
+        and name, a mark over a dotted circle, a code point past Unicode
+        and past six hex digits as its code alone; past 60, a sample of
+        the first 60 that draw, how many more and the file; the file not
+        reported, its state and reason, and no row names it."""
+        cps = [0x0300, 0x0041, 0x0001, 0x110000, 0x12345678]
+        r = self.with_rules(self.on_tags(), [
+            {'names': ['or_IN'], 'every_rule': False,
+             'characters': {'state': 'listed', 'codepoints': cps}}],
+            [['or_IN', 'differs', 'no',
+              ' '.join(f'U+{c:04X}' for c in cps)]])
+        self.assertIn(
+            'or_IN characters in the changed rules (5): \u25cc\u0300 U+0300 '
+            'COMBINING GRAVE ACCENT A U+0041 LATIN CAPITAL LETTER A U+0001 '
+            'U+110000 U+12345678 Not verified', self.page(r))
+        cps = [0x0001] * 3 + list(range(0x0100, 0x0100 + 70))
+        r = self.with_rules(self.on_tags(), [
+            {'names': ['or_IN'], 'every_rule': False,
+             'characters': {'state': 'listed', 'codepoints': cps}}],
+            [['or_IN', 'differs', 'no',
+              ' '.join(f'U+{c:04X}' for c in cps)]])
+        text = self.page(r)
+        self.assertIn('or_IN characters in the changed rules (73): \u0100 '
+                      'U+0100 LATIN CAPITAL LETTER A WITH MACRON \u0101 '
+                      'U+0101',
+                      text)
+        self.assertIn('U+013B LATIN CAPITAL LETTER L WITH CEDILLA A sample: '
+                      'the first 60 that draw as a '
+                      'character. and 13 more, all listed in '
+                      f'step2_rules_characters.{PAIR}.tsv Not verified', text)
+        self.assertNotIn('U+013C', text)
+        r['step2']['rules_characters'] = {
+            'state': 'not reported',
+            'why': f'the step wrote no step2_rules_characters.{PAIR}.tsv'}
+        text = self.page(r)
+        self.assertIn('Every character of the changed rules: NOT REPORTED - '
+                      'the step wrote no step2_rules_characters.', text)
+        self.assertIn('character. and 13 more Not verified', text)
+
+    def on_unread(self):
+        """Two machines, and two entries of a machine's sources step 2 did
+        not read."""
+        r = self.on_machines()
+        r['step2']['rules']['unread'] = [
+            {'name': 'de_DE~', 'why': ['a backup on the old machine'],
+             'counted': True},
+            {'name': 'xx', 'why': ['a link on the old machine',
+                                   'a link on the new machine'],
+             'counted': False}]
+        return self.loaded(r)
+
+    def test_what_step_2_did_not_read(self):
+        """On two machines, each entry of a machine's sources step 2 did
+        not read, with its reasons, in step 2's words."""
+        self.assertIn(
+            "Not compared, not read among a machine's locale sources (2): "
+            'de_DE~ (a backup on the old machine) xx (a link on the old '
+            'machine; a link on the new machine) Not verified',
+            self.page(self.on_unread()))
 
     def test_a_page_broken_is_refused(self):
         """One break at a time, each a way a page can say what the data
@@ -5857,7 +6013,7 @@ class TheSummaryPage(_Folder):
             ('on_tags', r'<p class="none" data-e="step2/rules/added/'
              r'rows">\(none\)</p>', lambda m: '', 'empty lists'),
             ('on_tags', r'(<h2>How this was compared)',
-             lambda m: m.group(1) + ' (2 sides)', 'outside'),
+             lambda m: m.group(1) + ' (2 sides)', 'sections'),
             ('on_tags', r'<p class="disc" data-f="disc">'
              r'.*?</p>',
              lambda m: '', 'fixed sentences'),
@@ -5922,6 +6078,142 @@ class TheSummaryPage(_Folder):
              r'checked">.*?</div></div>', lambda m: '', 'labels'),
             ('on_machines', r'(data-d="characters file">)measured',
              lambda m: m.group(1) + 'Measured', 'characters file'),
+            # 24.4-2b: step 2's rules said otherwise, out of their order or
+            # their section, left out, twice.
+            ('on_tags', r'(data-s2="totals">13 name)', lambda m:
+             m.group(1).replace('13', '14'), 'step 2 totals said'),
+            ('on_rules', r'1,234 character', lambda m: '1,235 character',
+             r'step 2 differ#0 said'),
+            ('on_rules', r'C.UTF-8, or_IN', lambda m: 'or_IN',
+             r'step 2 differ#0 said'),
+            ('on_rules', r'(<tr data-s2="differ#0">.*?</tr>)'
+             r'(<tr data-s2="differ#1">.*?</tr>)',
+             lambda m: m.group(2) + m.group(1), "step 2's parts shown"),
+            ('on_rules', r'<tr data-s2="differ#1">.*?</tr>',
+             lambda m: '', "step 2's parts shown"),
+            ('on_rules', r'(<tr data-s2="differ#1">.*?</tr>)',
+             lambda m: m.group(1) * 2, "step 2's parts shown"),
+            ('on_rules', r'(<p class="hint">a changed line[^<]*</p>)'
+             r'(</td></tr><tr data-s2="differ#1">)',
+             lambda m: m.group(2), r'step 2 differ#0 said'),
+            ('on_rules', r'the lines that count name no character',
+             lambda m: 'the lines that changed name no character',
+             r'step 2 differ#1 said'),
+            ('on_tags', r'(<h2>Locales whose sort order changed</h2>'
+             r'</summary><div class="secb">)(.*?)(<p data-s2="totals">.*?'
+             r'</p>)', lambda m: m.group(1) + m.group(3) + m.group(2),
+             'shown under'),
+            ('on_unread', r'xx \(a link on the old machine; ', lambda m:
+             'xx (', 'step 2 unread said'),
+            ('on_unread', r'(<li>de_DE~[^<]*</li>)(<li>xx[^<]*</li>)',
+             lambda m: m.group(2) + m.group(1), 'step 2 unread said'),
+            ('on_tags', r'<p class="hint" data-l="rules file">.*?</p>',
+             lambda m: '', 'labels'),
+            ('on_tags', r'(data-d="rules file">)step2', lambda m:
+             m.group(1) + 'step3', 'rules file'),
+            ('on_tags', r'Every character of the changed rules',
+             lambda m: 'Every character found', 'label'),
+            ('on_rules', r'; listed in <code>[^<]*</code>(<p class="hint">'
+             r'a changed line[^<]*</p></td></tr><tr data-s2="differ#1">)',
+             lambda m: m.group(1), r'step 2 differ#0 said'),
+            ('on_one_commit', r'(<h2>Which locales&#x27; sort rules changed '
+             r'\(step 2\)</h2></summary><div class="secb">)<div class="nd">'
+             r'.*?</div>', lambda m: m.group(1), 'not shown once'),
+            ('on_rules_unlisted', r'<div class="nd"><b data-p="step2/'
+             r'rules_characters/state">.*?</div>', lambda m: '',
+             'not shown once'),
+            ('on_tags', r'(<details class="sec" open><summary><h2>Locales '
+             r'whose sort order changed.*?</details>)(<details class="sec" '
+             r'open><summary><h2>Which locales&#x27; sort rules.*?'
+             r'</details>)', lambda m: m.group(2) + m.group(1), 'sections'),
+            ('on_rules', r'(<table>.*?</table>)', lambda m: '<details>'
+             '<summary>locales whose rules differ</summary>' + m.group(1)
+             + '</details>', 'inside step 2'),
+            ('on_tags', r'(<td>or_IN</td><td>)(.*?)(</td></tr></table>)',
+             lambda m: m.group(1) + '<details><summary>or_IN</summary>'
+             + m.group(2) + '</details>' + m.group(3), 'inside step 2'),
+            ('on_tags', r'(<h2>Not verified</h2></summary><div class="secb">)',
+             lambda m: m.group(1) + '<p>locales whose rules differ</p>',
+             'does not know'),
+            ('on_tags', r'are not on this page\.', lambda m: 'are compared '
+             'below.', 'fixed sentence'),
+            ('on_tags', r'<p class="hint" data-f="step2 not here">.*?</p>',
+             lambda m: '', 'fixed sentences'),
+            # Round 2 of 24.4-2b: a part's section is the <details> that
+            # holds it; each sentence, label and empty list in its own;
+            # no tag the page is not written with; the table's heads.
+            ('on_rules', r'(<table>.*?</table>)(</div></details>)',
+             lambda m: m.group(2) + '<details><summary>Machines</summary>'
+             + m.group(1) + '</details>', 'step2 heads|no section'),
+            ('on_rules', r'(<table>.*?</table>)(</div></details>)',
+             lambda m: m.group(2) + m.group(1), 'step2 heads'),
+            ('on_tags', r'(<p class="hint" data-f="step2 not here">.*?</p>)'
+             r'(.*?<h2>Not verified</h2></summary><div class="secb">)',
+             lambda m: m.group(2) + m.group(1), 'data-f .step2 not here.'),
+            ('on_tags', r'(<p class="hint" data-l="rules file">.*?</p>)'
+             r'(.*?<h2>Not verified</h2></summary><div class="secb">)',
+             lambda m: m.group(2) + m.group(1), 'data-l .rules file.'),
+            ('on_one_commit', r'(<p class="disc" data-f="disc">.*?</p>)'
+             r'(.*?<h2>Not verified</h2></summary><div class="secb">)',
+             lambda m: m.group(2) + m.group(1), 'data-f .disc.'),
+            ('on_tags', r'(<p class="none" data-e="step2/rules/added/rows">'
+             r'.*?</p>)(.*?<h2>Not verified</h2></summary><div class="secb">)',
+             lambda m: m.group(2) + m.group(1),
+             'data-e .step2/rules/added/rows.'),
+            ('on_rules', r'(<table>.*?</table>)',
+             lambda m: '<template>' + m.group(1) + '</template>',
+             'not written with'),
+            ('on_machines', r'(<details class="grp" data-grp="0">)',
+             lambda m: '<noscript>' + m.group(1), 'not written with'),
+            ('on_rules', r'<th>locales whose rules differ</th> <th>'
+             r'characters in the changed rules</th>', lambda m: '<th>'
+             'characters in the changed rules</th> <th>locales whose rules '
+             'differ</th>', 'fixed sentence'),
+            ('on_rules', r'<tr data-f="step2 heads">.*?</tr>', lambda m: '',
+             'fixed sentences'),
+            # The final read of 24.4-2b: no other fold; every <summary>
+            # has words; no tag the page is not written with; a section
+            # right in the page; a state's reason once in its section; the
+            # table's shape.
+            ('on_tags', r'(<p class="hint" data-f="nv">.*?</p>)(.*?)'
+             r'(</div></details>)', lambda m: '<details><summary>'
+             + m.group(1) + '</summary>' + m.group(2) + '</details>'
+             + m.group(3), 'no section, group'),
+            ('on_tags', r'(<h2>How this was compared</h2></summary><div '
+             r'class="secb">)(.*?)(</div></details>)', lambda m: m.group(1)
+             + '<details><summary></summary>' + m.group(2) + '</details>'
+             + m.group(3), 'no words'),
+            ('on_one_commit', r'<div class="banner">.*?</div>', lambda m:
+             '<details><summary>Machines</summary>' + m.group(0)
+             + '</details>', 'no section, group'),
+            ('on_tags', r'(</div></details>)(<details class="sec" open>'
+             r'<summary><h2>Which locales&#x27;.*?</details>)', lambda m:
+             m.group(2) + m.group(1), 'of its own right in the page'),
+            ('on_one_commit', r'(<h2>Which locales&#x27; sort rules changed '
+             r'\(step 2\)</h2></summary><div class="secb"><div class="nd">'
+             r'<b data-p="step2/rules/state">NOT COMPARED</b>) &mdash; '
+             r'<span data-p="step2/rules/why">[^<]*</span>',
+             lambda m: m.group(1), 'step2/rules/why not shown once'),
+            ('on_rules_unlisted', r' &mdash; <span data-p="step2/rules_'
+             r'characters/why">[^<]*</span>', lambda m: '',
+             'rules_characters/why not shown once'),
+            ('on_rules', r'(<tr data-f="step2 heads">.*?</tr>)(.*?)'
+             r'(</table>)', lambda m: m.group(2) + m.group(1) + m.group(3),
+             'first row'),
+            ('on_tags', r'</div></details><details class="sec"><summary>'
+             r'(<h2>How this was compared</h2>)</summary>', lambda m:
+             '</div>' + m.group(1), 'of its own right in the page'),
+            ('on_cv_unknown', r' <span data-p="compared/collation_version/'
+             r'sides#0">[^<]*</span>', lambda m: '',
+             'sides#0 not shown once'),
+            ('on_machines', r'<details class="grp" data-grp="0">.*?</details>'
+             r'(?=</div></details>)', lambda m: '<div>' + m.group(0)
+             + '</div>', 'no section, group'),
+            ('on_tags', r'(<h2>How this was compared</h2></summary><div '
+             r'class="secb">)', lambda m: m.group(1) + '<hr>',
+             'not written with'),
+            ('on_rules', r'<tr data-s2="differ#0">', lambda m:
+             '<tr data-s2="differ#0"><td></td>', 'cells'),
             ('on_tags', r'font-size:22px', lambda m: 'font-size:23px',
              None))
         for n, (base, rx, repl, why) in enumerate(cases):
