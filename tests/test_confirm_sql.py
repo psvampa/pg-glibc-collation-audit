@@ -679,8 +679,8 @@ class CtypeNotes(unittest.TestCase):
                 self.assertIn('the character rules (LC_CTYPE) of every '
                               f'locale: {why}', '\n'.join(
                                   ' '.join(x.split()) for x in
-                                  [' '.join(m.sql_lines('p', files,
-                                                        not_checked))]))
+                                  [' '.join(m.sql_lines('p', m.sql_data(
+                                      files, not_checked)))]))
 
     def test_an_earlier_file_gives_its_reason(self):
         """ctype_texts on a measurement that did not measure LC_CTYPE: the

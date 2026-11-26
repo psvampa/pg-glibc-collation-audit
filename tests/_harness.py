@@ -740,10 +740,10 @@ def check_report(returncode, out, out_dir):
     one, as a warning of the data file with the same text; the
     summary's warnings block, those warnings once each; and step 11's
     log against its warnings file, and that file against the report's
-    warnings of step 11 (check_step11_warnings); step 11's log, summary
-    and characters file against its data file, and that file against
-    the report's step11.counts, step11.findings and step11.checks
-    (check_step11_counts); and what step 2 printed of its rules, as
+    warnings of step 11 (check_step11_warnings); step 11's log, summary,
+    characters file and SQL files against its data file, and that file
+    against the report's step11.counts, step11.findings, step11.checks
+    and step11.sql (check_step11_counts); and what step 2 printed of its rules, as
     Step2Report reads it, against the report's step2.rules, kept in
     STEP2_RUNS for a test that cuts the step's text out of the run its own
     way; and what it printed of its character set check and of its
@@ -959,12 +959,15 @@ def report_page_held(path, r):
       a label whose words are its own first value (a build, a latest-elN,
       a tag, an SQL file) holds one entry's places in the order they are
       said, as does a machine's "compared as"; a latest-elN's whole line
-      is held to its entry, its date or NO DATE included. So a value under the
+      is held to its entry, its date or NO DATE included, and so are an
+      SQL file's (its number of tests) and each entry no SQL file checks
+      (its names, reason and "also" line). So a value under the
       wrong words, the wrong side or in another order is refused.
     - The labels the data calls for are there, as many times as it calls
       for each: the counts or NOT MEASURED, the locales on one machine
       only, step 2's files gone and new, each machine, build, latest-elN,
-      tag and SQL file. So are the sentences the page says whole (data-f),
+      tag, SQL file and entry no SQL file checks, those two kinds each
+      entry once and in the data's order. So are the sentences the page says whole (data-f),
       each in this check's words, the one at the top the route's; the
       cards it places outside Not verified; and every member of step 2's
       rows and of step 11's list of what it did not do.
@@ -1074,7 +1077,7 @@ def report_page_held(path, r):
         'Whatever that step warned about is not on this page.',
         "\u2014 a machine's file made both sides read their upstream tags; "
         'why is under Not verified', ', and its metadata gives',
-        'this reads'}
+        'this reads', 'test(s)', 'also, in PostgreSQL:'}
     for d in p.loose:
         d = re.sub(r'\s+', ' ', d).strip()
         if d and d not in loose_words:
@@ -1216,7 +1219,9 @@ def report_page_held(path, r):
         'build': (None, r'compared/builds/entries#(\d+)/'),
         'latest': (None, r'compared/latest/resolved#(\d+)/'),
         'tag': (None, r'compared/tags#(\d+)/'),
-        'sql': (None, r'step11/sql_files#(\d+)/'),
+        'sql': (None, r'step11/sql/files#(\d+)/'),
+        'not checked': ('NOT VERIFIED by these files:',
+                        r'step11/sql/not_checked#(\d+)/'),
         'cv old': ('old side:', r'compared/collation_version/old$'),
         'cv new': ('new side:', r'compared/collation_version/new$'),
         'cv same': ('both sides:', r'compared/collation_version/version$'),
@@ -1235,11 +1240,14 @@ def report_page_held(path, r):
         return {'build': ['build', 'tag', 'patches/applied', 'patches/of',
                           'commit'],
                 'tag': ['ref', 'commit', 'status', 'detail'],
-                'sql': ['encoding', 'file']}[key]
+                'sql': ['encoding', 'file', 'tests']}[key]
 
     lists = {'only old': 'Not on the new machine',
              'only new': 'Only on the new machine'}
     seen = {}
+    # Which entry each SQL file's and each unchecked entry's label shows,
+    # in page order: each once, in the data's order (shown_order below).
+    shown_order = {'sql': [], 'not checked': []}
     for lab in p.labels:
         key = lab['a']['data-l']
         if lab['label'] is None:
@@ -1262,6 +1270,8 @@ def report_page_held(path, r):
             if len(idx) != 1 or not all(re.match(rx, x) for x in places):
                 fail(f'label {key!r} holds {places}')
             i = idx.pop()
+            if key in shown_order:
+                shown_order[key].append(int(i))
             if key == 'latest':
                 x = r['compared']['latest']['resolved'][int(i)]
                 whole = (f'{x["name"]} = {x["build"]}, the newest glibc build '
@@ -1278,6 +1288,12 @@ def report_page_held(path, r):
             if [x[re.match(rx, x).end():] for x in places] != entry(key, i):
                 fail(f'label {key!r} holds {places}, not in the order '
                      f'{entry(key, i)}')
+            if key == 'sql':
+                x = r['step11']['sql']['files'][int(i)]
+                whole = (f'{x["encoding"]} database: {x["file"]} \u2014 '
+                         f'{x["tests"]:,} test(s)')
+                if re.sub(r'\s+', ' ', text(lab)).strip() != whole:
+                    fail(f'SQL file said {text(lab)!r}, not {whole!r}')
         else:
             if said != want:
                 fail(f'label {key!r} says {said!r}, not {want!r}')
@@ -1287,6 +1303,26 @@ def report_page_held(path, r):
             if key == 'commit' and [x.rsplit('/', 1)[1] for x in places] != [
                     'tag', 'commit']:
                 fail(f'label {key!r} holds {places}')
+            if key == 'not checked':
+                # One entry, whole, in its order: its names, its reason
+                # and what else PostgreSQL calls it, where it says.
+                i = re.match(rx, places[0]).group(1) if places else None
+                shown_order[key].append(None if i is None else int(i))
+                g = (r['step11']['sql']['not_checked'][int(i)]
+                     if i is not None else None)
+                p0 = f'step11/sql/not_checked#{i}/'
+                if g is None or places != (
+                        [p0 + f'names#{j}' for j in range(len(g['names']))]
+                        + [p0 + 'why']
+                        + ([p0 + 'also'] if 'also' in g else [])):
+                    fail(f'label {key!r} holds {places}')
+                whole = ('NOT VERIFIED by these files: '
+                         + ', '.join(g['names']) + ' \u2014 ' + g['why']
+                         # its own line (a div), joined with no blank
+                         + ('also, in PostgreSQL: ' + g['also']
+                            if 'also' in g else ''))
+                if re.sub(r'\s+', ' ', text(lab)).strip() != whole:
+                    fail(f'not checked said {text(lab)!r}, not {whole!r}')
         if key == 'not verified' and [m['a'].get('data-d') for m in
                                       lab['marks']] != ['not_verified']:
             fail('the count of what was not verified is not under its words')
@@ -1344,14 +1380,24 @@ def report_page_held(path, r):
             need += ['latest'] * len(c['latest']['resolved'])
         need += {'differ': ['cv old', 'cv new'], 'same': ['cv same'],
                  'unknown': []}[c['collation_version']['state']]
-    if s11['state'] == 'reported':
-        need += ['sql'] * len(s11['sql_files'])
+    if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
+        need += ['sql'] * len(s11['sql']['files'])
+        need += ['not checked'] * len(s11['sql']['not_checked'])
     want = {}
     for k in need:
         want[k] = want.get(k, 0) + 1
     if seen != want:
         fail(f'labels {sorted(seen.items())}, the data calls for '
              f'{sorted(want.items())}')
+    # A count of labels is not which entries they show: one file or group
+    # shown twice and another left out keeps the count.
+    for key, entries in (('sql', s11.get('sql', {}).get('files', [])),
+                         ('not checked',
+                          s11.get('sql', {}).get('not_checked', []))):
+        if shown_order[key] != list(range(len(entries) if s11['state'] ==
+                                          'reported' else 0)):
+            fail(f'label {key!r} shows the entries {shown_order[key]}, the '
+                 f'data gives {len(entries)} in order')
     if s11['state'] == 'reported':
         for verdict in ('only old', 'only new'):
             names = [k for k, v in s11['verdicts'].items()
@@ -1372,7 +1418,8 @@ def report_page_held(path, r):
                     + (['nd-list'] if s11['state'] != 'reported'
                        and s11.get('not_done') else [])
                     + (['psql'] if s11['state'] == 'reported'
-                       and s11['sql_files'] else [])
+                       and s11['sql']['state'] == 'reported'
+                       and s11['sql']['files'] else [])
                     + ['block ' + st for st in ('step0', 'step1', 'step2',
                                                 'step11')
                        if r['warnings'][st]['state'] == 'not reported'])
@@ -1459,8 +1506,11 @@ def report_page_held(path, r):
         states += [('step11/state', s) for s in
                    (None, 'Locales added and removed', 'Not verified',
                     'Confirm in PostgreSQL')]
-    elif counts.get('state') != 'reported':
-        states.append(('step11/counts/state', None))
+    else:
+        if counts.get('state') != 'reported':
+            states.append(('step11/counts/state', None))
+        if s11['sql']['state'] != 'reported':
+            states.append(('step11/sql/state', 'Confirm in PostgreSQL'))
     for st in ('step0', 'step1', 'step2', 'step11'):
         if r['warnings'][st]['state'] == 'not reported':
             states.append((f'warnings/{st}/state', 'Not verified'))
@@ -1500,8 +1550,8 @@ def report_page_held(path, r):
             if not any(v['verdict'] == verdict
                        for v in s11['verdicts'].values()):
                 gaps.append('step11/verdicts:' + verdict)
-        if not s11['sql_files']:
-            gaps.append('step11/sql_files')
+        if s11['sql']['state'] == 'reported' and not s11['sql']['files']:
+            gaps.append('step11/sql/files')
     if rm['state'] == 'reported' and not rm['rows']:
         gaps.append('step2/removed/rows')
     if ru['state'] == 'reported' and not ru['added']['rows']:
@@ -1514,7 +1564,7 @@ def report_page_held(path, r):
     said = re.findall(r'data-e="([^"]*)"', page)
     for n in p.empties:
         words = ('(no SQL file was written)'
-                 if n['a']['data-e'] == 'step11/sql_files' else '(none)')
+                 if n['a']['data-e'] == 'step11/sql/files' else '(none)')
         if text(n) != words:
             fail(f'{n["a"]["data-e"]} empty, said as {text(n)!r}')
     if sorted(said) != sorted(gaps):
@@ -2366,11 +2416,13 @@ def check_step11_warnings(r, out_dir, path):
 
 
 def check_step11_counts(r, out_dir, path):
-    """Step 11's counts, findings and checks in the run of the report
-    `r` read from `path`: the data file step 11 wrote holds what its log
-    and its summary print (step11_counts_held), and the report's
-    step11.counts, step11.findings and step11.checks are that file's; no
-    file where step 11 did not run."""
+    """Step 11's counts, findings, checks and SQL files in the run of the
+    report `r` read from `path`: the data file step 11 wrote holds what
+    its log and its summary print and what its SQL files hold
+    (step11_counts_held, given the --sql-to audit.sh always gives), and
+    the report's step11.counts, step11.findings, step11.checks and
+    step11.sql are that file's, each SQL file named as in the run's
+    folder; no file where step 11 did not run."""
     import report_data as rd
     slug = os.path.basename(path)[len('report.'):-len('.json')]
     f = os.path.join(out_dir, f'step11.{slug}.data.json')
@@ -2393,9 +2445,18 @@ def check_step11_counts(r, out_dir, path):
     chars = os.path.join(out_dir, f'measured_order_characters.{slug}.tsv')
     with open(chars, encoding='utf-8') as fh:
         text = fh.read()
+    prefix = os.path.join(out_dir, f'measured_order_confirm.{slug}')
     step11_counts_held(report, brief, f, log, characters=text,
                        warnings=r['warnings']['step11'],
-                       verdicts=s11['verdicts'])
+                       verdicts=s11['verdicts'], sql_to=prefix)
+    sql = rd.step11_data(f)['sql']
+    if s11['sql'] != {'state': 'reported', 'files': [
+            {'encoding': x['encoding'],
+             'file': os.path.basename(prefix) + f'.{x["encoding"]}.sql',
+             'tests': x['tests']} for x in sql['files']],
+            'not_checked': sql['not_checked']}:
+        raise AssertionError(f'{path}: step 11 sql {s11["sql"]!r}, {f} '
+                             f'holds {sql!r}')
     if s11['counts'] != rd.step11_counts(f):
         raise AssertionError(f'{path}: step 11 counts {s11["counts"]!r}, '
                              f'{f} holds {rd.step11_counts(f)!r}')
@@ -2435,7 +2496,8 @@ def _with_verdicts(argv, tmp):
 
 
 def step11_counts_held(report, summary, path, where, *, warnings,
-                       unread=None, characters=None, verdicts=None):
+                       unread=None, characters=None, verdicts=None,
+                       sql_to=None):
     """The counts step 11 wrote to `path` (locale_order.write_counts)
     against what test_locale_order's readers take from the text it
     printed: parse_report of its report (`report`), and parse_summary of
@@ -2454,11 +2516,17 @@ def step11_counts_held(report, summary, path, where, *, warnings,
     wrote, as report.json holds it (_verdicts_of), which report_data's
     readers of the verdicts' words, the closing, the tables alone and the
     character sets hold the data to; 'missing' where the run was given
-    one and wrote none, refused once a report was printed.
+    one and wrote none, refused once a report was printed. SQL_TO: the
+    run's --sql-to, None where it was given none. What step 11 wrote of
+    its SQL files is held on every comparison, its report read or not
+    (step11_sql_files_held): to 'not asked' where SQL_TO is None, and
+    otherwise to SQL_TO and to the files themselves; and to the printed
+    lines where the report is read (step11_sql_held).
     A file that is not there is right only where no report was printed
     (a comparison refused). UNREAD is why the readers cannot read this
-    report (a test whose locale names they cannot split): then the file
-    is only read, by report_data's reader. Its readers of each group's
+    report (a test whose locale names they cannot split): then the text
+    is not read, and the file only by report_data's reader and by
+    step11_sql_files_held. Its readers of each group's
     sort table run in either case: _sort_table and _tables_held, and,
     where the characters file was written, _table_rows_held against its
     rows; and so do its readers of the verdicts, the closing, the tables
@@ -2504,6 +2572,8 @@ def step11_counts_held(report, summary, path, where, *, warnings,
                              rd.step11_data(path)['checks']['control'])
         rd._charmaps_held(f'{where}: checks.charmaps', cm, fnd['groups'],
                           basis, warnings)
+    sql = rd.step11_data(path)['sql']
+    step11_sql_files_held(sql, sql_to, path, where)
     if unread is not None:
         if not (isinstance(unread, str) and unread):
             raise AssertionError(f'no reason why {where} is not read')
@@ -2564,7 +2634,81 @@ def step11_counts_held(report, summary, path, where, *, warnings,
                          warnings, path, where)
     step11_tables_only_held(r, s if summary is not None else None, files,
                             fnd['tables_only'], path, where)
+    step11_sql_held(r, sql, sql_to, path, where)
     return c
+
+
+def step11_sql_files_held(sql, sql_to, path, where):
+    """What step 11 wrote to PATH of its SQL files (locale_order.sql_data)
+    against the run: written where it was given --sql-to (SQL_TO), not
+    asked where it was not, each entry whole (report_data._sql); and
+    against the files themselves, read by confirm_sql: the encodings it
+    wrote, each one's number of tests (its last line), and the entries
+    no file checks, each file's own notes of them, in order."""
+    import confirm_sql
+    import report_data as rd
+    if sql_to is None:
+        if sql != {'state': 'not asked'}:
+            raise AssertionError(f'{where} was given no --sql-to and wrote '
+                                 f'{sql!r} to {path}')
+        return
+    if not isinstance(sql, dict) or sql.get('state') != 'written':
+        raise AssertionError(f'{where} was given --sql-to and wrote {sql!r} '
+                             f'to {path}')
+    rd._sql(f'{where}: sql', {
+        'state': 'reported', 'not_checked': sql.get('not_checked'),
+        'files': [dict(x, file=f'{sql_to}.{x.get("encoding")}.sql')
+                  if isinstance(x, dict) else x
+                  for x in sql.get('files') or []]})
+    if set(sql) != {'state', 'files', 'not_checked'}:
+        raise AssertionError(f'{path}: sql has the keys {sorted(sql)}')
+    folder, base = os.path.split(sql_to)
+    on_disk = sorted(n[len(base) + 1:-len('.sql')]
+                     for n in os.listdir(folder or '.')
+                     if n.startswith(base + '.') and n.endswith('.sql')
+                     and re.fullmatch(r'[A-Z0-9_]+',
+                                      n[len(base) + 1:-len('.sql')]))
+    if [x['encoding'] for x in sql['files']] != on_disk:
+        raise AssertionError(f'{where} wrote the SQL files of {on_disk}, '
+                             f'{path} names {sql["files"]!r}')
+    notes = ['not checked in PostgreSQL by this file: '
+             + ', '.join(g['names']) + ': ' + g['why']
+             for g in sql['not_checked']]
+    for x in sql['files']:
+        f = confirm_sql.Sql(f'{sql_to}.{x["encoding"]}.sql')
+        said = [n for n in f.notes if n.startswith('not checked in ')]
+        if f.tests != x['tests'] or said != notes:
+            raise AssertionError(
+                f'{sql_to}.{x["encoding"]}.sql holds {f.tests} test(s) and '
+                f'{said!r}; {path} gives {x["tests"]} and {notes!r}')
+
+
+def step11_sql_held(r, sql, sql_to, path, where):
+    """What the report says of the SQL files, read by parse_report (R),
+    against what step 11 wrote of them to PATH (SQL): each file's
+    encoding, number of tests and name, in order; each entry no file
+    checks, its line whole from its names and reason, and the line under
+    it whole from its "also" words, or none; and no such block where the
+    run was given no --sql-to (SQL_TO)."""
+    import test_locale_order as t
+    got = r['sql']
+    if sql_to is None:
+        if got is not None:
+            raise AssertionError(f'{where} prints SQL files it was not '
+                                 'asked for')
+        return
+    want = {'files': [(x['encoding'], x['tests'],
+                       f'{sql_to}.{x["encoding"]}.sql')
+                      for x in sql['files']],
+            'not_checked': ['Not checked in PostgreSQL by these files: '
+                            + ', '.join(g['names']) + ': ' + g['why'] + '.'
+                            for g in sql['not_checked']],
+            'also_text': ['also, in PostgreSQL: ' + g['also']
+                          if 'also' in g else None
+                          for g in sql['not_checked']]}
+    if got is None or {k: got[k] for k in want} != want:
+        raise AssertionError(f'{where} prints of its SQL files {got!r}, '
+                             f'{path} holds {want!r}')
 
 
 def step11_tables_only_held(r, s, files, only, path, where):
@@ -3586,6 +3730,13 @@ def _summary_of(argv, out, where):
         return f.read()
 
 
+def _sql_to_of(argv):
+    """The --sql-to of a comparison's argv, or None where it has none."""
+    argv = [str(x) for x in argv]
+    return (argv[argv.index('--sql-to') + 1] if '--sql-to' in argv
+            else None)
+
+
 def _characters_of(argv, out):
     """The characters file a comparison wrote to its argv's
     --characters-to; None where it was given none, or printed no report
@@ -3605,9 +3756,10 @@ def held_main(main, stdout):
     """main() of locale_order.py, run in process with its stdout sent to
     the StringIO `stdout`, under glibc_locale_data.WARNINGS_ENV and
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
-    `!!` agree (step11_written), and so do its counts, findings and
-    checks (step11_counts_held, its summary and characters file read from the
-    --summary-to and --characters-to of sys.argv), on a refusal too; the
+    `!!` agree (step11_written), and so do its counts, findings, checks
+    and SQL files (step11_counts_held, its summary and characters file read
+    from the --summary-to and --characters-to of sys.argv, its SQL files
+    from its --sql-to), on a refusal too; the
     sys.argv of a --compare given a --verdicts-to in its temporary folder
     where it has none (_with_verdicts), whose verdicts step11_counts_held
     holds the data to.
@@ -3634,7 +3786,8 @@ def held_main(main, stdout):
                                    characters=_characters_of(argv, out),
                                    warnings={'state': 'reported',
                                              'items': recs},
-                                   verdicts=_verdicts_of(vpath))
+                                   verdicts=_verdicts_of(vpath),
+                                   sql_to=_sql_to_of(argv))
     return rc
 
 
@@ -3642,9 +3795,10 @@ def held_compare(argv, *, counts_unread=None, **kw):
     """subprocess.run(argv, capture_output=True, **kw) of a
     `locale_order.py --compare`, under glibc_locale_data.WARNINGS_ENV and
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
-    `!!` agree (step11_written), and so do its counts, findings and
-    checks (step11_counts_held, with the summary of its --summary-to and the
-    characters file of its --characters-to), on a refusal too. ARGV is run
+    `!!` agree (step11_written), and so do its counts, findings, checks
+    and SQL files (step11_counts_held, with the summary of its --summary-to,
+    the characters file of its --characters-to and the SQL files of its
+    --sql-to), on a refusal too. ARGV is run
     with a --verdicts-to in its temporary folder where it has none
     (_with_verdicts), whose verdicts step11_counts_held holds the data to.
     COUNTS_UNREAD is why the readers cannot read its report
@@ -3670,7 +3824,8 @@ def held_compare(argv, *, counts_unread=None, **kw):
                            unread=counts_unread,
                            characters=_characters_of(argv, out),
                            warnings={'state': 'reported', 'items': recs},
-                           verdicts=_verdicts_of(vpath))
+                           verdicts=_verdicts_of(vpath),
+                           sql_to=_sql_to_of(argv))
     return p
 
 

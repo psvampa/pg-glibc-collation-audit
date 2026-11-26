@@ -24,7 +24,10 @@ are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
 gives each kind its list and its short title. Step 11's counts are
 data too, and so is each group of locales it found changed, with what
-moved in it and its sort table, and each check beside the order:
+moved in it and its sort table, each check beside the order, and what
+it prints of the SQL files it wrote, each file's number of tests and
+each entry no file checks (a group of locales, or the character rules
+of every locale), with its reason:
 step11.<pair>.data.json,
 beside the `!!` of its warnings file.
 
@@ -496,6 +499,8 @@ def step11_section(a, by_name):
         if not re.fullmatch(r'[A-Z0-9_]+', enc):
             continue        # another pair's, whose name extends this one
         sql_files.append({'encoding': enc, 'file': os.path.basename(p)})
+    sql = (step11_sql(dpath, sql_files) if os.path.isfile(dpath)
+           else not_reported(dpath))
     cross = _file(d, f'measured_order_rules.{a.pair}.txt')
     cross_log = _file(d, f'measured_order_rules.{a.pair}.log')
     written = os.path.isfile(cross) and os.path.getsize(cross)
@@ -525,7 +530,7 @@ def step11_section(a, by_name):
         'measurements': v['measurements'],
         'verdicts': verdicts,
         'characters': characters,
-        'sql_files': sql_files,
+        'sql': sql,
         'rules_beside': beside,
         'counts': counts,
         'findings': findings,
@@ -540,19 +545,20 @@ COUNT_KEYS = ['changed', 'unchanged', 'unchanged_as_far_as_measured',
 
 def step11_data(path):
     """The file step 11 wrote to PATH (locale_order.write_counts): its
-    counts, its findings and its checks."""
+    counts, its findings, its checks and what it says of the SQL files."""
     try:
         got = json.loads(_read(path))
     except ValueError as e:
         raise ReportError(f'{path} is not what step 11 writes: {e}')
     if not (isinstance(got, dict)
-            and set(got) == {'step', 'counts', 'findings', 'checks'}
+            and set(got) == {'step', 'counts', 'findings', 'checks', 'sql'}
             and got['step'] == 11 and isinstance(got['counts'], dict)
             and 'state' not in got['counts']
             and isinstance(got['findings'], dict)
             and got['findings'].get('state') == 'reported'
             and isinstance(got['checks'], dict)
-            and 'state' not in got['checks']):
+            and 'state' not in got['checks']
+            and isinstance(got['sql'], dict)):
         raise ReportError(f'{path} is not what step 11 writes')
     return got
 
@@ -568,6 +574,43 @@ def step11_findings(path):
     and compare()'s tables_only), as a block of the report: load() checks
     every one of them."""
     return step11_data(path)['findings']
+
+
+def step11_sql(path, on_disk):
+    """What step 11 wrote to PATH of its SQL files (locale_order.sql_data),
+    as a block of the report: each file it printed, with its number of
+    tests and its name in the run's folder, and each entry no file checks
+    (a group of locales, or the character rules of every locale), with
+    its reason and, where the report prints it, what else PostgreSQL
+    calls those locales.
+    ON_DISK is [{'encoding', 'file'}], the files the folder holds by
+    encoding. audit.sh always asks for the files, so a record of a run not
+    asked for them is refused, and so are files printed that the folder
+    does not hold, or held and not printed, or in another order than the
+    folder's, and each entry not whole
+    (_sql, which load() runs too)."""
+    sql = step11_data(path)['sql']
+    if sql.get('state') != 'written':
+        raise ReportError(f'{path}: step 11 says the SQL files are '
+                          f'{sql.get("state")!r}, but audit.sh asks for them')
+    if not isinstance(sql.get('files'), list) or not all(
+            isinstance(f, dict) for f in sql['files']):
+        raise ReportError(f'{path}: sql.files is {sql.get("files")!r}')
+    printed = [f.get('encoding') for f in sql['files']]
+    held = [f['encoding'] for f in on_disk]
+    if printed != held:
+        raise ReportError(f'{path}: step 11 printed the SQL files of '
+                          f'{printed}, the folder holds those of {held}')
+    if set(sql) != {'state', 'files', 'not_checked'} or any(
+            set(f) != {'encoding', 'tests'} for f in sql['files']):
+        raise ReportError(f'{path}: sql is {sql!r}')
+    out = {'state': 'reported',
+           'files': [{'encoding': d['encoding'], 'file': d['file'],
+                      'tests': f['tests']}
+                     for f, d in zip(sql['files'], on_disk)],
+           'not_checked': sql['not_checked']}
+    _sql(f'{path}: sql', out)
+    return out
 
 
 def step11_checks(path):
@@ -593,6 +636,41 @@ CHECK_KINDS = ('control_failed', 'control_not_checked', 'money_earlier_format',
                'money_changed', 'money_not_checked', 'libc_earlier_format',
                'glibc_replaced', 'libc_stale', 'libc_other',
                'libc_not_checked', 'libc_no_process')
+
+
+def _sql(where, s):
+    """step 11's SQL files (step11_sql): each file's encoding, its name in
+    the run's folder, which is that encoding's, and its number of tests,
+    one or more (a file is written only with a test); and each entry no
+    file checks (a group of locales, or the character rules of every
+    locale), its names, one or more, none empty, its reason and what else PostgreSQL
+    calls those locales, words, where it says (the key left out where
+    not: a report holds no null)."""
+    _keys(where, s, ['state', 'files', 'not_checked'])
+    if not isinstance(s['files'], list):
+        raise ReportError(f'{where}.files is {s["files"]!r}')
+    for i, f in enumerate(s['files']):
+        w = f'{where}.files[{i}]'
+        _keys(w, f, ['encoding', 'file', 'tests'])
+        if not (_is_str(f['encoding'])
+                and re.fullmatch(r'[A-Z0-9_]+', f['encoding'])):
+            raise ReportError(f'{w}.encoding is {f["encoding"]!r}')
+        if not (_is_str(f['file'])
+                and f['file'].endswith(f'.{f["encoding"]}.sql')):
+            raise ReportError(f'{w}.file is {f["file"]!r}')
+        if not _is_positive(f['tests']):
+            raise ReportError(f'{w}.tests is {f["tests"]!r}')
+    if not isinstance(s['not_checked'], list):
+        raise ReportError(f'{where}.not_checked is {s["not_checked"]!r}')
+    for i, g in enumerate(s['not_checked']):
+        w = f'{where}.not_checked[{i}]'
+        _keys(w, g, ['names', 'why'] + (['also'] if 'also' in g else []))
+        if not _is_strs(g['names']):
+            raise ReportError(f'{w}.names is {g["names"]!r}')
+        if not _is_str(g['why']):
+            raise ReportError(f'{w}.why is {g["why"]!r}')
+        if 'also' in g and not _is_str(g['also']):
+            raise ReportError(f'{w}.also is {g["also"]!r}')
 
 
 def _check_bangs(c):
@@ -4562,7 +4640,7 @@ def load(path):
 
     def s11(where, o):
         _keys(where, o, ['state', 'measurements', 'verdicts', 'characters',
-                         'sql_files', 'rules_beside', 'counts', 'findings',
+                         'sql', 'rules_beside', 'counts', 'findings',
                          'checks'])
         _strs(f'{where}.measurements', o['measurements'])
         for name, x in o['verdicts'].items():
@@ -4577,8 +4655,8 @@ def load(path):
             _rows(f'{w}.rows', c['rows'], len(CHARACTER_COLUMNS))
         _stated(f'{where}.characters', o['characters'],
                 ('reported', 'not reported'), {'reported': chars, **nr})
-        for i, f in enumerate(o['sql_files']):
-            _keys(f'{where}.sql_files[{i}]', f, ['encoding', 'file'])
+        _stated(f'{where}.sql', o['sql'], ('reported', 'not reported'),
+                {'reported': _sql, **nr})
         _stated(f'{where}.rules_beside', o['rules_beside'],
                 ('set beside', 'not set beside', 'not reported'),
                 {'set beside': ['file'], 'not set beside': ['why', 'file'],

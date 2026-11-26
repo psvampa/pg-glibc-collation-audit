@@ -657,6 +657,12 @@ def compared(r):
 
 
 def confirm(r):
+    """The SQL files step 11 wrote, each with its number of tests, or
+    "(no SQL file was written)" where none was; then each entry no file
+    checks (a group of locales, or the character rules of every locale),
+    NOT VERIFIED, with its reason and, where the data gives it, what else
+    PostgreSQL calls those locales. Where step 11, or what it wrote of the
+    SQL files, is not reported: its state and reason instead."""
     s11 = r['step11']
     out = [
         '<details class="sec"><summary><h2>Confirm in PostgreSQL</h2>'
@@ -668,8 +674,11 @@ def confirm(r):
             '<p class="hint">The SQL files that confirm a change are '
             "written from the machines' measurements.</p>"
         )
-    elif not s11['sql_files']:
-        out.append(empty('step11/sql_files', '(no SQL file was written)'))
+    elif s11['sql']['state'] != 'reported':
+        out.append(not_done(s11['sql']['state'], 'step11/sql',
+                            why_of('step11/sql', s11['sql'])))
+    elif not s11['sql']['files']:
+        out.append(empty('step11/sql/files', '(no SQL file was written)'))
     else:
         out.append(
             '<p>Run each file unchanged on both servers, in a database of '
@@ -683,17 +692,35 @@ def confirm(r):
             )
             + '<ul class="plain">'
         )
-        for i, x in enumerate(s11['sql_files']):
-            p = f'step11/sql_files#{i}'
+        for i, x in enumerate(s11['sql']['files']):
+            p = f'step11/sql/files#{i}'
             out.append(
                 label(
                     'sql',
                     mark(p + '/encoding', x['encoding']) + ' database:',
-                    ' <code>' + mark(p + '/file', x['file']) + '</code>',
+                    ' <code>' + mark(p + '/file', x['file']) + '</code>'
+                    ' &mdash; ' + mark(p + '/tests', x['tests']) + ' test(s)',
                     'li',
                 )
             )
         out.append('</ul>')
+    if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
+        for i, g in enumerate(s11['sql']['not_checked']):
+            p = f'step11/sql/not_checked#{i}'
+            out.append(
+                label(
+                    'not checked',
+                    '<b>NOT VERIFIED</b> by these files:',
+                    ' '
+                    + ', '.join(mark(f'{p}/names#{j}', n)
+                                for j, n in enumerate(g['names']))
+                    + ' &mdash; ' + mark(p + '/why', g['why'])
+                    + ('<div class="hint">also, in PostgreSQL: '
+                       + mark(p + '/also', g['also']) + '</div>'
+                       if 'also' in g else ''),
+                    cls='nd',
+                )
+            )
     out.append('</div></details>')
     return ''.join(out)
 
