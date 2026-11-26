@@ -1970,7 +1970,7 @@ def parse_report(text):
         # its count, or none and why, and what no file checks.
         if not line().startswith((SQL_LINE, NO_SQL_LINE)):
             return
-        got = {'files': [], 'not_checked': [], 'also': []}
+        got = {'files': [], 'not_checked': [], 'also': [], 'also_text': []}
         if line().startswith(SQL_LINE):
             for want in SQL_HEAD:
                 take(re.escape(want))
@@ -1988,8 +1988,12 @@ def parse_report(text):
             while line().startswith('  ') and not line().startswith('    '):
                 text.append(take(r'  (\S.*)')[1])
             got['not_checked'].append(' '.join(text))
-            # What else PostgreSQL calls those locales, four in (16.327).
+            # What else PostgreSQL calls those locales, four in (16.327),
+            # and its words as printed, its lines joined.
+            start = at[0]
             got['also'].append(also())
+            got['also_text'].append(' '.join(x.strip() for x in
+                                             lines[start:at[0]]) or None)
         take('')
         r['sql'] = got
 
@@ -5780,9 +5784,9 @@ class WherePostgresUsesALocale(unittest.TestCase):
             m.also_of_written([m.ascii_name(odd)], m.postgres_names(locales),
                               locales),
             m.also_known_as([odd], m.postgres_names(locales), locales))
-        lines = m.sql_lines('p', [], [(thai, 'a reason'), ([every], 'why')],
-                            lambda names: m.also_of_written(names, pg,
-                                                            self.LOCALES))
+        lines = m.sql_lines('p', m.sql_data(
+            [], [(thai, 'a reason'), ([every], 'why')],
+            lambda names: m.also_of_written(names, pg, self.LOCALES)))
         at = lines.index('Not checked in PostgreSQL by these files: th_TH, '
                          'th_TH.tis620, thai: a reason.')
         below = lines[at + 1].split('\n')

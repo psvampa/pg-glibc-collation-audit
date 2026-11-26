@@ -125,13 +125,30 @@ def step11_files(d):
           'sv_SE,sv_SE.utf8\tmoved\tU+00E4\t-\tx\t>\t<\ton both machines\n'
           '# Control: held.\n'
           '# end: 2 locale group(s), 3 row(s)\n')
+    write(d, f'measured_order_confirm.{PAIR}.LATIN1.sql', 'select 1;\n')
     write(d, f'measured_order_confirm.{PAIR}.UTF8.sql', 'select 1;\n')
     # Another pair's, whose new side's name extends this one's (16.109).
     write(d, f'measured_order_confirm.{PAIR}.1.UTF8.sql', 'select 1;\n')
     write(d, f'measured_order_rules.{PAIR}.txt', '     Each locale...\n')
     write(d, f'step11.{PAIR}.data.json',
           json.dumps({'step': 11, 'counts': COUNTS,
-                      'findings': FINDINGS, 'checks': CHECKS}) + '\n')
+                      'findings': FINDINGS, 'checks': CHECKS,
+                      'sql': SQL}) + '\n')
+
+
+# What step 11 says of step11_files' SQL files (locale_order.sql_data):
+# two files, and two entries no file checks: a group of locales, with
+# what else PostgreSQL calls it, and the character rules of every
+# locale, without.
+SQL = {'state': 'written',
+       'files': [{'encoding': 'LATIN1', 'tests': 4},
+                 {'encoding': 'UTF8', 'tests': 38761}],
+       'not_checked': [
+           {'names': ['en_US.utf8@ampm', 'en_US@ampm'],
+            'why': 'it is not on the new machine',
+            'also': 'database locale en_US.UTF-8@ampm'},
+           {'names': ['the character rules (LC_CTYPE) of every locale'],
+            'why': 'not compared'}]}
 
 
 # The findings of step11_files' changed locale, sv_SE, as
@@ -654,9 +671,15 @@ class EveryFileWritten(_Folder):
         self.assertEqual(s11['verdicts']['sv_SE'],
                          {'verdict': 'changed', 'words': 'the order changes'})
         self.assertEqual(len(s11['characters']['rows']), 3)
-        self.assertEqual(s11['sql_files'], [
-            {'encoding': 'UTF8',
-             'file': f'measured_order_confirm.{PAIR}.UTF8.sql'}])
+        self.assertEqual(s11['sql'], {
+            'state': 'reported',
+            'files': [{'encoding': 'LATIN1',
+                       'file': f'measured_order_confirm.{PAIR}.LATIN1.sql',
+                       'tests': 4},
+                      {'encoding': 'UTF8',
+                       'file': f'measured_order_confirm.{PAIR}.UTF8.sql',
+                       'tests': 38761}],
+            'not_checked': SQL['not_checked']})
         self.assertEqual(s11['rules_beside']['state'], 'set beside')
         self.assertEqual(s11['counts'], {'state': 'reported', **COUNTS})
         self.assertEqual(s11['findings'], FINDINGS)
@@ -2476,10 +2499,12 @@ class TheReaderIsStrict(_Folder):
         self.assertEqual(rd.load(p), r)
 
     def test_the_counts_file_is_read_whole(self):
-        """A file step 11 did not write as it writes it: refused, never
-        read as counts, findings or checks."""
+        """A data file step 11 did not write as it writes it, or one an
+        audit.sh run cannot have left (SQL files not asked for, or not
+        the folder's files in the folder's order): refused, never read
+        as counts, findings, checks or SQL files."""
         whole = {'step': 11, 'counts': COUNTS, 'findings': FINDINGS,
-                 'checks': CHECKS}
+                 'checks': CHECKS, 'sql': SQL}
         for text in ('{"step": 11}\n', '{"step": 2, "counts": {}}\n',
                      '{"step": 11, "counts": {"state": "reported"}}\n',
                      '{"step": 11, "counts": []}\n', '{"step": 11, "co',
@@ -2491,7 +2516,37 @@ class TheReaderIsStrict(_Folder):
                      json.dumps({**whole, 'checks': []}),
                      json.dumps({**whole, 'checks': {'state': 'reported',
                                                      **CHECKS}}),
-                     json.dumps({**whole, 'more': 1})):
+                     json.dumps({**whole, 'more': 1}),
+                     json.dumps({k: v for k, v in whole.items()
+                                 if k != 'sql'}),
+                     json.dumps({**whole, 'sql': []}),
+                     # audit.sh always asks for the SQL files.
+                     json.dumps({**whole, 'sql': {'state': 'not asked'}}),
+                     # Files printed that the folder does not hold, held
+                     # and not printed, or in another order.
+                     json.dumps({**whole, 'sql': dict(
+                         SQL, files=SQL['files'][1:])}),
+                     json.dumps({**whole, 'sql': dict(
+                         SQL, files=SQL['files'] + [
+                             {'encoding': 'EUC_JP', 'tests': 1}])}),
+                     json.dumps({**whole, 'sql': dict(
+                         SQL, files=SQL['files'][::-1])}),
+                     # Each entry whole (report_data._sql).
+                     json.dumps({**whole, 'sql': dict(SQL, files=[
+                         SQL['files'][0], {'encoding': 'UTF8', 'tests': 0}])}),
+                     json.dumps({**whole, 'sql': dict(SQL, files=[
+                         SQL['files'][0], {'encoding': 'UTF8'}])}),
+                     json.dumps({**whole, 'sql': dict(SQL, not_checked=[
+                         dict(SQL['not_checked'][0], names=[])])}),
+                     json.dumps({**whole, 'sql': dict(SQL, not_checked=[
+                         dict(SQL['not_checked'][0], why='')])}),
+                     json.dumps({**whole, 'sql': dict(SQL, not_checked=[
+                         dict(SQL['not_checked'][0], also='')])}),
+                     json.dumps({**whole, 'sql': dict(SQL, not_checked=[
+                         dict(SQL['not_checked'][0], also=None)])}),
+                     json.dumps({**whole, 'sql': {
+                         k: v for k, v in SQL.items()
+                         if k != 'not_checked'}})):
             with self.subTest(text=text):
                 write(self.d, f'step11.{PAIR}.data.json', text)
                 with self.assertRaises(rd.ReportError):
@@ -5456,8 +5511,13 @@ class TheSummaryPage(_Folder):
                                        'why': 'none in the file'}),
              ['charmaps: NONE - none in the file',
               'compared as: its locale sources on glibc-2.28,']),
-            ('on_machines', lambda r: r['step11'].__setitem__('sql_files', []),
-             ['(no SQL file was written)']),
+            ('on_machines', lambda r: r['step11']['sql'].__setitem__(
+                'files', []),
+             ['(no SQL file was written) NOT VERIFIED by these files: '
+              'en_US.utf8@ampm, en_US@ampm - it is not on the new machine']),
+            ('on_machines', lambda r: r['step11'].__setitem__('sql', {
+                'state': 'not reported', 'why': 'no data file'}),
+             ['Confirm in PostgreSQL NOT REPORTED - no data file']),
             ('on_machines_unreported', lambda r: None,
              ['NOT MEASURED', 'NOT REPORTED - no summary file',
               'NOT REPORTED - no summary file 1 locale not on the new '
@@ -5639,6 +5699,30 @@ class TheSummaryPage(_Folder):
              lambda m: m.group(1) + 'step 11', 'fixed sentence'),
             ('on_builds', r', by its metadata of', lambda m: ', and its '
              'metadata gives', 'latest-elN said'),
+            # 16.408: each file's tests and each entry no file checks,
+            # held to its value, its words and its order.
+            ('on_machines', r'(data-p="step11/sql/files#1/tests">)38,761',
+             lambda m: m.group(1) + '4', 'shows'),
+            ('on_machines', r' test\(s\)', lambda m: ' tests', 'does not know|SQL file said'),
+            ('on_machines', r'<b>NOT VERIFIED</b>', lambda m: '<b>NOTED</b>',
+             'says'),
+            ('on_machines', r', <span data-p="step11/sql/not_checked#0/'
+             r'names#1">en_US@ampm</span>', lambda m: '', 'holds'),
+            ('on_machines', r'<div class="hint">also, in PostgreSQL: <span '
+             r'data-p="step11/sql/not_checked#0/also">[^<]*</span></div>',
+             lambda m: '', 'holds'),
+            ('on_machines', r'<div class="nd" data-l="not checked">.*?'
+             r'</div>(?=<div class="nd" data-l="not checked">)',
+             lambda m: '', 'labels'),
+            # Each entry once and in the data's order: the two entries,
+            # and the two files, swapped.
+            ('on_machines', r'(<div class="nd" data-l="not checked">.*?'
+             r'</div></div>)(<div class="nd" data-l="not checked">.*?'
+             r'</div>)(?=</div></details>)',
+             lambda m: m.group(2) + m.group(1), 'shows the entries'),
+            ('on_machines', r'(<li data-l="sql">.*?</li>)'
+             r'(<li data-l="sql">.*?</li>)',
+             lambda m: m.group(2) + m.group(1), 'shows the entries'),
             ('on_tags', r'font-size:22px', lambda m: 'font-size:23px',
              None))
         for n, (base, rx, repl, why) in enumerate(cases):

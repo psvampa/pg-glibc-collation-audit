@@ -10634,13 +10634,33 @@ def also_rows(names, pg_names, locales):
              '-', '-', '-', '-')]
 
 
-def sql_lines(prefix, files, not_checked, also=lambda names: None):
-    """What the report says of the SQL files: each one, how to run and read
-    it, and what no file tests, with what else PostgreSQL calls those
-    locales (ALSO, from the names as written there); or why none was
-    written."""
+def sql_data(files, not_checked, also=lambda names: None):
+    """What step 11 says of the SQL files it wrote, as data
+    (write_counts), which sql_lines prints: FILES, confirm_groups' files,
+    as each one's encoding and number of tests, in their order; and
+    NOT_CHECKED, confirm_groups' not_checked, as each entry's names and
+    reason, in their order, and what else PostgreSQL calls those locales:
+    the function ALSO, given the names as written there, gives the line
+    the report prints, and its words after the constant ALSO go under
+    'also', left out where it gives none. Two entries can give the same
+    reason, so the entries are a list. Only for a run given --sql-to: a run that is not
+    writes {'state': 'not asked'} (compare)."""
+    def entry(names, why):
+        said = also(names)
+        return {'names': list(names), 'why': why,
+                **({'also': said[len(ALSO):]} if said else {})}
+    return {'state': 'written',
+            'files': [{'encoding': encoding, 'tests': tests}
+                      for encoding, text, ident, tests in files],
+            'not_checked': [entry(names, why) for names, why in not_checked]}
+
+
+def sql_lines(prefix, sql):
+    """What the report says of the SQL files, from SQL (sql_data): each
+    one, how to run and read it, and what no file tests, with what else
+    PostgreSQL calls those locales; or why none was written."""
     out = []
-    if files:
+    if sql['files']:
         out.append('To confirm these changes in PostgreSQL, run each SQL file '
                    'unchanged on both')
         out.append('servers, in a database of its encoding (psql -X -d '
@@ -10648,19 +10668,18 @@ def sql_lines(prefix, files, not_checked, also=lambda names: None):
         out.append('2>&1, and new.out on the new server), and read the two '
                    'outputs with:')
         out.append('  python3 scripts/confirm_sql.py read FILE old.out new.out')
-        for encoding, text, ident, tests in files:
-            out.append(f'  {encoding} database, {tests:,} test(s):')
-            out.append(f'    {sql_paths(prefix, encoding)}')
+        for f in sql['files']:
+            out.append(f'  {f["encoding"]} database, {f["tests"]:,} test(s):')
+            out.append(f'    {sql_paths(prefix, f["encoding"])}')
     else:
         out.append('No SQL file written to confirm a change in PostgreSQL: no '
                    'change has a test')
         out.append('that a database can store and use.')
-    for names, why in not_checked:
+    for g in sql['not_checked']:
         out += wrapped(f'Not checked in PostgreSQL by these files: '
-                       f'{", ".join(names)}: {why}.', 0, 2)
-        said = also(names)
-        if said:
-            out.append(filled(said, 4, 6))
+                       f'{", ".join(g["names"])}: {g["why"]}.', 0, 2)
+        if 'also' in g:
+            out.append(filled(ALSO + g['also'], 4, 6))
     return out
 
 
@@ -11433,10 +11452,10 @@ def change_groups(measured, groups, entries):
 STEP11_DATA_ENV = 'PG_GLIBC_AUDIT_STEP11_DATA'
 
 
-def write_counts(counts, findings, checks):
-    """Write COUNTS, FINDINGS and CHECKS to the file STEP11_DATA_ENV names,
-    as {'step': 11, 'counts': ..., 'findings': ..., 'checks': ...}: first
-    under another
+def write_counts(counts, findings, checks, sql):
+    """Write COUNTS, FINDINGS, CHECKS and SQL (sql_data) to the file
+    STEP11_DATA_ENV names, as {'step': 11, 'counts': ..., 'findings': ...,
+    'checks': ..., 'sql': ...}: first under another
     name, then given its own, so that a file cut short is never there
     under it. A file that cannot be written ends the comparison: what was
     printed and not written would be a report the data file says nothing
@@ -11447,7 +11466,7 @@ def write_counts(counts, findings, checks):
     try:
         with open(path + '.partial', 'w', encoding='utf-8') as f:
             json.dump({'step': 11, 'counts': counts, 'findings': findings,
-                       'checks': checks}, f, sort_keys=True)
+                       'checks': checks, 'sql': sql}, f, sort_keys=True)
             f.write('\n')
         os.replace(path + '.partial', path)
     except OSError as e:
@@ -11940,10 +11959,13 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                           'other string and pair found.')
         if note:
             report += wrapped(note, 0, 0)
+    # What the report says of the SQL files is printed from what is
+    # written of them as data (sql_data, write_counts).
+    sql = (sql_data(sql_files, sql_not_checked,
+                    lambda names: also_of_written(names, pg_names, o))
+           if sql_to else {'state': 'not asked'})
     if sql_to:
-        report += [''] + sql_lines(
-            sql_to, sql_files, sql_not_checked,
-            lambda names: also_of_written(names, pg_names, o))
+        report += [''] + sql_lines(sql_to, sql)
     report += ['', f'Unchanged: {counts["unchanged"]} locale(s).']
     report += run('tables only')
     report += run('tables not compared')
@@ -12099,7 +12121,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     for line in report:
         print(line)
     report_warnings(blocks, g)
-    write_counts(counts, findings, check_data)
+    write_counts(counts, findings, check_data, sql)
     return 0
 
 
