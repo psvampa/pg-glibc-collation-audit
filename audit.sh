@@ -512,6 +512,9 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log \
 # run's.
 REPORT_DATA="$OUT_DIR/report.$PAIR.json"
 rm -f "$REPORT_DATA" "$REPORT_DATA.partial"
+# And its summary page (scripts/report_html.py), made from it alone.
+REPORT_HTML="$OUT_DIR/report.$PAIR.html"
+rm -f "$REPORT_HTML" "$REPORT_HTML.partial"
 # What the machines' files decided, for the warnings block below, which
 # repeats the `!!` blocks of every step*.$PAIR.log.
 [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE" > "$OUT_DIR/step0.$PAIR.log"
@@ -996,5 +999,8 @@ python3 "$SCRIPTS/report_data.py" --out-dir "$OUT_DIR" --pair "$PAIR" \
   ${TAG_SIDE:+--tag-side "$TAG_SIDE"} \
   ${LATEST_RECORD:+--old-asked "$ASKED_OLD" --new-asked "$ASKED_NEW"} \
   ${OLD_ORDER:+--step11}
+# The summary page, from the data file alone; prints nothing when it is
+# written, and the run fails when it cannot be.
+python3 "$SCRIPTS/report_html.py" "$REPORT_DATA"
 
 echo
