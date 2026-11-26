@@ -1125,6 +1125,124 @@ def page_group_said(r, i):
                                   for h, b in folds]
 
 
+def _step2_title():
+    """The title the text gives step 2 (audit.sh's banner), which the
+    summary page's section repeats with "(step 2)"."""
+    with open(os.path.join(REPO_ROOT, 'audit.sh'), encoding='utf-8') as f:
+        got = re.findall(r'^banner "STEP 2  (.+)"$', f.read(), re.M)
+    if len(got) != 1:
+        raise AssertionError(f"audit.sh's banner of step 2: {got!r}")
+    return got[0] + ' (step 2)'
+
+
+STEP2_SECTION = _step2_title()
+# The tags a summary page is written with (report_html): any other could
+# keep words from a reader (a <template>, a <dialog> not open, a
+# <noscript>) while the check reads them.
+PAGE_TAGS = {'b', 'body', 'code', 'details', 'div', 'h1', 'h2', 'h3', 'h4',
+             'head', 'html', 'li', 'main', 'meta', 'p', 'pre', 'span',
+             'style', 'summary', 'table', 'td', 'th', 'title', 'tr', 'ul'}
+# The section each sentence said whole (data-f), each label (data-l) and
+# each list said empty (data-e) sits in: the section whose <details>
+# holds it, None above every section.
+_ADDED = 'Locales added and removed'
+_CHANGED = 'Locales whose sort order changed'
+_NV = 'Not verified'
+_HOW = 'How this was compared'
+_CONFIRM = 'Confirm in PostgreSQL'
+HOME = {
+    'data-f': {'disc': None, 'nothing': None, 'sub measured': None,
+               'sub sources': None, 'sub unreported': None,
+               'changed': _CHANGED, 'changed not run': _CHANGED,
+               'step2 not here': STEP2_SECTION, 'step2 heads': STEP2_SECTION,
+               'nv': _NV, 'nd-list': _NV, 'block step0': _NV,
+               'block step1': _NV, 'block step2': _NV, 'block step11': _NV,
+               'psql': _CONFIRM},
+    'data-l': dict(
+        {k: None for k in ('changed', 'far', 'measured new', 'measured old',
+                           'not compared', 'not measured',
+                           'not measured count', 'not verified', 'refused',
+                           'tile only new', 'tile only old', 'unchanged')},
+        **{k: _ADDED for k in ('gone', 'new', 'only new', 'only old')},
+        **{k: _HOW for k in ('build', 'charmaps', 'commit', 'cv new',
+                             'cv old', 'cv same', 'latest', 'locales',
+                             'machine new', 'machine old', 'tag', 'word')},
+        **{'characters file': _CHANGED, 'rules file': STEP2_SECTION,
+           'nv not checked': _NV, 'not checked': _CONFIRM,
+           'sql': _CONFIRM}),
+    'data-e': {'step11/findings/groups': _CHANGED,
+               'step11/sql/files': _CONFIRM,
+               'step11/verdicts:only new': _ADDED,
+               'step11/verdicts:only old': _ADDED,
+               'step2/removed/rows': _ADDED,
+               'step2/rules/added/rows': _ADDED,
+               'step2/rules/differ': STEP2_SECTION,
+               'not verified': _NV}}
+
+
+def page_rules_said(r):
+    """The words a summary page says of step 2's rules
+    (report_html.sources), rebuilt here from the data by this check's own
+    rules, blanks collapsed, as [(its place, its words)] in the order the
+    page must say them: the totals, each group of locales whose rules
+    differ, the entries not read. Only the words step 2 prints are taken
+    from it (filter_lc_collate_changes' *_WORDS); how a character is
+    drawn, the sample and how many more are this check's own."""
+    import filter_lc_collate_changes as flc
+    ru = r['step2']['rules']
+    if ru['state'] != 'reported':
+        return []
+    reported = r['step2']['rules_characters']['state'] == 'reported'
+    where = 'step2_rules_characters.' + r['pair']['slug'] + '.tsv'
+    cap = 60
+
+    def drawn_as(cp):
+        if cp > 0x10FFFF:
+            return ''
+        c = unicodedata.category(chr(cp))
+        return (chr(cp) if c[0] in 'LNPS' else
+                '\u25cc' + chr(cp) if c[0] == 'M' else '')
+
+    def one(cp):
+        name = unicodedata.name(chr(cp), '') if cp <= 0x10FFFF else ''
+        return ' '.join(x for x in (drawn_as(cp), 'U+%04X' % cp, name) if x)
+
+    t = ru['totals']
+    out = [('totals', flc.TOTALS_WORDS.format(
+        **{k: f'{v:,}' for k, v in t.items()}))]
+    for i, d in enumerate(ru['differ']):
+        c = d['characters']
+        words = [', '.join(d['names'])]
+        if c['state'] == 'listed':
+            cps = c['codepoints']
+            sample = len(cps) > cap
+            shown = [x for x in cps if drawn_as(x)][:cap] if sample else cps
+            words.append(f'{flc.LISTED_WORDS} ({len(cps):,}):')
+            words += [one(x) for x in shown]
+            if sample:
+                words.append(f'A sample: the first {len(shown)} that draw as '
+                             'a character.')
+            if len(cps) > len(shown):
+                words.append(f'and {len(cps) - len(shown):,} more'
+                             + (f', all listed in {where}' if reported
+                                else ''))
+        elif c['state'] == 'counted':
+            words.append(f'{c["count"]:,} {flc.COUNTED_WORDS}'
+                         + (f'; listed in {where}' if reported else ''))
+        elif c['state'] == 'none named':
+            words.append(flc.NONE_NAMED_WORDS)
+        else:
+            words.append(f'{flc.NOT_KNOWN_WORDS} {c["why"]}')
+        if d['every_rule']:
+            words.append(flc.EVERY_RULE_WORDS)
+        out.append((f'differ#{i}', ' '.join(words)))
+    if ru['unread']:
+        out.append(('unread', f'{flc.UNREAD_WORDS} ({len(ru["unread"]):,}): '
+                    + ' '.join(f'{u["name"]} ({"; ".join(u["why"])})'
+                               for u in ru['unread'])))
+    return [(k, re.sub(r'\s+', ' ', w).strip()) for k, w in out]
+
+
 def report_page_held(path, r):
     """The summary page report.<pair>.html beside the data file `path`,
     held to the report `r` read from it (scripts/report_html.py).
@@ -1152,28 +1270,47 @@ def report_page_held(path, r):
       only, step 2's files gone and new, each machine, build, latest-elN,
       tag, SQL file and entry no SQL file checks (in each of its two
       places), those last kinds each entry once and in the data's order,
-      and the characters file where a group is shown. So are the
+      the characters file where a group is shown, and step 2's
+      characters file where a group of its rules differs. So are the
       sentences the page says whole (data-f), each in this check's
       words, the one at the top the route's; the cards it places outside
       Not verified; and every member of step 2's rows and of step 11's
       list of what it did not do.
     - The Not verified entries are which and in which order the data
       gives; each block not done shows its state in the section the data
-      calls for; the lists that hold nothing are the ones marked data-e,
+      calls for, and its reason once in that section where the data gives
+      one (its why, or the sides a collation version is unknown for); the
+      lists that hold nothing are the ones marked data-e,
       compared as a set, not by where each sits.
     - Each list that holds nothing says "(none)" ("(no SQL file was
-      written)" for the SQL files).
+      written)" for the SQL files, step 2's own "Rules differ: none."
+      for its rules).
     - Each group of locales whose order changed (data-grp) is shown
       once, in step 11's order, in its section, and says, blanks
       collapsed, exactly the words page_group_said rebuilds from that
       group's data; and so does each fold of it, the group and each list
       folded in it, its <summary> what shows with it closed and its own
       body what opening it shows, so no word sits under another fold.
+    - Step 2's totals, each of its groups of locales whose rules differ
+      and its entries not read (data-s2) are shown once each, in the
+      data's order, in their section, each saying, blanks collapsed,
+      exactly the words page_rules_said rebuilds from the data.
+    - The six sections are there, once each, in the page's order; step
+      2's under the text's own title for it (audit.sh), with nothing
+      folded inside it. A part's section is the one whose <details>
+      holds it; each sentence said whole, label and list said empty sits
+      in its own (HOME). The page uses only the tags it is written with
+      (PAGE_TAGS). Each section is a <details> right in the page's
+      <main>; any other <details> is a group or a warning's card right in
+      a section's body, or a list folded in a group, and every <summary>
+      has words. Step 2's table heads are its first row, of two cells,
+      and each of its rows has two cells.
     - Every <details> has one <summary>; a list folded in a group sits in
       the group's own body; no element carries a hidden or a style
       attribute.
     - Every other word of the page outside marks, labels' words, data-e,
-      data-f, data-grp, <title> and <style> is one of this check's own
+      data-f, data-grp, data-s2, <title> and <style> is one of this
+      check's own
       list, so a sentence the data does not call for is refused; a label
       whose words are its first value says that value and this check's
       word after it."""
@@ -1196,14 +1333,31 @@ def report_page_held(path, r):
             super().__init__(convert_charrefs=True)
             self.stack, self.marks, self.labels, self.loose = [], [], [], []
             self.fixed, self.empties, self.groups = [], [], []
+            self.s2, self.sections = [], []
             self.section = None
 
         def handle_starttag(self, tag, attrs):
+            if tag not in PAGE_TAGS:
+                fail(f'a <{tag}>, which the page is not written with')
             if tag in self.VOID:
                 return
             a = {k: (v or '') for k, v in attrs}
-            node = {'tag': tag, 'a': a, 'text': [], 'section': self.section,
-                    'marks': [], 'label': None}
+            # Its section: the one whose <details> holds it, not the last
+            # heading read, so a part put after a section is not in it.
+            home = next((x['sec'] for x in reversed(self.stack)
+                         if 'sec' in x), None)
+            node = {'tag': tag, 'a': a, 'text': [], 'section': home,
+                    'marks': [], 'label': None,
+                    'parent': self.stack[-1] if self.stack else None}
+            if tag == 'tr':
+                # A table's rows in order, and each row's cells.
+                t = next((x for x in reversed(self.stack)
+                          if x['tag'] == 'table'), None)
+                if t is not None:
+                    node['row'] = t['rows'] = t.get('rows', 0) + 1
+            if tag in ('td', 'th') and self.stack and \
+                    self.stack[-1]['tag'] == 'tr':
+                self.stack[-1]['cells'] = self.stack[-1].get('cells', 0) + 1
             if 'data-p' in a or 'data-d' in a:
                 self.marks.append(node)
                 for x in self.stack:
@@ -1222,7 +1376,12 @@ def report_page_held(path, r):
             if 'data-grp' in a:
                 node['folds'] = []
                 self.groups.append(node)
+            if 'data-s2' in a:
+                self.s2.append(node)
             if tag == 'details':
+                if home == STEP2_SECTION:
+                    # Step 2's parts are said open, none folded away.
+                    fail("a <details> inside step 2's section")
                 node['fold'] = {'summary': [], 'body': [], 'heads': 0}
                 g = next((x for x in reversed(self.stack + [node])
                           if 'data-grp' in x['a']), None)
@@ -1238,6 +1397,8 @@ def report_page_held(path, r):
                         fail(f'a <details> of group {g["a"]["data-grp"]} '
                              'outside its own body')
                     g['folds'].append(node['fold'])
+                    if g is not node:
+                        node['in group'] = True
             if tag == 'summary':
                 if not self.stack or self.stack[-1]['tag'] != 'details':
                     fail('a <summary> outside a <details>')
@@ -1246,6 +1407,9 @@ def report_page_held(path, r):
                 # Inside a group, a block's words are apart from the ones
                 # before it, as the reader sees them.
                 self.said(' ', node)
+                for x in self.stack:
+                    if 'data-s2' in x['a']:
+                        x['text'].append(' ')
             if 'data-t' in a:
                 owner = next((x for x in reversed(self.stack)
                               if 'data-l' in x['a']), None)
@@ -1262,9 +1426,51 @@ def report_page_held(path, r):
             if not self.stack or self.stack[-1]['tag'] != tag:
                 fail(f'</{tag}> closes nothing open')
             node = self.stack.pop()
-            if tag == 'details' and node['fold']['heads'] != 1:
-                # Folded with no words to open it by, or with two.
-                fail(f'a <details> with {node["fold"]["heads"]} <summary>')
+            if tag == 'h2':
+                self.sections.append(self.section)
+                sec = next((x for x in reversed(self.stack)
+                            if x['tag'] == 'details'), None)
+                # A section is a <details> right in the page's <main>,
+                # with one heading: never inside another, which closing
+                # would hide it with.
+                if sec is None or 'sec' in sec or \
+                        sec['parent'] is None or \
+                        sec['parent']['tag'] != 'main':
+                    fail(f'the section {self.section!r} is not a <details> '
+                         'of its own right in the page')
+                sec['sec'] = self.section
+            if tag == 'summary':
+                if not ''.join(node['text']).strip():
+                    fail('a <summary> with no words to open it by')
+            if tag == 'tr':
+                if node['a'].get('data-f') == 'step2 heads' and (
+                        node.get('row') != 1 or node.get('cells') != 2):
+                    fail("step 2's table heads are not its first row of "
+                         'two cells')
+                if node['a'].get('data-s2', '').startswith('differ#') and \
+                        node.get('cells') != 2:
+                    fail(f"step 2's row {node['a']['data-s2']} has "
+                         f"{node.get('cells')} cells, not its names and "
+                         'its characters')
+            if tag == 'details':
+                if node['fold']['heads'] != 1:
+                    # Folded with no words to open it by, or with two.
+                    fail(f'a <details> with {node["fold"]["heads"]} '
+                         '<summary>')
+                # The folds the page is written with: a section, a group
+                # or a warning's card right in a section's body, a list
+                # folded in a group. Any other could fold away what a
+                # reader must see (Not verified's list, a banner).
+                up = node['parent']
+                in_body = (up is not None and up['tag'] == 'div'
+                           and 'secb' in up['a'].get('class', '').split()
+                           and up['parent'] is not None
+                           and 'sec' in up['parent'])
+                if not ('sec' in node or node.get('in group')
+                        or (in_body and ('data-grp' in node['a']
+                                         or 'data-w' in node['a']))):
+                    fail('a <details> that is no section, group, warning '
+                         'card or list folded in a group')
 
         def said(self, d, starting=None):
             """D inside a group: to the group's words, and to the fold it
@@ -1292,6 +1498,7 @@ def report_page_held(path, r):
             held = any(('data-p' in x['a'] or 'data-d' in x['a']
                         or 'data-e' in x['a'] or 'data-f' in x['a']
                         or 'data-t' in x['a'] or 'data-grp' in x['a']
+                        or 'data-s2' in x['a']
                         or x['tag'] in ('style', 'title'))
                        for x in self.stack)
             if not held:
@@ -1302,6 +1509,13 @@ def report_page_held(path, r):
     p.close()
     if p.stack:
         fail(f'{p.stack[-1]["tag"]} never closed')
+    # Every section, once, in its order: "is in the next section" says
+    # where step 2's is.
+    order = ['Locales added and removed', 'Locales whose sort order changed',
+             STEP2_SECTION, 'Not verified', 'How this was compared',
+             'Confirm in PostgreSQL']
+    if p.sections != order:
+        fail(f'sections {p.sections}, not {order}')
     # The page's own words outside marks, labels and fixed sentences: each
     # one of these, so that no sentence the data does not call for (a
     # count, "none", "sorts as before") reaches the page unseen.
@@ -1328,7 +1542,7 @@ def report_page_held(path, r):
         "\u2014 a machine's file made both sides read their upstream tags; "
         'why is under Not verified', ', and its metadata gives',
         'this reads', 'test(s)', 'also, in PostgreSQL:',
-        'Locales whose sort order changed'}
+        'Locales whose sort order changed', STEP2_SECTION}
     for d in p.loose:
         d = re.sub(r'\s+', ' ', d).strip()
         if d and d not in loose_words:
@@ -1336,6 +1550,14 @@ def report_page_held(path, r):
 
     def text(node):
         return ''.join(node['text'])
+
+    for kind, nodes in (('data-f', p.fixed), ('data-l', p.labels),
+                        ('data-e', p.empties)):
+        for n in nodes:
+            k = n['a'][kind]
+            if k not in HOME[kind] or n['section'] != HOME[kind][k]:
+                fail(f'{kind} {k!r} in {n["section"]!r}, not in '
+                     f'{HOME[kind].get(k, "a section this check knows")!r}')
 
     def at(place):
         v = r
@@ -1478,6 +1700,9 @@ def report_page_held(path, r):
         'characters file': ('Every character, other string and pair found:',
                             r'd:characters file$|step11/characters/'
                             r'(state|why)$'),
+        'rules file': ('Every character of the changed rules:',
+                       r'd:rules file$|step2/rules_characters/'
+                       r'(state|why)$'),
         'cv old': ('old side:', r'compared/collation_version/old$'),
         'cv new': ('new side:', r'compared/collation_version/new$'),
         'cv same': ('both sides:', r'compared/collation_version/version$'),
@@ -1605,7 +1830,9 @@ def report_page_held(path, r):
                for i in range(len(s11['sql']['not_checked']))]
     rules = {'not_verified': len(nc),
              'characters file': 'measured_order_characters.'
-                                + r['pair']['slug'] + '.tsv'}
+                                + r['pair']['slug'] + '.tsv',
+             'rules file': 'step2_rules_characters.' + r['pair']['slug']
+                           + '.tsv'}
     measured = s11['state'] == 'reported' and counts.get('state') == 'reported'
     if measured:
         rules['not_measured+refused'] = (counts['not_measured']
@@ -1649,6 +1876,9 @@ def report_page_held(path, r):
               and s11['findings']['state'] == 'reported' else [])
     if groups:
         need.append('characters file')
+    if r['step2']['rules']['state'] == 'reported' and \
+            r['step2']['rules']['differ']:
+        need.append('rules file')
     want = {}
     for k in need:
         want[k] = want.get(k, 0) + 1
@@ -1695,11 +1925,31 @@ def report_page_held(path, r):
         if got != folds:
             fail(f'group {n["a"]["data-grp"]} folds {got!r}, not {folds!r}')
 
+    # Step 2's rules: each part once, in the data's order, in its
+    # section, said whole.
+    want_s2 = page_rules_said(r)
+    got = [n['a']['data-s2'] for n in p.s2]
+    if got != [k for k, _ in want_s2]:
+        fail(f"step 2's parts shown {got}, the data gives "
+             f"{[k for k, _ in want_s2]}")
+    for n, (k, w) in zip(p.s2, want_s2):
+        if n['section'] != STEP2_SECTION:
+            fail(f'step 2 {k} shown under {n["section"]!r}')
+        said = re.sub(r'\s+', ' ', text(n)).strip()
+        if said != w:
+            fail(f'step 2 {k} said {said!r}, not {w!r}')
+
     # Fixed sentences, and each value whose data calls for it.
     fixed = sorted(re.findall(r'data-f="([^"]*)"', page))
     sub = ('sub measured' if measured else 'sub unreported'
            if run['machines']['state'] == 'given' else 'sub sources')
     want_f = sorted(['disc', 'nv', sub]
+                    + (['step2 not here']
+                       if r['step2']['rules']['state'] == 'reported'
+                       else [])
+                    + (['step2 heads']
+                       if r['step2']['rules']['state'] == 'reported'
+                       and r['step2']['rules']['differ'] else [])
                     + (['nothing'] if run['nothing_compared'] != 'none'
                        else [])
                     + (['nd-list'] if s11['state'] != 'reported'
@@ -1729,7 +1979,13 @@ def report_page_held(path, r):
         'block step0': "the machines' files", 'block step1': 'the two sides',
         'block step2': 'step 2', 'block step11': 'step 11',
         'changed not run': 'Only the measurements of the two machines show '
-                           'which locales sort differently.',
+                           "which locales sort differently. Which locales' "
+                           'sort rules changed is in the next section.',
+        'step2 not here': __import__('filter_lc_collate_changes')
+                          .CODE_NOT_COMPARED_HERE + '; the character sets '
+                          'are not on this page.',
+        'step2 heads': 'locales whose rules differ characters in the '
+                       'changed rules',
         'changed': 'Indexes, ORDER BY, comparisons and range partitions on '
                    'text in these locales can give other results after the '
                    'upgrade. Open a group for its characters.',
@@ -1819,6 +2075,11 @@ def report_page_held(path, r):
     for place, b in (('step2/removed', rm), ('step2/rules', ru)):
         if b['state'] != 'reported':
             states.append((place + '/state', 'Locales added and removed'))
+    if ru['state'] != 'reported':
+        states.append(('step2/rules/state', STEP2_SECTION))
+    elif ru['differ'] and r['step2']['rules_characters']['state'] != \
+            'reported':
+        states.append(('step2/rules_characters/state', STEP2_SECTION))
     if c['state'] != 'reported':
         states.append(('compared/state', 'How this was compared'))
     else:
@@ -1844,6 +2105,17 @@ def report_page_held(path, r):
     for place, section in states:
         if len(shown(place, section)) != 1:
             fail(f'{place} not shown once in {section or "the counts"}')
+        # And its reason once in the same section, where the data gives
+        # one: its why, or the sides a collation version is unknown for.
+        base = place[:-len('/state')]
+        for key in ('why', 'sides'):
+            why = at(base).get(key)
+            for w in ([] if why is None else [f'{base}/{key}']
+                      if not isinstance(why, list) else
+                      [f'{base}/{key}#{i}' for i in range(len(why))]):
+                if len(shown(w, section)) != 1:
+                    fail(f'{w} not shown once in '
+                         f'{section or "the counts"}')
 
     # Each list that holds nothing said where it would be, and only those.
     gaps = []
@@ -1860,6 +2132,8 @@ def report_page_held(path, r):
         gaps.append('step2/removed/rows')
     if ru['state'] == 'reported' and not ru['added']['rows']:
         gaps.append('step2/rules/added/rows')
+    if ru['state'] == 'reported' and not ru['differ']:
+        gaps.append('step2/rules/differ')
     if c['state'] == 'reported' and run['machines']['state'] == 'given' \
             and c['note']['state'] != 'fallback' and not c['machines']:
         gaps.append('compared/machines')
@@ -1867,8 +2141,10 @@ def report_page_held(path, r):
         gaps.append('not verified')
     said = re.findall(r'data-e="([^"]*)"', page)
     for n in p.empties:
-        words = ('(no SQL file was written)'
-                 if n['a']['data-e'] == 'step11/sql/files' else '(none)')
+        import filter_lc_collate_changes as flc
+        words = {'step11/sql/files': '(no SQL file was written)',
+                 'step2/rules/differ': flc.NONE_DIFFER_WORDS}.get(
+                     n['a']['data-e'], '(none)')
         if text(n) != words:
             fail(f'{n["a"]["data-e"]} empty, said as {text(n)!r}')
     if sorted(said) != sorted(gaps):
