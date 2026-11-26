@@ -1,5 +1,6 @@
 """scripts/report_data.py: the run's data file, report.<pair>.json, assembled
-from the files the steps wrote, and load(), its strict reader.
+from the files the steps wrote, and load(), its strict reader; and
+scripts/report_html.py, the summary page written beside it (TheSummaryPage).
 
 What each audit.sh run of the suite that reaches its summary is checked
 against is in _harness.check_report. This module holds the files of each
@@ -11,6 +12,7 @@ format, facts that do not hang together). The `!!` of steps 0, 1, 2 and
 11: one of every kind with its title, and the lines of a step's warnings
 file that are refused."""
 import copy
+import html
 import json
 import os
 import re
@@ -5320,6 +5322,373 @@ class WhatWasComparedRead(_Folder):
                 write(self.d, name, text)
                 with self.assertRaisesRegex(rd.ReportError, message):
                     self.section()
+
+
+class TheSummaryPage(_Folder):
+    """scripts/report_html.py: the summary page of a report, held to it by
+    _harness.report_page_held, the check that every audit.sh run of the
+    suite reaching its summary passes through check_report. Here, states
+    of a report that no run of the suite prints, each a report load()
+    accepts: written by report_data.main() from this module's files of a
+    run, then one part changed and read back through load(). And pages
+    broken one way at a time, each refused, beside a change of style the
+    check does not hold; and report_html.main()."""
+
+    def loaded(self, r):
+        """`r` written as the run's data file and read back by load()."""
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        return rd.load(path)
+
+    def fresh(self):
+        """The folder emptied of the files of the case before."""
+        for name in os.listdir(self.d):
+            os.remove(os.path.join(self.d, name))
+
+    def on_machines(self):
+        """Two machines' files, each machine on its build, and what the
+        sides recorded of them."""
+        self.fresh()
+        step2_files(self.d, **MACHINES)
+        step11_files(self.d)
+        r = self.written(route='builds', old=B8, new=B9, old_node='/m/old',
+                         new_node='/m/new',
+                         order_words='forward none build build builds',
+                         step11=True)
+        r['compared'] = compared_run(True)['compared']
+        return self.loaded(r)
+
+    def on_machines_unreported(self):
+        """Two machines' files, step 11's summary not reported, and its
+        `!!` of a locale not on the new machine, which the page places
+        among the locales added and removed."""
+        r = self.on_machines()
+        r['step11'] = {'state': 'not reported', 'why': 'no summary file'}
+        r['warnings']['step11'] = {'state': 'reported', 'items': [
+            rd.warning_item('x', 'not_on_new_machine',
+                            {'locales': ['xx_YY']},
+                            '!! Not on the new machine: xx_YY')]}
+        return self.loaded(r)
+
+    def on_tags(self, **files):
+        """Two tags, and what the sides recorded of them."""
+        self.fresh()
+        step2_files(self.d, **files)
+        r = self.written()
+        r['compared'] = compared_run()['compared']
+        return self.loaded(r)
+
+    def on_tags_added(self):
+        """Two tags, and the locale file step 2 removed renamed to one it
+        found new, spelt two ways."""
+        r = self.on_tags()
+        r['step2']['rules']['added'] = {'state': 'notice', 'rows': [
+            {'name': 'yy', 'renamed_from': 'xx',
+             'spellings': ['yy', 'yy.utf8']}]}
+        return self.loaded(r)
+
+    def on_builds(self):
+        """Two builds rebuilt from their packages, the new one typed as
+        latest-el9."""
+        self.fresh()
+        step2_files(self.d)
+        r = self.written(route='builds', old=R8, new=R9,
+                         order_words='forward none build build builds')
+        r['compared'] = builds_run(latest=(R8, 'latest-el9'))['compared']
+        return self.loaded(r)
+
+    def on_one_commit(self):
+        """Two tags that are one commit: step 2 compared nothing, and the
+        sides and step 2 print the same `!!`."""
+        self.fresh()
+        nothing_files(self.d, 'commit')
+        warnings_file(self.d, 1, ['same_commit', 'code_not_compared'])
+        warnings_file(self.d, 2, ['same_commit'])
+        return self.written(order_words='same commit tag tag tags')
+
+    def page(self, r):
+        """The page of `r` (read back by load() first), where the check
+        looks for it, held; its text, the tags taken out."""
+        import report_html
+        r = self.loaded(r)
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
+            f.write(report_html.render(r))
+        _harness.report_page_held(path, r)
+        with open(path[:-5] + '.html', encoding='utf-8') as f:
+            page = f.read()
+        os.remove(path[:-5] + '.html')
+        page = re.sub(r'<style>.*?</style>', '', page, flags=re.S)
+        text = html.unescape(re.sub(r'<[^>]+>', ' ', page))
+        text = re.sub(r'\s+', ' ', text.replace('\u2014', '-'))
+        return re.sub(r'\( ', '(', re.sub(r' ([.,;:)])', r'\1', text))
+
+    def test_the_counts_and_not_measured(self):
+        """On the machines, step 11's counts under their words; on the
+        tags, NOT MEASURED with the reason, and no count of step 11."""
+        text = self.page(self.on_machines())
+        self.assertIn('1 locales sort differently', text)
+        self.assertIn('1 locales unchanged 0 locales not compared', text)
+        self.assertNotIn('NOT MEASURED', text)
+        text = self.page(self.on_tags())
+        self.assertIn('NOT MEASURED: how many locales sort differently, '
+                      "are gone or new the measured order NOT RUN - no "
+                      "machines' files", text)
+        self.assertNotIn('locales sort differently 0', text)
+        self.assertIn('en_US@ampm deleted', text)
+        self.assertIn('xx renamed to yy', text)
+
+    def test_parts_not_done(self):
+        """A part the run did not do or could not know, in the states no
+        run of the suite prints, shown with its state in capitals and its
+        reason where the data file gives one; and lists that hold
+        nothing, said where they would be."""
+        cases = [
+            ('on_machines', lambda r: r.__setitem__('step11', {
+                'state': 'not reported', 'why': 'no summary file'}),
+             ['NOT MEASURED', 'NOT REPORTED - no summary file']),
+            ('on_machines', lambda r: r['step11'].__setitem__('counts', {
+                'state': 'not reported', 'why': 'no data file'}),
+             ['NOT MEASURED', 'NOT REPORTED - no data file']),
+            ('on_machines', lambda r: r['compared']['machines'][0]
+             .__setitem__('charmaps', {'state': 'none',
+                                       'why': 'none in the file'}),
+             ['charmaps: NONE - none in the file',
+              'compared as: its locale sources on glibc-2.28,']),
+            ('on_machines', lambda r: r['step11'].__setitem__('sql_files', []),
+             ['(no SQL file was written)']),
+            ('on_machines_unreported', lambda r: None,
+             ['NOT MEASURED', 'NOT REPORTED - no summary file',
+              'NOT REPORTED - no summary file 1 locale not on the new '
+              'machine: a database that uses one cannot use it there Not on '
+              'the new machine: xx_YY Locale source files between']),
+            ('on_tags', lambda r: r['warnings'].__setitem__('step2', {
+                'state': 'not reported', 'why': 'no warnings file'}),
+             ['The warnings of step 2 NOT REPORTED - no warnings file']),
+            ('on_tags', lambda r: r.__setitem__('compared', {
+                'state': 'not reported', 'why': 'no record'}),
+             ['NOT REPORTED - no record']),
+            ('on_tags', lambda r: r['step2'].__setitem__('removed', {
+                'state': 'not reported', 'why': 'no list'}),
+             ['Gone at glibc-2.34 NOT REPORTED - no list']),
+            ('on_tags', lambda r: r['step2'].__setitem__('rules', {
+                'state': 'not reported', 'why': 'no rules'}),
+             ['New at glibc-2.34 NOT REPORTED - no rules']),
+            ('on_tags', lambda r: r['compared'].__setitem__(
+                'collation_version', {'state': 'unknown',
+                                      'sides': ['glibc-2.34']}),
+             ['UNKNOWN - no glibc version for glibc-2.34']),
+            ('on_tags', lambda r: r['compared'].__setitem__('latest', {
+                'state': 'not reported', 'why': 'no latest record'}),
+             ['latest-elN NOT REPORTED - no latest record']),
+            ('on_builds', lambda r: r['compared']['latest']['resolved'][0]
+             .__setitem__('when', {'state': 'no date'}),
+             ['and its metadata gives NO DATE this reads'])]
+        for n, (base, change, want) in enumerate(cases):
+            with self.subTest(n=n):
+                r = getattr(self, base)()
+                change(r)
+                text = self.page(r)
+                for w in want:
+                    self.assertIn(w, text)
+        text = self.page(self.on_tags(removed=''))
+        self.assertIn('Gone at glibc-2.34 (none)', text)
+        self.fresh()
+        step2_files(self.d)
+        r = self.written(order_words='forward none tag commit sides')
+        r['compared'] = compared_run()['compared']
+        text = self.page(r)
+        self.assertIn('The sides cannot show what your distro adds or drops',
+                      text)
+        text = self.page(self.on_tags_added())
+        self.assertIn('New at glibc-2.34 yy renamed from xx as yy, yy.utf8 '
+                      'The old side is an upstream tag: a file it does not '
+                      'have does not prove the locale was absent on the old '
+                      'system (see Not verified).', text)
+        text = self.page(self.on_machines())
+        self.assertIn('Not on the new machine (none)', text)
+        self.assertIn('Only on the new machine (none)', text)
+
+    def test_one_commit(self):
+        """Nothing compared: said at the top; step 2's new files NOT
+        COMPARED with its reason; the `!!` the sides and step 2 print
+        alike, one card, counted once, as the text's warnings block
+        prints it once."""
+        text = self.page(self.on_one_commit())
+        self.assertIn('Nothing was compared: the two sides are one commit',
+                      text)
+        self.assertIn('New at glibc-2.34 NOT COMPARED - the two tags are '
+                      'one commit', text)
+        self.assertEqual(text.count('same_commit'), 1)  # its text, once
+        self.assertIn('3 things NOT verified', text)
+
+    def test_unchanged_only_as_far_as_measured(self):
+        """A locale unchanged only as far as step 11 measured it: counted
+        with the unchanged, and said apart under its own words."""
+        r = self.on_machines()
+        r['step11']['verdicts']['C'] = {
+            'verdict': 'far',
+            'words': 'unchanged only as far as step 11 measured it'}
+        r['step11']['counts']['unchanged_as_far_as_measured'] = 1
+        text = self.page(r)
+        self.assertIn('1 locales unchanged of them only as far as '
+                      'measured: 1', text)  # the count, then its words
+
+    def test_a_page_broken_is_refused(self):
+        """One break at a time, each a way a page can say what the data
+        does not: a count, a member of a list, words over the wrong
+        values, values of an entry in another order, a card, a warning's
+        text, a state, a sentence the data calls for or the sentence of
+        another route, words the page never says, 0 for what was not
+        measured, a list emptied without saying so. And a change of style,
+        which the check does not hold and passes."""
+        import report_html
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        cases = (
+            ('on_machines', r'(data-p="step11/counts/changed">)(\d+)',
+             lambda m: m.group(1) + str(int(m.group(2)) + 1), 'shows'),
+            ('on_machines', r'(data-p="compared/machines#0/locales">)(\d+)',
+             lambda m: m.group(1) + str(int(m.group(2)) + 1), 'shows'),
+            ('on_machines', r'Not on the new machine',
+             lambda m: 'Only on the new machine', 'label'),
+            ('on_machines', r'locales sort differently',
+             lambda m: 'locales unchanged', 'label'),
+            ('on_machines', r'<b data-t="">old</b>',
+             lambda m: '<b data-t="">new</b>', 'label'),
+            ('on_machines', r'(data-d="not_verified">)(\d+)',
+             lambda m: m.group(1) + str(int(m.group(2)) + 1), 'worked out'),
+            ('on_machines', r'data-l="cv old"><span data-t="">old side:'
+             r'(.*?)data-l="cv new"><span data-t="">new side:',
+             lambda m: 'data-l="cv new"><span data-t="">new side:'
+             + m.group(1) + 'data-l="cv old"><span data-t="">old side:',
+             'holds'),
+            ('on_machines', r'<div class="tile bad" data-l="changed">.*?'
+             r'</div>', lambda m: '', 'calls for'),
+            ('on_machines_unreported', r'<details class="card" data-w='
+             r'"warnings/step11/items#0">.*?</details>', lambda m: '',
+             'placed'),
+            ('on_machines', r'class="badge warn"',
+             lambda m: 'class="badge ok"', 'shown as'),
+            ('on_tags', r'<div class="tile nm".*?</b></div>',
+             lambda m: '<div class="tile"><b>0</b></div>', 'outside'),
+            ('on_tags', r'(<b data-p="step11/state">)NOT RUN(</b>)',
+             lambda m: m.group(1) + '(none)' + m.group(2), 'shows'),
+            ('on_tags', r'<div class="nd"><b data-p="step11/state">NOT RUN'
+             r'</b>[^<]*<span[^>]*>[^<]*</span></div>(<h3>)',
+             lambda m: m.group(1), 'not shown once'),
+            ('on_tags', r'Gone at', lambda m: 'New at', 'label'),
+            ('on_tags', r'data-v="renamed">renamed to',
+             lambda m: 'data-v="renamed">deleted', 'shown as'),
+            ('on_tags', r'<li><span data-p="step2/removed/rows#0/name">'
+             r'.*?</li>', lambda m: '', 'removed rows'),
+            ('on_tags', r'<p class="hint" data-p="step2/removed/'
+             r'source"[^>]*>[^<]*</p>', lambda m: '', 'come from'),
+            ('on_tags', r'<li><span data-p="step11/not_done#4">.*?</li>',
+             lambda m: '', 'did not do'),
+            ('on_tags', r'(<div class="nd"><b data-p="step11/state">)',
+             lambda m: '<p>Every other locale sorts as before.</p>'
+             + m.group(1), 'does not know'),
+            ('on_tags', r'<p class="sub0" data-f="sub '
+             r'sources">.*?</p>', lambda m: '<p class="sub0" '
+             'data-f="sub unreported">The two machines\' files were given; '
+             'what they measured is not reported (see below).</p>',
+             'fixed sentences'),
+            ('on_tags', r' <span data-p="step2/removed/rows#1/to">yy</span>',
+             lambda m: '', 'where it went'),
+            ('on_machines', r'(<div class="tile ok" data-l="unchanged"><b>'
+             r'<span data-p="step11/counts/)unchanged(">)1',
+             lambda m: m.group(1) + 'unchanged_as_far_as_measured'
+             + m.group(2) + '0', 'holds'),
+            ('on_builds', r'(<span data-p="compared/builds/entries#0/patches/)'
+             r'applied(">)(\d+)(</span> of its <span data-p="compared/builds/'
+             r'entries#0/patches/)of(">)([\d,]+)',
+             lambda m: m.group(1) + 'of' + m.group(2) + m.group(6) + m.group(4)
+             + 'applied' + m.group(5) + m.group(3), 'order'),
+            ('on_builds', r'(<span data-p="compared/latest/resolved#0/)build'
+             r'(">)([^<]*)(</span>, the newest glibc build in <span data-p="'
+             r'compared/latest/resolved#0/)folder(">)([^<]*)',
+             lambda m: m.group(1) + 'folder' + m.group(2) + m.group(6)
+             + m.group(4) + 'build' + m.group(5) + m.group(3),
+             'latest-elN said'),
+            ('on_tags', r'<p class="none" data-e="step2/rules/added/'
+             r'rows">\(none\)</p>', lambda m: '', 'empty lists'),
+            ('on_tags', r'(<h2>How this was compared)',
+             lambda m: m.group(1) + ' (2 sides)', 'outside'),
+            ('on_tags', r'<p class="disc" data-f="disc">'
+             r'.*?</p>',
+             lambda m: '', 'fixed sentences'),
+            ('on_one_commit', r'<div class="banner">.*?</div>',
+             lambda m: '', 'fixed sentences'),
+            ('on_one_commit', r'<details class="card" data-w="[^"]*">'
+             r'.*?</details>', lambda m: '', 'Not verified'),
+            ('on_one_commit', r'(<pre data-p="warnings/step1/items#0/'
+             r'text">)', lambda m: m.group(1) + 'x', 'shows'),
+            ('on_tags_added', r', <span data-p="step2/rules/added/rows#0/'
+             r'spellings#1">yy.utf8</span>', lambda m: '', 'spelt'),
+            ('on_tags', r'not a guarantee', lambda m: 'a guarantee',
+             'fixed sentence'),
+            ('on_tags', r'(data-p="compared/tags#0/ref">glibc-2.28</span>)'
+             r' =', lambda m: m.group(1) + ' = verified, no change:',
+             'says'),
+            ('on_machines', r'read FILE old.out new.out',
+             lambda m: 'read FILE new.out old.out', 'fixed sentence'),
+            ('on_machines', r'(data-e="step11/verdicts:only old">)\(none\)',
+             lambda m: m.group(1) + 'no change', 'empty, said'),
+            ('on_tags', r'(data-f="block step2">)step 2',
+             lambda m: m.group(1) + 'step 11', 'fixed sentence'),
+            ('on_builds', r', by its metadata of', lambda m: ', and its '
+             'metadata gives', 'latest-elN said'),
+            ('on_tags', r'font-size:22px', lambda m: 'font-size:23px',
+             None))
+        for n, (base, rx, repl, why) in enumerate(cases):
+            with self.subTest(n=n, rx=rx):
+                r = getattr(self, base)()
+                page = report_html.render(r)
+                broken, k = re.subn(rx, repl, page, count=1, flags=re.S)
+                self.assertEqual(k, 1)
+                with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
+                    f.write(broken)
+                if why is None:
+                    _harness.report_page_held(path, r)
+                else:
+                    with self.assertRaisesRegex(AssertionError, why):
+                        _harness.report_page_held(path, r)
+
+    def test_written_beside_the_data_file(self):
+        """main(): the page beside the data file it reads, nothing
+        printed; a data file load() refuses gives exit 1, why on stderr,
+        and no page nor .partial; a wrong call, exit 2."""
+        import contextlib
+        import io
+        import report_html
+        step2_files(self.d)
+        self.written()
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(report_html.main([path]), 0)
+        self.assertEqual((out.getvalue(), err.getvalue()), ('', ''))
+        self.assertEqual(sorted(n for n in os.listdir(self.d)
+                                if n.startswith('report.')),
+                         [f'report.{PAIR}.html', f'report.{PAIR}.json'])
+        _harness.report_page_held(path, rd.load(path))
+        os.remove(path[:-5] + '.html')
+        with open(path, encoding='utf-8') as f:
+            r = json.load(f)
+        r['step11']['state'] = 'not yet run'
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(report_html.main([path]), 1)
+        self.assertIn('error: cannot write', err.getvalue())
+        self.assertEqual(sorted(n for n in os.listdir(self.d)
+                                if n.startswith('report.')),
+                         [f'report.{PAIR}.json'])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(report_html.main([]), 2)
+            self.assertEqual(report_html.main([path, path]), 2)
 
 
 if __name__ == '__main__':

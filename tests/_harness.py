@@ -750,9 +750,10 @@ def check_report(returncode, out, out_dir):
     transliterations against the report's step2.character_sets and
     step2.transliteration (charmaps_held, translit_held); and what it
     printed before and under 'What was compared' against the report's
-    compared (compared_held). A run that
-    printed the summary and has no data file fails here, whatever its
-    exit code. No run leaves a report.*.partial.
+    compared (compared_held); and the summary page beside the data file,
+    report.<pair>.html, against the report (report_page_held). A run that
+    printed the summary and has no data file or no page fails here,
+    whatever its exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
     that this refuses it), _AuditOnBuilds and the two other runs that
     reach the summary (test_wrapper, test_build_sources), with no run of
@@ -938,6 +939,627 @@ def check_report(returncode, out, out_dir):
     check_step11_warnings(r, out_dir, path)
     check_step11_counts(r, out_dir, path)
     compared_held(out, r, path)
+    report_page_held(path, r)
+
+
+def report_page_held(path, r):
+    """The summary page report.<pair>.html beside the data file `path`,
+    held to the report `r` read from it (scripts/report_html.py).
+
+    - Every value marked data-p in the body is the value at its place in
+      `r`, in the page's spelling: a whole number with thousands
+      separators; a state in capitals; step 2's file C as C.UTF-8; a
+      warning's text without its `!!` margin; a closed word (data-v) in
+      the words this check gives it, but a tag's signature, held by the
+      colour of its badge; a name a map is keyed by (data-k) with its
+      verdict.
+    - Every value marked data-d is worked out again by this check's rule.
+    - Each label (data-l) carries the words this check's table gives it
+      (data-t), and holds only values of the places that table allows;
+      a label whose words are its own first value (a build, a latest-elN,
+      a tag, an SQL file) holds one entry's places in the order they are
+      said, as does a machine's "compared as"; a latest-elN's whole line
+      is held to its entry, its date or NO DATE included. So a value under the
+      wrong words, the wrong side or in another order is refused.
+    - The labels the data calls for are there, as many times as it calls
+      for each: the counts or NOT MEASURED, the locales on one machine
+      only, step 2's files gone and new, each machine, build, latest-elN,
+      tag and SQL file. So are the sentences the page says whole (data-f),
+      each in this check's words, the one at the top the route's; the
+      cards it places outside Not verified; and every member of step 2's
+      rows and of step 11's list of what it did not do.
+    - The Not verified entries are which and in which order the data
+      gives; each block not done shows its state in the section the data
+      calls for; the lists that hold nothing are the ones marked data-e,
+      compared as a set, not by where each sits.
+    - Each list that holds nothing says "(none)" ("(no SQL file was
+      written)" for the SQL files).
+    - Every other word of the page outside marks, labels' words, data-e,
+      data-f, <title> and <style> is one of this check's own list, so a
+      sentence the data does not call for is refused; a label whose words
+      are its first value says that value and this check's word after it."""
+    import html.parser
+    page_path = path[:-len('.json')] + '.html'
+    if not os.path.exists(page_path):
+        raise AssertionError(f'{page_path}: no page beside the data file')
+    with open(page_path, encoding='utf-8') as f:
+        page = f.read()
+
+    def fail(what):
+        raise AssertionError(f'{page_path}: {what}')
+
+    class Page(html.parser.HTMLParser):
+        VOID = {'meta', 'br', 'hr', 'img', 'input', 'link'}
+
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.stack, self.marks, self.labels, self.loose = [], [], [], []
+            self.fixed, self.empties = [], []
+            self.section = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag in self.VOID:
+                return
+            a = {k: (v or '') for k, v in attrs}
+            node = {'tag': tag, 'a': a, 'text': [], 'section': self.section,
+                    'marks': [], 'label': None}
+            if 'data-p' in a or 'data-d' in a:
+                self.marks.append(node)
+                for x in self.stack:
+                    if 'data-l' in x['a']:
+                        x['marks'].append(node)
+            if 'data-l' in a:
+                self.labels.append(node)
+            if 'data-f' in a:
+                self.fixed.append(node)
+            if 'data-e' in a:
+                self.empties.append(node)
+            if 'data-t' in a:
+                owner = next((x for x in reversed(self.stack)
+                              if 'data-l' in x['a']), None)
+                if owner is None or owner['label'] is not None:
+                    fail(f'words {tag} outside a label or twice in one')
+                owner['label'] = node
+            self.stack.append(node)
+            if tag == 'h2':
+                self.section = ''
+
+        def handle_endtag(self, tag):
+            if tag in self.VOID:
+                return
+            if not self.stack or self.stack[-1]['tag'] != tag:
+                fail(f'</{tag}> closes nothing open')
+            self.stack.pop()
+
+        def handle_data(self, d):
+            if self.stack and self.stack[-1]['tag'] == 'h2':
+                self.section += d
+            for x in self.stack:
+                x['text'].append(d)
+            held = any(('data-p' in x['a'] or 'data-d' in x['a']
+                        or 'data-e' in x['a'] or 'data-f' in x['a']
+                        or 'data-t' in x['a']
+                        or x['tag'] in ('style', 'title'))
+                       for x in self.stack)
+            if not held:
+                self.loose.append(d)
+
+    p = Page()
+    p.feed(page)
+    p.close()
+    if p.stack:
+        fail(f'{p.stack[-1]["tag"]} never closed')
+    # The page's own words outside marks, labels and fixed sentences: each
+    # one of these, so that no sentence the data does not call for (a
+    # count, "none", "sorts as before") reaches the page unseen.
+    loose_words = {
+        ',', '.', ';', '\u2014', 'as', 'to', 'of its', ', as commit',
+        ', by its metadata of', ', the newest glibc build in',
+        ': the two sides are one', 'Builds rebuilt from their packages',
+        'Collation version PostgreSQL records', 'Confirm in PostgreSQL',
+        'How each machine sorts every locale (the measured order)',
+        'How this was compared', 'Locale source files between the',
+        'Locales added and removed', 'Machines', 'Not verified',
+        'On the machines (what each machine measured)',
+        'Run each file unchanged on both servers, in a database of its '
+        'encoding, then compare the two outputs:',
+        "The SQL files that confirm a change are written from the "
+        "machines' measurements.",
+        'Upstream tags', 'What changes from', 'its locale sources on',
+        'its locale sources and charmaps on', 'latest-elN',
+        'patches change them), as commit', 'renamed from',
+        'the measured order',
+        'with localedata/ and locale/ from its source RPM (',
+        '\u2014 no glibc version for', 'The warnings of',
+        'Whatever that step warned about is not on this page.',
+        "\u2014 a machine's file made both sides read their upstream tags; "
+        'why is under Not verified', ', and its metadata gives',
+        'this reads'}
+    for d in p.loose:
+        d = re.sub(r'\s+', ' ', d).strip()
+        if d and d not in loose_words:
+            fail(f'words outside any mark this check does not know: {d!r}')
+
+    def text(node):
+        return ''.join(node['text'])
+
+    def at(place):
+        v = r
+        for part in place.split('/'):
+            key, _, idx = part.partition('#')
+            if key:
+                if not isinstance(v, dict) or key not in v:
+                    fail(f'no {place} in the data')
+                v = v[key]
+            if idx:
+                if not isinstance(v, list) or int(idx) >= len(v):
+                    fail(f'no {place} in the data')
+                v = v[int(idx)]
+        return v
+
+    def spelt(v):
+        return (f'{v:,}' if isinstance(v, int) and not isinstance(v, bool)
+                else str(v))
+
+    def body(t):
+        lines = t.split('\n')
+        return '\n'.join([lines[0][3:]] + [ln[3:] if ln.startswith('   ')
+                                           else ln for ln in lines[1:]])
+
+    run = r['run']
+    notice = ('The old side is an upstream ' + run['old_class'] + ': a file '
+              'it does not have does not prove the locale was absent on the '
+              'old system (see Not verified).')
+    sources = {
+        'machine sources': "Each machine's locale files are its own locale "
+                           'sources as its file holds them, checked against '
+                           'no package.',
+        'build packages': "Each build's locale files are the ones its "
+                          'glibc-locale-source package installs, checked '
+                          'one by one.',
+        'old side is a tag': 'The old side is an upstream '
+                             + run['old_class'] + ', so what the old distro '
+                             'adds to it is NOT CHECKED: a file only that '
+                             'distro ships, and the new side does not, is '
+                             'not listed. Name the old side as a build to '
+                             'check it.',
+        'new side is a tag': 'The new side is an upstream '
+                             + run['new_class'] + ', so what the new distro '
+                             'adds to it or drops is NOT CHECKED: a file '
+                             'listed here may still ship there, and one it '
+                             'drops is not listed. Name the new side as a '
+                             'build to check it.',
+        'tags': 'The ' + run['word'] + ' cannot show what your distro adds '
+                'or drops: NOT '
+                "CHECKED. Pass --old-node and --new-node, each machine's "
+                'file, to check it.',
+        "tags, because of a machine's file": 'The ' + run['word']
+                                             + ' cannot show what your '
+                                             'distro adds or drops: NOT '
+                                             "CHECKED. A machine's file made "
+                                             'both sides read their tags; why '
+                                             'is under Not verified.'}
+    for m in p.marks:
+        a, t = m['a'], text(m)
+        if 'data-p' not in a:
+            continue
+        place = a['data-p']
+        if 'data-k' in a:          # a name a map is keyed by, and its value
+            key = place[len(a['data-k']) + 1:].split('/')[0]
+            if t != key or at(place) != a.get('data-v'):
+                fail(f'{place} shows {t!r} as {a.get("data-v")!r}')
+            continue
+        v = at(place)
+        if 'data-v' in a:
+            if v != a['data-v']:
+                fail(f'{place} is {v!r}, the page says {a["data-v"]!r}')
+            if place.endswith('/status'):
+                if ('ok' in a.get('class', '').split()) != (v == 'good'):
+                    fail(f'{place} {v!r} shown as {a.get("class")!r}')
+                continue
+            words = (sources.get(v) if place == 'step2/removed/source'
+                     else notice if place == 'step2/rules/added/state'
+                     else {'renamed': 'renamed to',
+                           'in the C.UTF-8 notice':
+                               'C.UTF-8: see Not verified'}.get(v, v))
+            if t != words:
+                fail(f'{place} {v!r} shown as {t!r}')
+            continue
+        if place.endswith('/state'):
+            want = v.upper()
+        elif place.endswith('/text'):
+            want = body(v)
+        elif 'data-as' in a:
+            if (v, a['data-as']) != ('C', 'C.UTF-8'):
+                fail(f'{place} {v!r} shown as {a["data-as"]!r}')
+            want = 'C.UTF-8'
+        else:
+            want = spelt(v)
+        if t != want:
+            fail(f'{place} shows {t!r}, the data holds {want!r}')
+
+    def shown(place, section=False):
+        return [m for m in p.marks if m['a'].get('data-p') == place
+                and (section is False or m['section'] == section)]
+
+    # The labels: the words this check gives each, the places it holds.
+    new_at = r['pair']['new']
+    words = {
+        'not measured': ('NOT MEASURED: how many locales sort differently, '
+                         'are gone or new',
+                         r'step11(/counts)?/(state|why.*)$'),
+        'changed': ('locales sort differently', r'step11/counts/changed$'),
+        'tile only old': ('locales gone on the new machine',
+                          r'step11/counts/only_old$'),
+        'tile only new': ('locales new on the new machine',
+                          r'step11/counts/only_new$'),
+        'unchanged': ('locales unchanged', r'step11/counts/unchanged$'),
+        'far': ('of them only as far as measured:',
+                r'step11/counts/unchanged_as_far_as_measured$'),
+        'not compared': ('locales not compared',
+                         r'd:not_measured\+refused$'),
+        'not measured count': ('not measured:',
+                               r'step11/counts/not_measured$'),
+        'refused': ('refused by glibc:', r'step11/counts/refused$'),
+        'not verified': ('things NOT verified, listed below',
+                         r'd:not_verified$'),
+        'gone': ('Gone at ' + new_at,
+                 r'pair/new$|step2/removed/(state|why|source|rows#)'),
+        'new': ('New at ' + new_at,
+                r'pair/new$|run/old_class$|step2/rules/(state|why|added/)'),
+        'machine old': ('old', r'compared/machines#0/'),
+        'machine new': ('new', r'compared/machines#1/'),
+        'word': ('rpm -q glibc:', r'compared/machines#\d+/word$'),
+        'locales': ('locale sources:', r'compared/machines#\d+/locales$'),
+        'charmaps': ('charmaps:', r'compared/machines#\d+/charmaps/'),
+        'commit': ('compared as:', r'compared/machines#\d+/(tag|commit)$'),
+        'build': (None, r'compared/builds/entries#(\d+)/'),
+        'latest': (None, r'compared/latest/resolved#(\d+)/'),
+        'tag': (None, r'compared/tags#(\d+)/'),
+        'sql': (None, r'step11/sql_files#(\d+)/'),
+        'cv old': ('old side:', r'compared/collation_version/old$'),
+        'cv new': ('new side:', r'compared/collation_version/new$'),
+        'cv same': ('both sides:', r'compared/collation_version/version$'),
+        'measured old': ('Old machine measured:',
+                         r'step11/counts/machines/old/'),
+        'measured new': ('new machine measured:',
+                         r'step11/counts/machines/new/'),
+    }
+    def entry(key, i):
+        """The places of one entry's label, in the order it says them."""
+        if key == 'latest':
+            x = r['compared']['latest']['resolved'][int(i)]
+            return ['name', 'build', 'folder',
+                    'when/utc' if x['when']['state'] == 'dated'
+                    else 'when/state']
+        return {'build': ['build', 'tag', 'patches/applied', 'patches/of',
+                          'commit'],
+                'tag': ['ref', 'commit', 'status', 'detail'],
+                'sql': ['encoding', 'file']}[key]
+
+    lists = {'only old': 'Not on the new machine',
+             'only new': 'Only on the new machine'}
+    seen = {}
+    for lab in p.labels:
+        key = lab['a']['data-l']
+        if lab['label'] is None:
+            fail(f'label {key!r} without its words')
+        said = text(lab['label'])
+        places = [m['a'].get('data-p') or 'd:' + m['a']['data-d']
+                  for m in lab['marks']]
+        if key in lists:
+            if said != lists[key] or any(
+                    m['a'].get('data-v', key) != key for m in lab['marks']):
+                fail(f'label {key!r} says {said!r} over {places}')
+            seen[key] = seen.get(key, 0) + 1
+            continue
+        if key not in words:
+            fail(f'a label this check does not know: {key!r}')
+        want, rx = words[key]
+        if want is None:       # its words are its first value: one entry
+            idx = {re.match(rx, x).group(1) for x in places
+                   if re.match(rx, x)}
+            if len(idx) != 1 or not all(re.match(rx, x) for x in places):
+                fail(f'label {key!r} holds {places}')
+            i = idx.pop()
+            if key == 'latest':
+                x = r['compared']['latest']['resolved'][int(i)]
+                whole = (f'{x["name"]} = {x["build"]}, the newest glibc build '
+                         f'in {x["folder"]}' + (
+                             f', by its metadata of {x["when"]["utc"]}'
+                             if x['when']['state'] == 'dated' else
+                             ', and its metadata gives NO DATE this reads'))
+                if re.sub(r'\s+', ' ', text(lab)).strip() != whole:
+                    fail(f'latest-elN said {text(lab)!r}, not {whole!r}')
+            first = text(lab['marks'][0]) if lab['marks'] else ''
+            if said != first + {'build': ':', 'latest': ' =', 'tag': ' =',
+                                'sql': ' database:'}[key]:
+                fail(f'label {key!r} says {said!r}')
+            if [x[re.match(rx, x).end():] for x in places] != entry(key, i):
+                fail(f'label {key!r} holds {places}, not in the order '
+                     f'{entry(key, i)}')
+        else:
+            if said != want:
+                fail(f'label {key!r} says {said!r}, not {want!r}')
+            bad = [x for x in places if not re.match(rx, x)]
+            if bad:
+                fail(f'label {key!r} holds {bad}')
+            if key == 'commit' and [x.rsplit('/', 1)[1] for x in places] != [
+                    'tag', 'commit']:
+                fail(f'label {key!r} holds {places}')
+        if key == 'not verified' and [m['a'].get('data-d') for m in
+                                      lab['marks']] != ['not_verified']:
+            fail('the count of what was not verified is not under its words')
+        seen[key] = seen.get(key, 0) + 1
+
+    # What the page works out, by this check's own rules.
+    s11 = r['step11']
+    counts = s11.get('counts', {})
+    texts, nc = set(), []
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        if r['warnings'][st]['state'] == 'not reported':
+            nc.append(f'warnings/{st}')
+    if s11['state'] != 'reported':
+        nc.append('step11')
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        for i, w in enumerate(r['warnings'][st].get('items', [])):
+            if w['text'] in texts:
+                continue
+            texts.add(w['text'])
+            if w['class'] == 'not checked':
+                nc.append(f'warnings/{st}/items#{i}')
+    rules = {'not_verified': len(nc)}
+    measured = s11['state'] == 'reported' and counts.get('state') == 'reported'
+    if measured:
+        rules['not_measured+refused'] = (counts['not_measured']
+                                         + counts['refused'])
+    for m in p.marks:
+        rule = m['a'].get('data-d')
+        if rule is not None and (rule not in rules
+                                 or text(m) != spelt(rules[rule])):
+            fail(f'{rule} shows {text(m)!r}, worked out {rules.get(rule)!r}')
+
+    # The labels the data calls for, once each.
+    need = ['not verified', 'gone', 'new']
+    if measured:
+        need += ['changed', 'tile only old', 'tile only new', 'unchanged',
+                 'not compared', 'not measured count', 'refused',
+                 'measured old', 'measured new']
+        if counts['unchanged_as_far_as_measured']:
+            need.append('far')
+    else:
+        need.append('not measured')
+    if s11['state'] == 'reported':
+        need += ['only old', 'only new']
+    c = r['compared']
+    if c['state'] == 'reported':
+        if run['machines']['state'] == 'given' and \
+                c['note']['state'] != 'fallback':
+            for i, _ in enumerate(c['machines']):
+                need += ['machine ' + ('old', 'new')[i], 'word', 'locales',
+                         'charmaps', 'commit']
+        need += ['tag'] * len(c['tags'])
+        need += ['build'] * len(c['builds'].get('entries', []))
+        if c['latest']['state'] == 'reported':
+            need += ['latest'] * len(c['latest']['resolved'])
+        need += {'differ': ['cv old', 'cv new'], 'same': ['cv same'],
+                 'unknown': []}[c['collation_version']['state']]
+    if s11['state'] == 'reported':
+        need += ['sql'] * len(s11['sql_files'])
+    want = {}
+    for k in need:
+        want[k] = want.get(k, 0) + 1
+    if seen != want:
+        fail(f'labels {sorted(seen.items())}, the data calls for '
+             f'{sorted(want.items())}')
+    if s11['state'] == 'reported':
+        for verdict in ('only old', 'only new'):
+            names = [k for k, v in s11['verdicts'].items()
+                     if v['verdict'] == verdict]
+            got = [text(m) for m in p.marks
+                   if m['a'].get('data-k') == 'step11/verdicts'
+                   and m['a'].get('data-v') == verdict]
+            if got != names:
+                fail(f'{verdict} shows {got}, the data gives {names}')
+
+    # Fixed sentences, and each value whose data calls for it.
+    fixed = sorted(re.findall(r'data-f="([^"]*)"', page))
+    sub = ('sub measured' if measured else 'sub unreported'
+           if run['machines']['state'] == 'given' else 'sub sources')
+    want_f = sorted(['disc', 'nv', sub]
+                    + (['nothing'] if run['nothing_compared'] != 'none'
+                       else [])
+                    + (['nd-list'] if s11['state'] != 'reported'
+                       and s11.get('not_done') else [])
+                    + (['psql'] if s11['state'] == 'reported'
+                       and s11['sql_files'] else [])
+                    + ['block ' + st for st in ('step0', 'step1', 'step2',
+                                                'step11')
+                       if r['warnings'][st]['state'] == 'not reported'])
+    if fixed != want_f:
+        fail(f'fixed sentences {fixed}, the data calls for {want_f}')
+    said_f = {
+        'disc': 'This report is a complement to testing on your own '
+                'servers, not a guarantee. What it could not verify is '
+                'listed under \u201cNot verified\u201d.',
+        'nv': 'What this run could not check. None of it means \u201cno '
+              'change\u201d.',
+        'nothing': 'Nothing was compared',
+        'nd-list': 'So none of these was checked:',
+        'psql': 'psql -X -d DATABASE -f FILE > old.out 2>&1 # and new.out '
+                'on the new server python3 scripts/confirm_sql.py read FILE '
+                'old.out new.out',
+        'block step0': "the machines' files", 'block step1': 'the two sides',
+        'block step2': 'step 2', 'block step11': 'step 11',
+        'sub unreported': "The two machines' files were given; what they "
+                          'measured is not reported (see below).',
+        'sub sources': 'Compared as ' + run['word'] + ' from their glibc '
+                       "sources; no machine's files given."}
+    if measured:
+        m2 = counts['machines']
+        said_f['sub measured'] = (
+            f'Old machine measured: {m2["old"]["label"]}, '
+            f'{spelt(m2["old"]["locales"])} locales; new machine measured: '
+            f'{m2["new"]["label"]}, {spelt(m2["new"]["locales"])} locales.')
+    for n in p.fixed:
+        k = n['a']['data-f']
+        if re.sub(r'\s+', ' ', text(n)).strip() != said_f[k]:
+            fail(f'fixed sentence {k!r} says {text(n)!r}')
+    if s11['state'] != 'reported':
+        got = [m['a']['data-p'] for m in p.marks
+               if m['a'].get('data-p', '').startswith('step11/not_done#')]
+        if got != [f'step11/not_done#{i}'
+                   for i in range(len(s11.get('not_done', [])))]:
+            fail(f"step 11's list of what it did not do shown as {got}")
+    if run['nothing_compared'] != 'none' and \
+            len(shown('run/nothing_compared')) != 1:
+        fail('nothing compared, and the page does not say it once')
+    rm, ru = r['step2']['removed'], r['step2']['rules']
+    if rm['state'] == 'reported':
+        if len(shown('step2/removed/source')) != 1:
+            fail("where the files gone come from not said once")
+        for i, x in enumerate(rm['rows']):
+            if len(shown(f'step2/removed/rows#{i}/to')) != (
+                    x['how'] == 'renamed'):
+                fail(f'removed row {i}: where it went, shown or not, '
+                     'against the data')
+        n = [m['a']['data-p'] for m in p.marks if re.match(
+            r'step2/removed/rows#\d+/name$', m['a'].get('data-p', ''))]
+        if n != [f'step2/removed/rows#{i}/name'
+                 for i in range(len(rm['rows']))]:
+            fail(f'removed rows shown {n}')
+    if ru['state'] == 'reported':
+        n = [m['a']['data-p'] for m in p.marks if re.match(
+            r'step2/rules/added/rows#\d+/name$', m['a'].get('data-p', ''))]
+        if n != [f'step2/rules/added/rows#{i}/name'
+                 for i in range(len(ru['added']['rows']))]:
+            fail(f'added rows shown {n}')
+        for i, x in enumerate(ru['added']['rows']):
+            sp = x['spellings']
+            got = [m['a']['data-p'] for m in p.marks if m['a'].get(
+                'data-p', '').startswith(f'step2/rules/added/rows#{i}/'
+                                         'spellings')]
+            want = ([f'step2/rules/added/rows#{i}/spellings#{j}'
+                     for j in range(len(sp))] if isinstance(sp, list)
+                    else [f'step2/rules/added/rows#{i}/spellings/state'])
+            if got != want:
+                fail(f'added row {i} spelt {got}, the data gives {want}')
+            if len(shown(f'step2/rules/added/rows#{i}/renamed_from')) != (
+                    x['renamed_from'] != '-'):
+                fail(f'added row {i}: renamed from, shown or not, against '
+                     'the data')
+        if (ru['added']['state'] == 'notice') != bool(
+                shown('step2/rules/added/state')):
+            fail('the notice on an upstream old side, said or not, against '
+                 'the data')
+
+    # Each part not done shows its state where the data calls for it.
+    states = []
+    if s11['state'] != 'reported':
+        states += [('step11/state', s) for s in
+                   (None, 'Locales added and removed', 'Not verified',
+                    'Confirm in PostgreSQL')]
+    elif counts.get('state') != 'reported':
+        states.append(('step11/counts/state', None))
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        if r['warnings'][st]['state'] == 'not reported':
+            states.append((f'warnings/{st}/state', 'Not verified'))
+    for place, b in (('step2/removed', rm), ('step2/rules', ru)):
+        if b['state'] != 'reported':
+            states.append((place + '/state', 'Locales added and removed'))
+    if c['state'] != 'reported':
+        states.append(('compared/state', 'How this was compared'))
+    else:
+        if run['machines']['state'] != 'given':
+            states.append(('run/machines/state', 'How this was compared'))
+        elif c['note']['state'] == 'fallback':
+            states.append(('compared/note/state', 'How this was compared'))
+        for i, x in enumerate(c['machines']):
+            if run['machines']['state'] == 'given' and \
+                    c['note']['state'] != 'fallback' and \
+                    x['charmaps']['state'] != 'counted':
+                states.append((f'compared/machines#{i}/charmaps/state',
+                               'How this was compared'))
+        if c['latest']['state'] == 'not reported':
+            states.append(('compared/latest/state', 'How this was compared'))
+        for i, x in enumerate(c['latest'].get('resolved', [])):
+            if x['when']['state'] != 'dated':
+                states.append((f'compared/latest/resolved#{i}/when/state',
+                               'How this was compared'))
+        if c['collation_version']['state'] == 'unknown':
+            states.append(('compared/collation_version/state',
+                           'How this was compared'))
+    for place, section in states:
+        if len(shown(place, section)) != 1:
+            fail(f'{place} not shown once in {section or "the counts"}')
+
+    # Each list that holds nothing said where it would be, and only those.
+    gaps = []
+    if s11['state'] == 'reported':
+        for verdict in ('only old', 'only new'):
+            if not any(v['verdict'] == verdict
+                       for v in s11['verdicts'].values()):
+                gaps.append('step11/verdicts:' + verdict)
+        if not s11['sql_files']:
+            gaps.append('step11/sql_files')
+    if rm['state'] == 'reported' and not rm['rows']:
+        gaps.append('step2/removed/rows')
+    if ru['state'] == 'reported' and not ru['added']['rows']:
+        gaps.append('step2/rules/added/rows')
+    if c['state'] == 'reported' and run['machines']['state'] == 'given' \
+            and c['note']['state'] != 'fallback' and not c['machines']:
+        gaps.append('compared/machines')
+    if not nc:
+        gaps.append('not verified')
+    said = re.findall(r'data-e="([^"]*)"', page)
+    for n in p.empties:
+        words = ('(no SQL file was written)'
+                 if n['a']['data-e'] == 'step11/sql_files' else '(none)')
+        if text(n) != words:
+            fail(f'{n["a"]["data-e"]} empty, said as {text(n)!r}')
+    if sorted(said) != sorted(gaps):
+        fail(f'empty lists said {said}, the data gives {gaps}')
+
+    # The Not verified entries: which, and in order.
+    nv = [m for m in p.marks if m['section'] == 'Not verified']
+    entries = []
+    for m in nv:
+        place = m['a'].get('data-p', '')
+        if place.endswith('/title') and 'items#' in place:
+            entries.append(place[:-len('/title')])
+        elif place in ('step11/state', 'warnings/step0/state',
+                       'warnings/step1/state', 'warnings/step2/state',
+                       'warnings/step11/state'):
+            entries.append(place[:-len('/state')])
+    if entries != nc:
+        fail(f'Not verified shows {entries}, the data gives {nc}')
+    for place in nc:
+        if 'items#' in place and len(shown(place + '/text')) != 1:
+            fail(f'{place} without its text')
+
+    # The warnings of class "change" this part places, each once in its
+    # section; no other warning outside Not verified.
+    homes = {'not_on_new_machine': 'Locales added and removed',
+             'collation_version_same': 'How this was compared'}
+    want_w, texts = [], set()
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        for i, w in enumerate(r['warnings'][st].get('items', [])):
+            if w['text'] not in texts:
+                texts.add(w['text'])
+                if w['kind'] in homes:
+                    want_w.append((f'warnings/{st}/items#{i}',
+                                   homes[w['kind']]))
+    got_w = [(m['a']['data-p'][:-len('/title')], m['section'])
+             for m in p.marks if m['a'].get('data-p', '').endswith('/title')
+             and 'items#' in m['a']['data-p']
+             and m['section'] != 'Not verified']
+    if got_w != want_w:
+        fail(f'warnings placed {got_w}, the data gives {want_w}')
+    if not measured and [m for m in p.marks if m['a'].get('data-p', '')
+                         .startswith('step11/counts/')
+                         and m['a']['data-p'] not in
+                         ('step11/counts/state', 'step11/counts/why')]:
+        fail('a count of step 11 shown where its counts are not reported')
 
 
 def check_warnings(r, out_dir, path):

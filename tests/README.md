@@ -21,7 +21,7 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, locale names and their aliases |
 | `test_locale_order.py` | no | step 11: the comparison on three real machines' measurements, the file each machine writes, and the progress lines |
 | `test_confirm_sql.py` | no | the SQL files step 11 writes for PostgreSQL (`--sql-to`), and `scripts/confirm_sql.py read` on outputs PostgreSQL printed for them (`confirm_sql/`) |
-| `test_report_data.py` | no | the run's data file, `report.<pair>.json`, that `scripts/report_data.py` writes from the files a run left, and its strict reader (what each `audit.sh` run of the suite checks against its own summary is in `_harness.check_report`) |
+| `test_report_data.py` | no | the run's data file, `report.<pair>.json`, that `scripts/report_data.py` writes from the files a run left, and its strict reader; and the summary page `scripts/report_html.py` writes beside it, `report.<pair>.html`: states no run of the suite prints, and pages broken one way at a time that the page's check refuses (what each `audit.sh` run of the suite checks against its own summary and its page is in `_harness.check_report`) |
 | `test_parallel_runner.py` | no | guards against losing tests quietly, in the parallel runner and in a test file run on its own |
 | `test_published_claims.py` | no | the figures, links and paths the documentation publishes |
 
