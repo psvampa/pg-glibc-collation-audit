@@ -13,10 +13,12 @@ format, facts that do not hang together). The `!!` of steps 0, 1, 2 and
 file that are refused."""
 import copy
 import html
+import html.parser
 import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -5386,13 +5388,21 @@ class WhatWasComparedRead(_Folder):
                     self.section()
 
 
+# The records of _harness.PAGE_STATES the pages of
+# TheSummaryPage.test_the_state_table_is_closed do not decide (measured).
+UNSEEN_STATES = {('_rules', "f'{at}.spellings'"),
+                 ('_sort_table', "f'{w}.state'")}
+
+
 class TheSummaryPage(_Folder):
     """scripts/report_html.py: the summary page of a report, held to it by
     _harness.report_page_held, the check that every audit.sh run of the
     suite reaching its summary passes through check_report. Here, states
-    of a report that no run of the suite prints, each a report load()
-    accepts: written by report_data.main() from this module's files of a
-    run, then one part changed and read back through load(). And pages
+    of a report that no run of the suite prints: most written by
+    report_data.main() from this module's files of a run, then one part
+    changed and read back through load(); some built straight and not
+    read back (load=False), which load() refuses: their change does not
+    keep what load() checks against the rest of the report. And pages
     broken one way at a time, each refused, beside a change the check
     does not hold (a line break); and report_html.main()."""
 
@@ -5606,7 +5616,14 @@ class TheSummaryPage(_Folder):
         self.assertIn('New at glibc-2.34 NOT COMPARED - the two tags are '
                       'one commit', text)
         self.assertEqual(text.count('same_commit'), 1)  # its text, once
-        self.assertIn('3 things NOT verified', text)
+        # 24.4-3a-2: and its own entry for how it was compared, NOT
+        # REPORTED here, which no card says; and one for what the distros
+        # add or drop, NOT CHECKED on two tags, which no card of
+        # sides_read_as_tags says here (a run of real tags prints one).
+        self.assertIn('5 things NOT verified', text)
+        self.assertIn('What each distro adds to its locale files or drops '
+                      'NOT CHECKED - see Gone at, under Locales added and '
+                      'removed.', text)
 
     def test_unchanged_only_as_far_as_measured(self):
         """A locale unchanged only as far as step 11 measured it: counted
@@ -5634,8 +5651,9 @@ class TheSummaryPage(_Folder):
             'and range partitions on text in these locales can give other '
             'results after the upgrade. Open a group for its characters. '
             'Every character, other string and pair found: '
-            f'measured_order_characters.{PAIR}.tsv sv_SE (ISO-8859-1) 1 '
-            'character(s) moved; 2 pair(s) told apart differently Its '
+            f'measured_order_characters.{PAIR}.tsv sv_SE (ISO-8859-1) NOT '
+            'SETTLED in part 1 character(s) moved; 2 pair(s) told apart '
+            'differently Its '
             'compiled sort table changed: on one machine it has no levels, so '
             'glibc compares bytes there. Moved: 1 They now sort in another '
             'place. \u00e5 U+00E5 LATIN SMALL LETTER A WITH RING ABOVE Pairs '
@@ -5655,7 +5673,11 @@ class TheSummaryPage(_Folder):
             'accents NOT COMPARED here. 1 more pair(s) may be told apart '
             'differently; what was measured cannot decide: a U+0061 and '
             "bytes 80 Which locales' sort rules changed (step 2)", text)
-        self.assertIn('6 things NOT verified', text)
+        # 24.4-3a-2: and an entry of its own for each tag's signature,
+        # NOT VERIFIED: the card that says it is in step 1's warnings,
+        # NOT REPORTED here; and one for the group step 11 could not
+        # settle in part.
+        self.assertIn('9 things NOT verified', text)
         # A list longer than the page draws: a sample of what draws, how
         # many more and where; and more undecided pairs than it shows.
         f = {x['kind']: x for x in r['step11']['findings']['groups'][0]
@@ -5698,8 +5720,8 @@ class TheSummaryPage(_Folder):
             'names': ['sv_SE'], 'why': 'PostgreSQL imports no collation of '
             'its encoding, ISO-8859-1', 'about': 'order'})
         text = self.page(r)
-        self.assertIn('sv_SE (ISO-8859-1) NOT VERIFIED in PostgreSQL 1 '
-                      'character(s) moved', text)
+        self.assertIn('sv_SE (ISO-8859-1) NOT VERIFIED in PostgreSQL NOT '
+                      'SETTLED in part 1 character(s) moved', text)
         self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks these '
                       'locales - PostgreSQL imports no collation of its '
                       "encoding, ISO-8859-1. Which locales' sort rules "
@@ -5707,7 +5729,11 @@ class TheSummaryPage(_Folder):
         self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks sv_SE '
                       '- PostgreSQL imports no collation of its encoding, '
                       'ISO-8859-1 How this was compared', text)
-        self.assertIn('7 things NOT verified', text)
+        # 24.4-3a-2: and an entry of its own for each tag's signature,
+        # NOT VERIFIED: the card that says it is in step 1's warnings,
+        # NOT REPORTED here; and one for the group step 11 could not
+        # settle in part.
+        self.assertIn('10 things NOT verified', text)
         self.assertEqual(text.count('NOT VERIFIED in PostgreSQL'), 5)
         r['step11']['sql'] = {'state': 'not reported', 'why': 'no data file'}
         text = self.page(r)
@@ -5716,7 +5742,13 @@ class TheSummaryPage(_Folder):
                       "locales' sort rules changed (step 2)",
                       text)
         self.assertNotIn('NOT VERIFIED in PostgreSQL', text)
-        self.assertIn('4 things NOT verified', text)
+        # 24.4-3a-2: and an entry of its own for each tag's signature,
+        # NOT VERIFIED: the card that says it is in step 1's warnings,
+        # NOT REPORTED here; one for step 11's SQL files, NOT
+        # REPORTED; and one for the group step 11 could not settle in
+        # part.
+        self.assertIn('8 things NOT verified', text)
+        self.assertIn("Step 11's SQL files NOT REPORTED - no data file", text)
 
     def test_an_entry_of_a_group_names_it(self):
         """load(): an entry no SQL file checks that is about a group's
@@ -5740,7 +5772,11 @@ class TheSummaryPage(_Folder):
         self.assertNotIn('no SQL file checks these locales', text)
         self.assertIn('NOT VERIFIED in PostgreSQL: no SQL file checks sv_SE '
                       '- w How this', text)
-        self.assertIn('5 things NOT verified', text)
+        # 24.4-3a-2: and an entry of its own for each tag's signature,
+        # NOT VERIFIED: the card that says it is in step 1's warnings,
+        # NOT REPORTED here; and one for the group step 11 could not
+        # settle in part.
+        self.assertIn('8 things NOT verified', text)
 
     def test_a_short_list_of_bytes_and_every_string(self):
         """A run of strings named by their bytes in a list the page shows
@@ -5798,9 +5834,11 @@ class TheSummaryPage(_Folder):
         cs = r['step11']['findings']['groups'][0]['locales']['sv_SE'][
             'codeset']
         cs['old'] = 'unknown'
-        self.assertIn('sv_SE (UNKNOWN \u2192 ISO-8859-1) 1', self.page(r))
+        self.assertIn('sv_SE (UNKNOWN \u2192 ISO-8859-1) NOT SETTLED in '
+                      'part 1', self.page(r))
         cs['old'] = 'ISO-8859-15'
-        self.assertIn('sv_SE (ISO-8859-15 \u2192 ISO-8859-1) 1', self.page(r))
+        self.assertIn('sv_SE (ISO-8859-15 \u2192 ISO-8859-1) NOT SETTLED in '
+                      'part 1', self.page(r))
 
     def with_rules(self, r, differ, rows):
         """`r` with step 2's groups of locales whose rules differ, its
@@ -5949,6 +5987,16 @@ class TheSummaryPage(_Folder):
              'counted': False}]
         return self.loaded(r)
 
+    def on_unread_none_gone(self):
+        """Two machines, the two entries step 2 did not read, and no
+        locale file gone: both lists of locale files empty."""
+        r = self.on_unread()
+        r['step2']['removed']['rows'] = []
+        r['step2']['rules']['removed'] = []
+        # Not compared: the one entry not read that step 2 counted.
+        r['step2']['rules']['totals'].update(names=12, not_compared=1)
+        return self.loaded(r)
+
     def test_what_step_2_did_not_read(self):
         """On two machines, each entry of a machine's sources step 2 did
         not read, with its reasons, in step 2's words."""
@@ -5958,6 +6006,336 @@ class TheSummaryPage(_Folder):
             'machine; a link on the new machine) Other changes the run found',
             self.page(self.on_unread()))
 
+    def test_entries_not_read_are_in_neither_list(self):
+        """Where step 2 left entries of a machine's sources unread, the
+        locale files gone and new are said among the files read: an empty
+        list says "(none among the files read)", and under each list, with
+        rows or without, a line says how many entries were not read and
+        where they are listed. One entry is said in the singular; without
+        any, neither list says it; and the check's own registry refuses a
+        bare "(none)" beside them."""
+        line = ("2 entries of a machine's locale sources were not read, so "
+                "they are in neither list: see Which locales' sort rules "
+                'changed (step 2).')
+        r = self.on_unread()
+        page = self.page(r)
+        self.assertIn('renamed to yy Each machine\'s locale files are its '
+                      'own locale sources as its file holds them, checked '
+                      'against no package. ' + line + ' New at', page)
+        self.assertIn('(none among the files read) ' + line
+                      + ' Locales whose sort order changed', page)
+        self.assertNotIn('(none)', page[page.index('Gone at'):
+                                        page.index('Locales whose sort')])
+        # The first entry alone, the one step 2 counted as not compared.
+        r['step2']['rules']['unread'] = r['step2']['rules']['unread'][:1]
+        self.assertEqual(self.page(r).count(
+            "1 entry of a machine's locale sources was not read, so it is "
+            "in neither list: see Which locales' sort rules changed "
+            '(step 2).'), 2)
+        page = self.page(self.on_unread_none_gone())
+        self.assertIn('(none among the files read) Each machine\'s locale '
+                      'files are its own locale sources as its file holds '
+                      'them, checked against no package. ' + line
+                      + ' New at', page)
+        page = self.page(self.on_machines())
+        self.assertNotIn('not read, so', page)
+        self.assertNotIn('among the files read', page)
+        with self.assertRaisesRegex(AssertionError,
+                                    'added:new "\\(none\\)" beside '
+                                    "\\['step2/rules/unread'\\]"):
+            _harness._empty_sources_done(self.on_unread(), 'added:new')
+
+    def no_group(self, r):
+        """R (the machines' report) with no group of locales whose order
+        changed: sv_SE unchanged by its compiled sort table."""
+        r['step11']['findings']['groups'] = []
+        r['step11']['verdicts']['sv_SE'] = {
+            'verdict': 'firm',
+            'words': 'unchanged by its compiled sort table'}
+        r['step11']['counts'].update(changed=0, unchanged=2)
+        r['step11']['characters']['rows'] = []
+        r['step11']['checks']['charmaps'] = {
+            'state': 'not needed', 'by_table': 1, 'builtin': ['C']}
+
+    def more_locales(self, r, n):
+        """R with N more locales on each machine in step 11's counts,
+        since each locale a helper here adds to step 11's verdicts is on
+        both machines."""
+        for m in r['step11']['counts']['machines'].values():
+            m['locales'] += n
+
+    def not_measured(self, r, names):
+        """R with no group (no_group) and each of NAMES a locale step 11
+        could not measure, counted; not read back by load(), which refuses
+        it (step 2 gives no rules for these names)."""
+        self.no_group(r)
+        for n in names:
+            r['step11']['verdicts'][n] = {
+                'verdict': 'unmeasured',
+                'words': 'step 11 could not measure it'}
+        r['step11']['counts']['not_measured'] += len(names)
+        self.more_locales(r, len(names))
+
+    def refused(self, r, names):
+        """R with each of NAMES a locale glibc refused on both machines,
+        counted, and the `!!` of step 11 that says so, in locale_order's
+        REFUSED words (its kind glibc_refused, its title report_data's),
+        its block reported; not read back by load(), which refuses it."""
+        import locale_order
+        import report_data
+        for n in names:
+            r['step11']['verdicts'][n] = {
+                'verdict': 'refused',
+                'words': 'refused by glibc on both machines'}
+        r['step11']['counts']['refused'] += len(names)
+        self.more_locales(r, len(names))
+        b = r['warnings']['step11']
+        if b['state'] != 'reported':
+            # A run where glibc refused a locale reports step 11's `!!`.
+            r['warnings']['step11'] = b = {'state': 'reported', 'items': []}
+        b['items'].append(report_data.warning_item(
+            'refused()', 'glibc_refused',
+            {'locales': [{'name': n, 'side': 'both',
+                          'categories': ['LC_COLLATE']} for n in names]},
+            locale_order.REFUSED.format(len(names)) + '\n' + '\n'.join(
+                f'  {n} (both machines): LC_COLLATE refused'
+                for n in names)))
+
+    def far(self, r, names):
+        """R with each of NAMES a locale unchanged only as far as step 11
+        measured it, counted with the unchanged."""
+        for n in names:
+            r['step11']['verdicts'][n] = {
+                'verdict': 'far',
+                'words': 'unchanged only as far as step 11 measured it'}
+        c = r['step11']['counts']
+        c['unchanged'] += len(names)
+        c['unchanged_as_far_as_measured'] += len(names)
+        self.more_locales(r, len(names))
+
+    def test_locales_unchanged_only_as_far_as_measured_are_named(self):
+        """A locale unchanged only as far as step 11 measured it is not
+        known to be unchanged either: with no group, the locales whose
+        order changed say "(none among the locales measured)" and a line
+        names each such locale in its verdict's words; with groups, the
+        same line under the last group. The registry refuses a bare
+        "(none)" beside one, and the check a page that says "(none)"
+        there, leaves the line out, or renames a name."""
+        import report_html
+        head = 'Locales whose sort order changed '
+        line = ('Unchanged only as far as step 11 measured, so NOT known to '
+                'be unchanged: yy_YY. ')
+        r = self.on_machines()
+        self.no_group(r)
+        self.far(r, ('yy_YY',))
+        page = self.page(r, load=False)
+        self.assertIn(head + '(none among the locales measured) ' + line
+                      + "Which locales' sort rules changed", page)
+        # Two, each named, in step 11's order.
+        r = self.on_machines()
+        self.no_group(r)
+        self.far(r, ('xx_XX', 'yy_YY'))
+        self.assertIn('so NOT known to be unchanged: xx_XX, yy_YY. Which',
+                      self.page(r, load=False))
+        r = self.on_machines()
+        self.far(r, ('yy_YY',))
+        page = self.page(r, load=False)
+        sec = page[page.index(head):page.index("Which locales' sort rules")]
+        self.assertTrue(sec.endswith(line), sec[-200:])
+        self.assertNotIn('(none', sec)
+        r = self.on_machines()
+        self.no_group(r)
+        self.far(r, ('yy_YY',))
+        with self.assertRaisesRegex(AssertionError,
+                                    'changed:none "\\(none\\)" beside '
+                                    "\\['step11/verdicts far'\\]"):
+            _harness._empty_sources_done(r, 'changed:none')
+        good = report_html.render(r)
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        y = ('<span class="loc" data-k="step11/verdicts" data-p="step11/'
+             'verdicts/yy_YY/verdict" data-v="far">yy_YY</span>')
+        whole = re.search(r'<p class="hint" data-part="changed:far">'
+                          r'.*?</p>', good).group(0)
+        for old, new, why in (
+                ('>(none among the locales measured)<', '>(none)<',
+                 r"step11/findings/groups empty, said as '\(none\)'"),
+                (whole, '', r"elements differ from what the data calls for "
+                 r"at \d+ \(part 'changed:far'\)"),
+                (y, y.replace('>yy_YY<', '>xx_XX<'),
+                 "step11/verdicts/yy_YY/verdict shows 'xx_XX'")):
+            with self.subTest(old=old):
+                self.assertEqual(good.count(old), 1)
+                with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
+                    f.write(good.replace(old, new))
+                with self.assertRaisesRegex(AssertionError, why):
+                    _harness.report_page_held(path, r)
+
+    def test_locales_glibc_refused_are_named(self):
+        """A locale glibc refused is not known to be unchanged either:
+        with no group, the locales whose order changed say "(none among
+        the locales measured)" and a line names each locale glibc refused
+        and points to its card; with groups, the same line under the last
+        group; with locales step 11 could not measure too, their line
+        first. The registry refuses a bare "(none)" beside a locale glibc
+        refused, and the check a page that says "(none)" there, leaves the
+        line out, or renames a name."""
+        import report_html
+        head = 'Locales whose sort order changed '
+        line = ('Refused by glibc, so NOT known to be unchanged: yy_YY. See '
+                'Locales added and removed. ')
+        r = self.on_machines()
+        self.no_group(r)
+        self.refused(r, ('yy_YY',))
+        page = self.page(r, load=False)
+        self.assertIn(head + '(none among the locales measured) ' + line
+                      + "Which locales' sort rules changed", page)
+        self.assertIn('Refused by glibc, so a database that uses one does '
+                      'not open', page[page.index('Locales added and '
+                                                  'removed'):
+                                       page.index(head)])
+        r2 = self.on_machines()
+        self.no_group(r2)
+        self.refused(r2, ('xx_XX', 'yy_YY'))
+        self.assertIn('Refused by glibc, so NOT known to be unchanged: '
+                      'xx_XX, yy_YY. See', self.page(r2, load=False))
+        self.not_measured(r, ('zz_ZZ',))
+        page = self.page(r, load=False)
+        self.assertIn(head + '(none among the locales measured) Could not '
+                      'be measured, so NOT known to be unchanged: zz_ZZ. '
+                      'Why is under Not verified. ' + line, page)
+        r = self.on_machines()
+        self.refused(r, ('yy_YY',))
+        page = self.page(r, load=False)
+        sec = page[page.index(head):page.index("Which locales' sort rules")]
+        self.assertTrue(sec.endswith(line), sec[-200:])
+        self.assertNotIn('(none', sec)
+        r = self.on_machines()
+        self.no_group(r)
+        self.refused(r, ('yy_YY',))
+        with self.assertRaisesRegex(AssertionError,
+                                    'changed:none "\\(none\\)" beside '
+                                    "\\['step11/verdicts refused'\\]"):
+            _harness._empty_sources_done(r, 'changed:none')
+        good = report_html.render(r)
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        y = ('<span class="loc" data-k="step11/verdicts" data-p="step11/'
+             'verdicts/yy_YY/verdict" data-v="refused">yy_YY</span>')
+        whole = re.search(r'<p class="hint" data-part="changed:refused">'
+                          r'.*?</p>', good).group(0)
+        for old, new, why in (
+                ('>(none among the locales measured)<', '>(none)<',
+                 r"step11/findings/groups empty, said as '\(none\)'"),
+                (whole, '', r"elements differ from what the data calls for "
+                 r"at \d+ \(part 'changed:refused'\)"),
+                (y, y.replace('>yy_YY<', '>xx_XX<'),
+                 "step11/verdicts/yy_YY/verdict shows 'xx_XX'")):
+            with self.subTest(old=old):
+                self.assertEqual(good.count(old), 1)
+                with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
+                    f.write(good.replace(old, new))
+                with self.assertRaisesRegex(AssertionError, why):
+                    _harness.report_page_held(path, r)
+
+    def test_none_among_the_locales_measured(self):
+        """With no group of locales whose order changed and a locale
+        step 11 could not measure, that section says "(none among the
+        locales measured)" and the line under it names each such locale,
+        in step 11's order; with groups, the same line under the last
+        group; with every locale measured, "(none)" and no line. The
+        check's own registry refuses a bare "(none)" beside a locale not
+        measured, and the check refuses a page that says "(none)" there,
+        leaves out, swaps or renames a name or marks it with another
+        verdict, or leaves out the line under the groups."""
+        import report_html
+        head = 'Locales whose sort order changed '
+        for names in (('zz_ZZ',), ('yy_YY', 'zz_ZZ')):
+            with self.subTest(names=names):
+                r = self.on_machines()
+                self.not_measured(r, names)
+                page = self.page(r, load=False)
+                self.assertIn(
+                    head + '(none among the locales measured) Could not be '
+                    'measured, so NOT known to be unchanged: '
+                    + ', '.join(names) + '. Why is under Not verified. '
+                    "Which locales' sort rules changed", page)
+        r = self.on_machines()
+        r['step11']['verdicts']['C']['verdict'] = 'unmeasured'
+        r['step11']['counts']['unchanged'] -= 1
+        r['step11']['counts']['not_measured'] += 1
+        page = self.page(r, load=False)
+        sec = page[page.index(head):page.index("Which locales' sort rules")]
+        self.assertTrue(sec.endswith(
+            'Could not be measured, so NOT known to be unchanged: C. Why is '
+            'under Not verified. '), sec[-200:])
+        self.assertNotIn('(none', sec)
+        good = report_html.render(r)
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        line = re.search(r'<p class="hint" data-part="changed:unmeasured">'
+                         r'.*?</p>', good).group(0)
+        with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
+            f.write(good.replace(line, ''))
+        with self.assertRaisesRegex(
+                AssertionError, r"elements differ from what the data calls "
+                r"for at \d+ \(part 'changed:unmeasured'\)"):
+            _harness.report_page_held(path, r)
+        r = self.on_machines()
+        self.no_group(r)
+        page = self.page(r)
+        self.assertIn(head + "(none) Which locales' sort rules changed", page)
+        self.assertNotIn('among the locales measured', page)
+        r = self.on_machines()
+        self.not_measured(r, ('zz_ZZ',))
+        with self.assertRaisesRegex(AssertionError,
+                                    'changed:none "\\(none\\)" beside '
+                                    "\\['step11/verdicts unmeasured'\\]"):
+            _harness._empty_sources_done(r, 'changed:none')
+        r = self.on_machines()
+        self.not_measured(r, ('yy_YY', 'zz_ZZ'))
+        good = report_html.render(r)
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        loc = ('<span class="loc" data-k="step11/verdicts" data-p="step11/'
+               'verdicts/{0}/verdict" data-v="unmeasured">{0}</span>')
+        y, z = loc.format('yy_YY'), loc.format('zz_ZZ')
+        shows = 'step11/verdicts/yy_YY/verdict shows '
+        says = "part 'changed:unmeasured' says "
+        for old, new, why in (
+                ('>(none among the locales measured)<', '>(none)<',
+                 r"step11/findings/groups empty, said as '\(none\)'"),
+                (y + ', ', '', says),
+                (y + ', ' + z, z + ', ' + y, says),
+                (y, y.replace('>yy_YY<', '>xx_XX<'), shows + "'xx_XX'"),
+                (y, y.replace('data-v="unmeasured"', 'data-v="changed"'),
+                 shows + "'yy_YY' as 'changed'")):
+            with self.subTest(old=old, new=new):
+                self.assertEqual(good.count(old), 1)
+                with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
+                    f.write(good.replace(old, new))
+                with self.assertRaisesRegex(AssertionError, why):
+                    _harness.report_page_held(path, r)
+
+    def test_the_registry_refuses_itself(self):
+        """The check's own tables refuse being written wrong, each by its
+        message: two calls of report_data under one key; a part the
+        registry gives no tree; a group step 11 could not settle whose
+        records of PAGE_STATES say it settled (or the other way)."""
+        with self.assertRaisesRegex(AssertionError,
+                                    'two calls of report_data are '):
+            _harness.report_data_state_calls(
+                'def f(r):\n'
+                "    _stated('x', r, ('a',), {})\n"
+                "    _stated('x', r, ('a',), {})\n")
+        with mock.patch.object(_harness, 'page_group_tree',
+                               lambda r, i: 'words'), \
+                self.assertRaisesRegex(AssertionError,
+                                       "the registry gives 'grp#0' no tree"):
+            _harness.parts_called_for(self.on_machines())
+        r = dict(self.fabricated())['machines, a table not named by levels']
+        with mock.patch.object(_harness, 'page_unsettled', lambda g: []), \
+                self.assertRaisesRegex(AssertionError,
+                                       r'the registry: group \d+ unsettled '
+                                       r'\[\], its records'):
+            _harness.page_nv_called_for(r)
+
     def test_a_page_broken_is_refused(self):
         """One break at a time, each a way a page can say what the data
         does not: a count, a member of a list, words over the wrong
@@ -5965,10 +6343,18 @@ class TheSummaryPage(_Folder):
         text, a state, a sentence the data calls for or the sentence of
         another route, words the page never says, 0 for what was not
         measured, a list emptied without saying so, a warning's card
-        without its text or out of order, a style not the one reviewed. And
-        a line break, which the check does not hold and passes."""
+        without its text or out of order, a style not the one reviewed; a
+        state word out of its emphasis, a box styled as another, a value
+        said twice or glued to a word, a block inside a <p>, a <p> right
+        in a table, a class or a fixed attribute the page is not written
+        with, a part inside another, left out or in another section, a
+        value outside every part, and each part only rare data reaches
+        (on pages of fabricated()). And a line break, which the check does
+        not hold and passes."""
         import report_html
         path = os.path.join(self.d, f'report.{PAIR}.json')
+        UNREAD = (r'<p class="hint"><span data-d="unread">2</span> '
+                  r'entries[^<]*</p>')
         cases = (
             ('on_machines', r'(data-p="step11/counts/changed">)(\d+)',
              lambda m: m.group(1) + str(int(m.group(2)) + 1), 'shows'),
@@ -5992,8 +6378,12 @@ class TheSummaryPage(_Folder):
             ('on_machines_unreported', r'<details class="card" data-w='
              r'"warnings/step11/items#0">.*?</details>', lambda m: '',
              'placed'),
-            ('on_machines', r'class="badge warn"',
-             lambda m: 'class="badge ok"', 'shown as'),
+            ('on_machines', r'class="badge warn"( data-p="compared/tags#)',
+             lambda m: 'class="badge ok"' + m.group(1), 'shown as'),
+            # A group's badge NOT SETTLED in part, green.
+            ('on_machines', r'<span class="badge warn">NOT SETTLED',
+             lambda m: '<span class="badge ok">NOT SETTLED',
+             "elements differ"),
             ('on_tags', r'<div class="tile nm".*?</b></div>',
              lambda m: '<div class="tile"><b>0</b></div>', 'outside'),
             ('on_tags', r'(<b data-p="step11/state">)NOT RUN(</b>)',
@@ -6045,7 +6435,7 @@ class TheSummaryPage(_Folder):
             ('on_one_commit', r'<div class="banner">.*?</div>',
              lambda m: '', 'fixed sentences'),
             ('on_one_commit', r'<details class="card" data-w="[^"]*">'
-             r'.*?</details>', lambda m: '', 'Not verified'),
+             r'.*?</details>', lambda m: '', 'Not verified|without its text'),
             ('on_one_commit', r'(<pre data-p="warnings/step1/items#0/'
              r'text">)', lambda m: m.group(1) + 'x', 'shows'),
             ('on_tags_added', r', <span data-p="step2/rules/added/rows#0/'
@@ -6230,7 +6620,7 @@ class TheSummaryPage(_Folder):
              '</div>' + m.group(1), 'of its own right in the page'),
             ('on_cv_unknown', r' <span data-p="compared/collation_version/'
              r'sides#0">[^<]*</span>', lambda m: '',
-             'sides#0 not shown once'),
+             'sides#0 not shown once|nv:nd:compared/collation_version'),
             ('on_machines', r'<details class="grp" data-grp="0">.*?</details>'
              r'(?=</div></details>)', lambda m: '<div>' + m.group(0)
              + '</div>', 'no section, group'),
@@ -6292,15 +6682,177 @@ class TheSummaryPage(_Folder):
              r'</summary><pre data-p="[^"]*">[^<]*</pre>)',
              lambda m: m.group(1) + 'test(s)', 'holds the words'),
             ('on_tags', r'</head>', lambda m: '<style media="all">[data-s2]'
-             '{display:none}</style></head>', '2 <style>'),
+             '{display:none}</style></head>', "the attribute 'media'"),
             ('on_tags', r'</head>', lambda m: '<STYLE>[data-s2]{display:none}'
              '</STYLE></head>', '2 <style>'),
+            # 24.4-3a-2: entries of a machine's sources step 2
+            # did not read are in neither list of locale files.
+            ('on_unread', r'(data-e="step2/rules/added/rows">)\(none among '
+             r'the files read\)', lambda m: m.group(1) + '(none)',
+             'step2/rules/added/rows empty'),
+            ('on_unread_none_gone', r'(data-e="step2/removed/rows">)\(none '
+             r'among the files read\)', lambda m: m.group(1) + '(none)',
+             'step2/removed/rows empty'),
+            ('on_unread', r'(data-v="machine sources">[^<]*</p>)' + UNREAD,
+             lambda m: m.group(1), "part 'added:gone' says"),
+            ('on_unread', r'(data-e="step2/rules/added/rows">[^<]*</p>)'
+             + UNREAD, lambda m: m.group(1), "part 'added:new' says"),
+            ('on_unread', r'(<span data-d="unread">)2',
+             lambda m: m.group(1) + '3', 'unread shows'),
+            ('on_unread', r'(data-d="unread">2</span> entries) of a machine',
+             lambda m: m.group(1) + ' of each machine',
+             "part 'added:gone' says"),
+            ('on_machines', r'(data-e="step2/rules/added/rows">)\(none\)',
+             lambda m: m.group(1) + '(none among the files read)',
+             'step2/rules/added/rows empty'),
+            ('on_machines', r'(data-e="step2/rules/added/rows">\(none\)</p>)',
+             lambda m: m.group(1) + '<p class="hint"><span data-d="unread">'
+             "2</span> entries of a machine's locale sources were not read, "
+             "so they are in neither list: see Which locales' sort rules "
+             'changed (step 2).</p>', 'unread shows'),
+            # A state word out of its emphasis (a state
+            # out of its <b>, a <b> on other words, a badge emptied, names
+            # out of their span).
+            ('on_machines', r'<b>NOT VERIFIED</b> by these files:', lambda m:
+             'NOT VERIFIED <b>by these files:</b>', 'elements differ'),
+            ('on_machines', r'; ([a-z]+) <b>NOT COMPARED</b>', lambda m:
+             f'; <b>{m.group(1)}</b> NOT COMPARED', 'elements differ'),
+            ('machines, a group no SQL file checks', r'<span class="badge '
+             r'warn">NOT VERIFIED in PostgreSQL</span>', lambda m: '<span '
+             'class="badge warn"></span> NOT VERIFIED in PostgreSQL',
+             'elements differ'),
+            ('on_machines', r'<span class="badge warn">NOT SETTLED in part'
+             r'</span>', lambda m: '<span class="badge warn"></span> NOT '
+             'SETTLED in part', 'elements differ'),
+            ('on_machines', r'<b>NOT VERIFIED in PostgreSQL</b>:', lambda m:
+             'NOT VERIFIED in PostgreSQL:', 'elements differ'),
+            ('on_machines', r'<b>NOT SETTLED in part</b>:', lambda m:
+             'NOT SETTLED in part<b>:</b>', 'elements differ'),
+            ('on_machines', r'<span class="loc">([^<]*)</span> <span class="'
+             r'enc">', lambda m: '<span class="loc"></span> <span class="enc">'
+             + m.group(1) + ' ', 'elements differ'),
+            # A not-done box, a
+            # tile or a group's box styled as something else; the tab's
+            # title; a tooltip; a value twice or padded; two values of a
+            # part swapped; a value moved to the next part.
+            ('on_machines', r'<div class="nd">', lambda m: '<div class="hint">',
+             'elements differ'),
+            ('on_machines', r'<div class="nd">', lambda m: '<div class="none">',
+             'elements differ'),
+            ('on_machines', r'<div class="nd">', lambda m: '<div class="sub0">',
+             'elements differ'),
+            ('on_machines', r'class="tile bad"', lambda m: 'class="tile ok"',
+             'elements differ'),
+            ('on_machines', r'class="tile warn"', lambda m: 'class="tile"',
+             'elements differ'),
+            ('on_machines_unreported', r'class="tile nm"', lambda m:
+             'class="tile"', 'elements differ'),
+            ('on_machines', r'class="tile ok"', lambda m: 'class="tile bad"',
+             'elements differ'),
+            ('on_machines', r'<title>[^<]*</title>', lambda m: '<title>No '
+             'change: nothing to reindex</title>', 'the title'),
+            ('on_machines', r'<p class="disc"', lambda m: '<p title="Nothing '
+             'changed" class="disc"', "the attribute 'title'"),
+            # The same, after the element's own attribute.
+            ('on_machines', r'<p class="disc"', lambda m: '<p class="disc" '
+             'title="Nothing changed"', "the attribute 'title'"),
+            ('on_machines', r'<div class="gap">', lambda m:
+             '<div class="hint">', 'elements differ'),
+            ('on_machines', r'<span data-p="step11/counts/changed">[^<]*'
+             r'</span>', lambda m: m.group(0) * 2, 'says'),
+            ('on_machines', r'(<span data-p="step11/counts/changed">)([^<]*)',
+             lambda m: m.group(1) + ' ' + m.group(2) + ' ', 'shows'),
+            ('on_machines', r'(<span data-p="pair/old">[^<]*</span>)( to )'
+             r'(<span data-p="pair/new">[^<]*</span>)', lambda m: m.group(3)
+             + m.group(2) + m.group(1), 'says'),
+            ('on_machines', r'(<span data-p="step11/counts/changed">[^<]*'
+             r'</span>)(</b>.*?<b>)', lambda m: m.group(2) + m.group(1),
+             'holds'),
+            ('on_machines', r'(What changes from )(<span data-p="pair/old">'
+             r'[^<]*</span>)', lambda m: m.group(1) + m.group(2) * 2, 'says'),
+            ('on_machines', r'(<span data-p="pair/old">[^<]*</span>) to ',
+             lambda m: m.group(1) + 'to ', "a value touches the word beside "
+             "it: '>to <glibc-2.34"),
+            ('on_machines', r'(data-p="compared/tags#0/status" data-v="[^"]*">)'
+             r'NOT VERIFIED', lambda m: m.group(1) + 'VERIFIED', 'says'),
+            ('on_machines', r'(data-p="compared/tags#0/status" data-v="[^"]*">)'
+             r'NOT VERIFIED', lambda m: m.group(1) + 'SIGNATURE GOOD', 'says'),
+            # The parts only rare data reaches, each broken.
+            ('machines, a locale not measured', r'class="tile warn" data-l="'
+             r'not compared"', lambda m: 'class="tile" data-l="not compared"',
+             'elements differ'),
+            ('machines, a run of strings named by their bytes', r'(<code>bytes '
+             r'80\.\.)85', lambda m: m.group(1) + '86', 'group 0 said'),
+            ('machines, a run of strings named by their bytes', r'<span class='
+             r'"ch">(<code>bytes 80)', lambda m: '<span>' + m.group(1),
+             'elements differ'),
+            ('tags, a sample of the characters', r'<p class="hint">A sample: '
+             r'the first 60', lambda m: '<p class="hint">A sample: the first '
+             '59', 'step 2 differ#0 said'),
+            ('tags, a sample of the characters', r'<p class="hint">(A sample: '
+             r'the first 60 that draw as a character\.</p>)', lambda m:
+             '<p class="more">' + m.group(1), 'elements differ'),
+            ('tags, a sample of the characters', r'and 13 more, all listed',
+             lambda m: 'and 12 more, all listed', 'step 2 differ#0 said'),
+            ('tags, a sample of the characters', r'<p class="more">(and 13 '
+             r'more, all listed)', lambda m: '<p class="hint">' + m.group(1),
+             'elements differ'),
+            # A block a browser closes an open <p> before, inside one.
+            ('on_tags', r'(<p[ >][^<]*)', lambda m: m.group(1)
+             + '<li></li>', r'a <li> inside a <p>'),
+            ('on_tags', r'(<p[ >][^<]*)', lambda m: m.group(1)
+             + '<summary></summary>', r'a <summary> inside a <p>'),
+            ('on_tags', r'(<p[ >][^<]*)', lambda m: m.group(1)
+             + '<div></div>', r'a <div> inside a <p>'),
+            ('on_tags', r'(<p[ >][^<]*<span[^>]*>)', lambda m: m.group(1)
+             + '<div></div>', r'a <div> inside a <p>'),
+            # A class the page is not written with; a fixed attribute
+            # changed; a part inside another; a marked value outside
+            # every part.
+            ('on_tags', r'<p class="hint"', lambda m: '<p class="hint foo"',
+             r"with the class 'hint foo'"),
+            ('on_tags', r'<meta charset="utf-8">',
+             lambda m: '<meta charset="latin1">', r"<meta charset='latin1'>"),
+            ('on_tags', r'data-part="sub">', lambda m: m.group(0)
+             + '<span data-part="h1"></span>',
+             r"the part 'h1' inside another part"),
+            ('on_tags', r'<main>', lambda m: '<main><span data-p="pair/old">'
+             'glibc-2.28</span>', r"words outside every part: 'glibc-2.28'"),
+            # A <p> right in a table; a part left out; a part moved to
+            # the end of the section before (one with no label: a part
+            # with one is refused first by its label's section).
+            ('on_rules', r'<table>', lambda m: '<table><p></p>',
+             r'a <p> inside a <table>'),
+            ('on_tags', r'<h3 data-part="added:machines head">On the '
+             r'machines \(what each machine measured\)</h3>', lambda m: '',
+             r"elements differ from what the data calls for at \d+ "
+             r".*, not \[\('<', 'h3', '', None, None\)"),
+            ('on_tags', r'(</div></details>)(<details class="sec" open>'
+             r'<summary><h2>How this was compared</h2></summary><div '
+             r'class="secb">)(<h4 data-part="how:machines head">Machines'
+             r'</h4>)', lambda m: m.group(3) + m.group(1) + m.group(2),
+             r"elements differ from what the data calls for at \d+ "
+             r"\(part 'how:machines head'\)"),
             ('on_tags', r'<main>', lambda m: '<main>\n', None))
+        def parted(rx):
+            # 24.4-3a-2: a start tag may carry its data-part last; a group
+            # and a part of step 2's rules are kinds of part.
+            rx = re.sub(r'data-grp="', 'data-part="grp#', rx)
+            rx = re.sub(r'data-s2="', 'data-part="s2:', rx)
+            rx = rx.replace('">', '"(?: data-part="[^"]*")?>')
+            return re.sub(r'<(\w+)>', r'<\1(?: data-part="[^"]*")?>', rx)
+
+        def renamed(f):
+            return lambda m: re.sub(r'data-s2="', 'data-part="s2:', re.sub(
+                r'data-grp="', 'data-part="grp#', f(m)))
+        fab = dict(self.fabricated())
         for n, (base, rx, repl, why) in enumerate(cases):
             with self.subTest(n=n, rx=rx):
-                r = getattr(self, base)()
+                r = (getattr(self, base)() if base.startswith('on_')
+                     else copy.deepcopy(fab[base]))
                 page = report_html.render(r)
-                broken, k = re.subn(rx, repl, page, count=1, flags=re.S)
+                broken, k = re.subn(parted(rx), renamed(repl), page, count=1,
+                                    flags=re.S)
                 self.assertEqual(k, 1)
                 with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
                     f.write(broken)
@@ -6321,14 +6873,21 @@ class TheSummaryPage(_Folder):
         text = self.page(self.on_every_kind(), load=False)
 
         def section(kind):
-            i = text.index(f'The title of {kind} ')
+            # Two entries of Not verified name a section by its title (a
+            # group step 11 could not settle, what each distro adds or
+            # drops): not a heading.
+            t = text.replace('Open the group under Locales whose sort '
+                             'order changed.', 'Open the group.').replace(
+                'see Gone at, under Locales added and removed.',
+                'see Gone at.')
+            i = t.index(f'The title of {kind} ')
             heads = [h for h in (
                 'Locales added and removed', 'Locales whose sort order '
                 'changed', "Which locales' sort rules changed (step 2)",
                 'Other changes the run found', 'Not verified', 'How this was '
                 'compared', 'Confirm in PostgreSQL')
-                if text.rfind(h, 0, i) >= 0]
-            return max(heads, key=lambda h: text.rfind(h, 0, i))
+                if t.rfind(h, 0, i) >= 0]
+            return max(heads, key=lambda h: t.rfind(h, 0, i))
         for kind, where in (
                 ('not_on_new_machine', 'Locales added and removed'),
                 ('glibc_refused', 'Locales added and removed'),
@@ -6425,6 +6984,503 @@ class TheSummaryPage(_Folder):
                       'rules not compared: xx_YY (w).',
                       text[text.index('Not verified What this run'):])
 
+    def test_the_state_table_is_closed(self):
+        """Every state report_data.load decides is
+        either a record of the page's table (_harness.PAGE_STATES, its
+        call in PAGE_STATE_SITES, the same states) or in PAGE_NOT_READ,
+        never both; and on the pages built from a run and read
+        back by load() (on_machines ... on_unread_none_gone), the renderer
+        reads no record of PAGE_NOT_READ and every record of PAGE_STATES
+        that load() decided there; those pages decide every record of
+        PAGE_STATES but the two named below. A call added to report_data,
+        a state added to a record of PAGE_STATES, or a record of
+        PAGE_NOT_READ the renderer starts reading on those pages is red
+        here until the table says what the page does with it."""
+        import report_html
+        calls = _harness.report_data_state_calls()
+        sites = _harness.PAGE_STATE_SITES
+        self.assertEqual(set(sites), set(_harness.PAGE_STATES))
+        self.assertEqual(len(set(sites.values())), len(sites))
+        self.assertFalse(set(sites.values()) & set(_harness.PAGE_NOT_READ))
+        self.assertEqual(set(calls), set(sites.values())
+                         | set(_harness.PAGE_NOT_READ))
+        for rec, key in sites.items():
+            with self.subTest(record=rec):
+                self.assertIsNotNone(calls[key][2])
+                self.assertEqual(set(calls[key][2]),
+                                 set(_harness.PAGE_STATES[rec]))
+        for rec, states in _harness.PAGE_STATES.items():
+            for s, how in states.items():
+                self.assertTrue(how in ('done', 'group')
+                                or isinstance(how, list), (rec, s))
+        # Each value load() decided, by its call, on each page; then what
+        # the renderer reads of it.
+        by_line = [(a, b, k) for k, (a, b, _) in calls.items()]
+
+        def key_of(line, path):
+            hit = [k for a, b, k in by_line if a <= line <= b]
+            if len(hit) > 1:     # one call, a loop: its where spelt out
+                hit = [k for k in hit if k[1] == '.'.join(map(str, path))]
+            self.assertEqual(len(hit), 1, (line, path, hit))
+            return hit[0]
+
+        def path_of(where):
+            out = []
+            for m in re.finditer(r"\.?([^.\[\]]+)|\[(\d+)\]|\[('(?:[^'\\]"
+                                 r"|\\.)*'|\"(?:[^\"\\]|\\.)*\")\]", where):
+                out.append(m.group(1) if m.group(1) is not None else
+                           int(m.group(2)) if m.group(2) is not None else
+                           ast_literal(m.group(3)))
+            return tuple(out)
+        import ast
+        ast_literal = ast.literal_eval
+        decided = []
+        real_stated, real_one_of = rd._stated, rd._one_of
+
+        def stated(where, obj, states, check):
+            p = path_of(where)
+            decided.append((key_of(sys._getframe(1).f_lineno, p),
+                            p + ('state',)))
+            return real_stated(where, obj, states, check)
+
+        def one_of(where, value, allowed):
+            f = sys._getframe(1)
+            if f.f_code.co_name != '_stated':
+                p = path_of(where)
+                decided.append((key_of(f.f_lineno, p), p))
+            return real_one_of(where, value, allowed)
+        reads = set()
+
+        class D(dict):
+            def __init__(self, d, p):
+                super().__init__({k: wrap(v, p + (k,)) for k, v in d.items()})
+                self.p = p
+
+            def __getitem__(self, k):
+                reads.add(self.p + (k,))
+                return super().__getitem__(k)
+
+            def get(self, k, *a):
+                reads.add(self.p + (k,))
+                return super().get(k, *a)
+
+            def items(self):
+                reads.update(self.p + (k,) for k in self.keys())
+                return super().items()
+
+            def values(self):
+                reads.update(self.p + (k,) for k in self.keys())
+                return super().values()
+
+        class L(list):
+            def __init__(self, x, p):
+                super().__init__(wrap(v, p + (i,)) for i, v in enumerate(x))
+                self.p = p
+
+            def __getitem__(self, i):
+                for j in (range(len(self))[i] if isinstance(i, slice)
+                          else [i % len(self)]):
+                    reads.add(self.p + (j,))
+                return super().__getitem__(i)
+
+            def __iter__(self):
+                reads.update(self.p + (i,) for i in range(len(self)))
+                return super().__iter__()
+
+        def wrap(v, p):
+            return (D(v, p) if isinstance(v, dict) else
+                    L(v, p) if isinstance(v, list) else v)
+        pages = [getattr(self, b)() for b in (
+            'on_machines', 'on_machines_unreported', 'on_tags',
+            'on_tags_added', 'on_builds', 'on_one_commit', 'on_rules',
+            'on_rules_unlisted', 'on_cv_unknown', 'on_unread',
+            'on_unread_none_gone')]
+        read_by_render, seen = set(), set()
+        for r in pages:
+            decided.clear()
+            with mock.patch.object(rd, '_stated', stated), \
+                    mock.patch.object(rd, '_one_of', one_of):
+                r = self.loaded(r)
+            reads.clear()
+            report_html.render(wrap(r, ()))
+            for key, p in decided:
+                seen.add(key)
+                if p in reads:
+                    read_by_render.add(key)
+        self.assertEqual(read_by_render & set(_harness.PAGE_NOT_READ),
+                         set())
+        self.assertEqual(set(sites.values()) & seen - read_by_render, set())
+        # Those pages decide every record of the table but these two,
+        # measured: a group's naming (a table that changed) and a new
+        # locale's spellings (step 2's rows of new locales).
+        self.assertEqual(set(sites.values()) - seen, UNSEEN_STATES)
+
+    def on_states(self, change):
+        """The machines' report, a second group of step 11 (its first
+        finding only, sv_SE renamed xx_YY), and CHANGE(r) applied; not
+        read back by load(), which refuses it."""
+        r = self.on_machines()
+        gs = r['step11']['findings']['groups']
+        g = copy.deepcopy(gs[0])
+        g['locales'] = {'xx_YY': g['locales'].pop('sv_SE')}
+        g['findings'] = g['findings'][:1]
+        gs.append(g)
+        change(r)
+        return r
+
+    def test_states_the_page_reads_said_where_they_are(self):
+        """A not-done state the page reads is said under Not verified,
+        unless a warning there says it, by its data or, where one card
+        speaks for the whole run, by its kind alone, or step 11's own
+        entry where step 11 did not run, or it is shown in its own part
+        only (_harness.PAGE_HOME_ONLY); what a group's compiled sort
+        table leaves unknown is that group's NOT SETTLED in part."""
+        def table(**st):
+            def f(r):
+                g = r['step11']['findings']['groups'][1]
+                g['sort_table'] = dict({'state': 'changed', 'reason':
+                                        'items differ'}, **st)
+                if st['step11'] != 'changed':
+                    g['found_by'] = 'its sort table alone'
+            return f
+
+        def nv(text):
+            return text[text.index('Not verified What this run'):]
+        settled = ('NOT SETTLED in part: xx_YY - ')
+        for n, (st, words, gap) in enumerate([
+                (dict(step11='changed', naming={'state': 'levels', 'old': 3,
+                                                'new': 4}),
+                 'which sequences its compiled sort table changed NOT NAMED',
+                 'Which sequences its compiled sort table changed: NOT NAMED '
+                 '(the line "Its compiled sort table changed" says why).'),
+                (dict(step11='changed', naming={'state': 'unread',
+                                                'reasons': ['no record']}),
+                 'which sequences its compiled sort table changed NOT NAMED',
+                 'Which sequences its compiled sort table changed: NOT NAMED '
+                 '(the line "Its compiled sort table changed" says why).'),
+                (dict(step11='unmeasured', naming={'state': 'record'}),
+                 'what its compiled sort table changed NOT MEASURED by step '
+                 '11',
+                 'What its compiled sort table changed: NOT MEASURED by step '
+                 '11.'),
+                (dict(step11='unmeasured', naming={'state': 'unread',
+                                                   'reasons': ['no record']}),
+                 'what its compiled sort table changed NOT MEASURED by step '
+                 '11; which sequences its compiled sort table changed NOT '
+                 'NAMED',
+                 'What its compiled sort table changed: NOT MEASURED by step '
+                 '11. Which sequences its compiled sort table changed: NOT '
+                 'NAMED (the line "Its compiled sort table changed" says '
+                 'why).')]):
+            with self.subTest(n=n):
+                text = self.page(self.on_states(table(**st)), load=False)
+                self.assertIn('xx_YY (ISO-8859-1) NOT SETTLED in part', text)
+                self.assertIn(settled + words + '. Open the group', nv(text))
+                self.assertIn('Not settled for this group ' + gap, text)
+        # Named, or no levels on one machine: settled, nothing said.
+        for st in (dict(step11='changed', naming={
+                'state': 'record'}), dict(step11='changed',
+                                          reason='no levels on one machine')):
+            text = self.page(self.on_states(table(**st)), load=False)
+            self.assertNotIn(settled, text)
+            self.assertNotIn('xx_YY (ISO-8859-1) NOT SETTLED', text)
+
+        # A locale step 11 could not measure: its entry, unless a card of
+        # not_measured names it.
+        def unmeasured(card, after=False):
+            def f(r):
+                r['step11']['verdicts']['zz_ZZ'] = {
+                    'verdict': 'unmeasured',
+                    'words': 'step 11 could not measure it'}
+                r['step11']['counts']['not_measured'] += 1
+                self.more_locales(r, 1)
+                if card:
+                    w = r['warnings']['step11']
+                    if w['state'] != 'reported':
+                        r['warnings']['step11'] = w = {'state': 'reported',
+                                                       'items': []}
+                    if after:
+                        # Another card of class "not checked" first.
+                        w['items'].append(rd.warning_item(
+                            'x', 'measured_in_part', {'groups': [{
+                                'names': ['xx_YY'], 'side': 'new',
+                                'charmap': 'UTF-8', 'count': 1,
+                                'examples': ['a']}]},
+                            '!! Measured in part: 1 locale(s).'))
+                    w['items'].append(rd.warning_item(
+                        'x', 'not_measured', {'locales': [{
+                            'name': card, 'reason': 'error', 'side': 'both',
+                            'why': 'w'}]}, f'!! Could not be measured: {card}'))
+            return f
+        entry = ('Whether this locale sorts differently (step 11): zz_ZZ NOT '
+                 'MEASURED - step 11 could not measure it')
+        self.assertIn(entry, nv(self.page(self.on_states(unmeasured(None)),
+                                          load=False)))
+        self.assertIn(entry, nv(self.page(self.on_states(
+            unmeasured('yy_YY')), load=False)))
+        for after in (False, True):
+            text = nv(self.page(self.on_states(unmeasured('zz_ZZ', after)),
+                                load=False))
+            self.assertNotIn('zz_ZZ NOT MEASURED', text)
+            self.assertIn('Could not be measured: zz_ZZ', text)
+
+        # What a distro adds or drops, NOT CHECKED on a tag side: its entry
+        # unless a card of sides_read_as_tags names every tag side.
+        removed = ('What each distro adds to its locale files or drops NOT '
+                   'CHECKED - see Gone at, under Locales added and '
+                   'removed.')
+        for refs, said in ((None, True), (['glibc-2.28'], True),
+                           (['glibc-2.28', 'glibc-2.34'], False)):
+            with self.subTest(refs=refs):
+                r = self.on_tags()
+                if refs:
+                    r['warnings']['step1'] = {'state': 'reported', 'items': [
+                        rd.warning_item('x', 'sides_read_as_tags', {
+                            'refs': refs, 'classes': ['tag'] * len(refs),
+                            'ask': 'build'}, '!! Read as tags.')]}
+                text = nv(self.page(r, load=False))
+                self.assertEqual(removed in text, said)
+
+        # Nothing compared: its entry unless a card says so.
+        r = self.on_one_commit()
+        for st in ('step1', 'step2'):
+            r['warnings'][st]['items'] = [
+                w for w in r['warnings'][st]['items']
+                if w['kind'] != 'same_commit']
+        nothing = ('What changed between the two sides NOTHING COMPARED - '
+                   'see the top of this page.')
+        self.assertIn(nothing, nv(self.page(r)))
+        self.assertNotIn(nothing, self.page(self.on_one_commit()))
+
+    def fabricated(self):
+        """Each page built here, as (name, report): each report of a
+        state no run of the suite prints, read back by load() where load()
+        accepts it; a part not done of each kind; what step 11 could not
+        settle of a group; the parts of the page only rare data reaches;
+        and two members of the lists the page draws that no other page
+        built here gives two.
+        EachPartOfThePageBroken breaks the first element of each kind it
+        meets on them."""
+        out = []
+
+        def add(name, base, change=None, load=True):
+            r = getattr(self, base)()
+            if change:
+                change(r)
+            out.append((name, self.loaded(r) if load else r))
+
+        def setp(path, value):
+            def f(r):
+                x = r
+                for k in path[:-1]:
+                    x = x[k]
+                x[path[-1]] = dict(value)
+            return f
+        nr = {'state': 'not reported', 'why': 'no file'}
+        for base in ('on_machines', 'on_machines_unreported', 'on_tags',
+                     'on_tags_added', 'on_builds', 'on_one_commit',
+                     'on_cv_unknown', 'on_rules', 'on_rules_unlisted',
+                     'on_unread', 'on_unread_none_gone'):
+            add(base, base)
+        add('on_every_kind', 'on_every_kind', load=False)
+        for what, path in (('step11', ['step11']),
+                           ('counts', ['step11', 'counts']),
+                           ('findings', ['step11', 'findings']),
+                           ('characters', ['step11', 'characters']),
+                           ('sql', ['step11', 'sql']),
+                           ('note', ['compared', 'note'])):
+            add('machines, not reported: ' + what, 'on_machines',
+                setp(path, nr))
+        add('machines, charmaps none', 'on_machines',
+            lambda r: r['compared']['machines'][0].__setitem__(
+                'charmaps', {'state': 'none', 'why': 'none in the file'}))
+        add('machines, no SQL file', 'on_machines',
+            lambda r: r['step11']['sql'].__setitem__('files', []))
+        for what, path in (('step 2 warnings', ['warnings', 'step2']),
+                           ('compared', ['compared']),
+                           ('removed', ['step2', 'removed']),
+                           ('rules', ['step2', 'rules']),
+                           ('rules characters',
+                            ['step2', 'rules_characters']),
+                           ('latest', ['compared', 'latest'])):
+            add('tags, not reported: ' + what, 'on_tags', setp(path, nr))
+        add('builds, latest with no date', 'on_builds',
+            lambda r: r['compared']['latest']['resolved'][0].__setitem__(
+                'when', {'state': 'no date'}))
+        add('tags, characters not known', 'on_tags',
+            lambda r: self.with_rules(r, [
+                {'names': ['sv_SE'], 'every_rule': False,
+                 'characters': {'state': 'not known',
+                                'why': 'its file could not be read'}}],
+                [['sv_SE', 'differs', 'no',
+                  'not known: its file could not be read']]))
+        cps = [0x0001] * 3 + list(range(0x0100, 0x0100 + 70))
+        add('tags, a sample of the characters', 'on_tags',
+            lambda r: self.with_rules(r, [
+                {'names': ['or_IN'], 'every_rule': False,
+                 'characters': {'state': 'listed', 'codepoints': cps}}],
+                [['or_IN', 'differs', 'no',
+                  ' '.join(f'U+{c:04X}' for c in cps)]]))
+
+        def far(r):
+            r['step11']['verdicts']['C'] = {
+                'verdict': 'far',
+                'words': 'unchanged only as far as step 11 measured it'}
+            r['step11']['counts']['unchanged_as_far_as_measured'] = 1
+        add('machines, unchanged as far as measured', 'on_machines', far)
+        add('machines, a group no SQL file checks', 'on_machines',
+            lambda r: r['step11']['sql']['not_checked'].append({
+                'about': 'order', 'names': ['sv_SE'],
+                'why': 'PostgreSQL imports no collation of its encoding, '
+                       'ISO-8859-1',
+                'also': 'database locale sv_SE.ISO-8859-1'}))
+        r = self.on_one_commit()
+        for st in ('step1', 'step2'):
+            r['warnings'][st]['items'] = [
+                w for w in r['warnings'][st]['items']
+                if w['kind'] != 'same_commit']
+        out.append(('one commit, no card says so', self.loaded(r)))
+        no_group = self.no_group
+        add('machines, no group', 'on_machines', no_group)
+
+        # Two members of each list the page draws that no other page built
+        # here gives two: a list cut to its first member changes one of
+        # these pages.
+
+        def two_parts(r):
+            for k in ('findings', 'characters'):
+                r['step11'][k] = dict(nr)
+        add('machines, two parts of step 11 not reported', 'on_machines',
+            two_parts)
+        unknown = {'state': 'not known', 'why': 'its file could not be read'}
+        add('tags, two groups whose characters are not known', 'on_tags',
+            lambda r: self.with_rules(r, [
+                {'names': ['or_IN', 'sv_SE'], 'every_rule': False,
+                 'characters': dict(unknown)},
+                {'names': ['C.UTF-8'], 'every_rule': False,
+                 'characters': dict(unknown)}],
+                [[n, 'differs', 'no', 'not known: its file could not be read']
+                 for n in ('C.UTF-8', 'or_IN', 'sv_SE')]))
+
+        def two_latest(r):
+            r['compared'] = builds_run(
+                latest=('latest-el8', 'latest-el9'))['compared']
+            for x in r['compared']['latest']['resolved']:
+                x['when'] = {'state': 'no date'}
+        add('builds, two latest with no date', 'on_builds', two_latest)
+        add('tags, the collation version unknown on both sides', 'on_tags',
+            setp(['compared', 'collation_version'],
+                 {'state': 'unknown', 'sides': ['glibc-2.28', 'glibc-2.34']}))
+
+        def two_unread(r):
+            ru = r['step2']['rules']
+            ru['unread'][1].update(why=['a link on the old machine'],
+                                   counted=True)
+            ru['totals'].update(names=ru['totals']['names'] + 1,
+                                not_compared=ru['totals']['not_compared'] + 1)
+        add('machines, two entries not read, both counted', 'on_unread',
+            two_unread)
+
+        def two_charmaps(r):
+            for x in r['compared']['machines']:
+                x['charmaps'] = {'state': 'none', 'why': 'none in the file'}
+        add('machines, the charmaps of both none', 'on_machines', two_charmaps)
+
+        # Not read back by load(), which refuses each of these: their
+        # change does not keep what load() checks against the rest of the
+        # report.
+
+        def all_done(r):
+            for st in ('step0', 'step1', 'step2', 'step11'):
+                r['warnings'][st] = {'state': 'reported', 'items': []}
+            for x in r['compared']['tags']:
+                x['status'] = 'good'
+            r['step11']['sql']['not_checked'] = []
+        add('machines, all done', 'on_machines', all_done, load=False)
+        add('machines, all done, far', 'on_machines',
+            lambda r: (all_done(r), far(r)), load=False)
+        add('machines, none listed', 'on_machines',
+            lambda r: r['compared'].__setitem__('machines', []), load=False)
+        add('machines, none listed, note not reported', 'on_machines',
+            lambda r: (r['compared'].__setitem__('machines', []),
+                       setp(['compared', 'note'], nr)(r)), load=False)
+        add('every kind, step 0 not reported', 'on_every_kind',
+            setp(['warnings', 'step0'], nr), load=False)
+        add('machines, no group, all done', 'on_machines',
+            lambda r: (no_group(r), all_done(r)), load=False)
+        add('machines, no group, two locales not measured', 'on_machines',
+            lambda r: self.not_measured(r, ('yy_YY', 'zz_ZZ')), load=False)
+        add('machines, no group, two locales refused', 'on_machines',
+            lambda r: (no_group(r), self.refused(r, ('xx_XX', 'yy_YY'))),
+            load=False)
+        add('machines, no group, two locales unchanged as far as measured',
+            'on_machines', lambda r: (no_group(r),
+                                      self.far(r, ('xx_XX', 'yy_YY'))),
+            load=False)
+        # Two members too, not read back by load(): step 2 gives no rules
+        # for the names not measured, and the verdicts do not give the
+        # group the locale added to it.
+
+        def card_two(r):
+            names = ('yy_YY', 'zz_ZZ')
+            for n in names:
+                r['step11']['verdicts'][n] = {
+                    'verdict': 'unmeasured',
+                    'words': 'step 11 could not measure it'}
+            r['step11']['counts']['not_measured'] += len(names)
+            self.more_locales(r, len(names))
+            w = r['warnings']['step11']
+            if w['state'] != 'reported':
+                r['warnings']['step11'] = w = {'state': 'reported',
+                                               'items': []}
+            w['items'].append(rd.warning_item(
+                'card_two()', 'not_measured', {'locales': [
+                    {'name': n, 'reason': 'error', 'side': 'both',
+                     'why': 'w'} for n in names]},
+                '!! Could not be measured: ' + ', '.join(names)))
+        add('machines, a card names two locales not measured', 'on_machines',
+            card_two, load=False)
+
+        def two_encodings(r):
+            g = r['step11']['findings']['groups'][0]
+            v = copy.deepcopy(g['locales']['sv_SE'])
+            v['codeset'] = {'old': 'UTF-8', 'new': 'UTF-8'}
+            g['locales']['sv_SE.utf8'] = v
+        add('machines, a group of two encodings', 'on_machines',
+            two_encodings, load=False)
+
+        def table(**st):
+            def f(r):
+                g = r['step11']['findings']['groups'][1]
+                g['sort_table'] = dict({'state': 'changed', 'reason':
+                                        'items differ'}, **st)
+                if st['step11'] != 'changed':
+                    g['found_by'] = 'its sort table alone'
+            return f
+        out.append(('machines, a table not measured nor named', self.on_states(
+            table(step11='unmeasured', naming={'state': 'unread',
+                                               'reasons': ['no record']}))))
+        out.append(('machines, a table not named by levels', self.on_states(
+            table(step11='changed', naming={'state': 'levels', 'old': 3,
+                                            'new': 4}))))
+
+        def unmeasured(r):
+            r['step11']['verdicts']['zz_ZZ'] = {
+                'verdict': 'unmeasured',
+                'words': 'step 11 could not measure it'}
+            r['step11']['counts']['not_measured'] = 1
+            self.more_locales(r, 1)
+        out.append(('machines, a locale not measured',
+                    self.on_states(unmeasured)))
+
+        def bytes_run(r):
+            mv = r['step11']['findings']['groups'][0]['findings'][0]
+            mv.update(count=6, characters=0, other_strings=6,
+                      runs=[['bytes 80', 'bytes 85']])
+        add('machines, a run of strings named by their bytes', 'on_machines',
+            bytes_run, load=False)
+        return out
+
     def test_written_beside_the_data_file(self):
         """main(): the page beside the data file it reads, nothing
         printed; a data file load() refuses gives exit 1, why on stderr,
@@ -6459,6 +7515,178 @@ class TheSummaryPage(_Folder):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(report_html.main([]), 2)
             self.assertEqual(report_html.main([path, path]), 2)
+
+
+class _Elements(html.parser.HTMLParser):
+    """Each element of a page: its tag, attributes, start and end tag
+    spans (offsets in the page), depth, and what tells it apart from
+    another element: the kind of part it is in (its data-part, numbers
+    taken out, or 'frame' outside every part) and its place there (the
+    tags from that part's root down to it)."""
+
+    def __init__(self, text):
+        super().__init__(convert_charrefs=False)
+        self.lines = [0]
+        for ln in text.split('\n')[:-1]:
+            self.lines.append(self.lines[-1] + len(ln) + 1)
+        self.stack, self.out = [], []
+
+    def at(self):
+        ln, col = self.getpos()
+        return self.lines[ln - 1] + col
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'meta':
+            return
+        a = dict(attrs)
+        s = self.at()
+        part = next((x['part'] for x in reversed(self.stack) if x['part']),
+                    None)
+        kind = (re.sub(r'#\d+', '#', a['data-part']) if 'data-part' in a
+                else part[0] if part else 'frame')
+        path = '/'.join([x['tag'] for x in self.stack
+                         if part is None or x['depth'] >= part[1]] + [tag])
+        self.stack.append({
+            'tag': tag, 'a': a, 's': (s, s + len(self.get_starttag_text())),
+            'kind': kind, 'path': path, 'depth': len(self.stack),
+            'part': (kind, len(self.stack)) if 'data-part' in a else None})
+
+    def handle_endtag(self, tag):
+        if tag == 'meta':
+            return
+        node = self.stack.pop()
+        self.assertTag(node, tag)
+        s = self.at()
+        node['e'] = (s, s + len(f'</{tag}>'))
+        self.out.append(node)
+
+    @staticmethod
+    def assertTag(node, tag):
+        if node['tag'] != tag:
+            raise AssertionError(f'<{node["tag"]}> closed by </{tag}>')
+
+
+class EachPartOfThePageBroken(_Folder):
+    """24.4-3a-2: every page TheSummaryPage.fabricated() builds, each
+    element broken one way at a time, and each broken page refused by
+    _harness.report_page_held: its class changed, dropped or added; its
+    tag changed; the word after it moved into it, or its last word out of
+    it; its words moved out (emptied); its tags taken off (unwrapped);
+    swapped with the element beside it (a tag changed only among
+    TAGS). Of the elements of one kind of part, at one place in it, with
+    one set of classes, the first met on the pages is broken; the
+    <style> and the <title> are held by their own checks, not broken
+    here. Three changes no reader sees each pass: blanks
+    between two blocks, an element's attributes or its classes in another
+    order. How many kinds of part and elements it broke is counted."""
+
+    TAGS = {'span': 'b', 'b': 'span', 'p': 'div', 'div': 'p', 'h4': 'h3',
+            'h3': 'h4', 'td': 'th', 'th': 'td', 'code': 'span', 'li': 'li',
+            'pre': 'p', 'summary': 'summary', 'h1': 'h2'}
+    OTHER = ('hint', 'ok', 'warn', 'bad', 'nd', 'none')
+
+    def held(self, r, page):
+        """Whether the check passes PAGE as the page of R."""
+        path = os.path.join(self.d, f'report.{PAIR}.json')
+        with open(path[:-5] + '.html', 'w', encoding='utf-8') as f:
+            f.write(page)
+        try:
+            _harness.report_page_held(path, r)
+            return True
+        except AssertionError:
+            return False
+
+    def broken(self, page, n, nxt):
+        """(how, page) for each way element N is broken; NXT the element
+        right after it at its level, or None."""
+        (s0, s1), (e0, e1) = n['s'], n['e']
+        st = page[s0:s1]
+        out = []
+        cls = n['a'].get('class')
+        if cls is not None:
+            first = cls.split()[0]
+            other = next(x for x in self.OTHER if x != first)
+            out.append(('class changed', page[:s0] + st.replace(
+                f'class="{cls}"', 'class="%s"' % cls.replace(first, other, 1),
+                1) + page[s1:]))
+            out.append(('class dropped', page[:s0] + st.replace(
+                f' class="{cls}"', '', 1) + page[s1:]))
+        else:
+            out.append(('class added', page[:s0] + st.replace(
+                '<' + n['tag'], '<' + n['tag'] + ' class="hint"', 1)
+                + page[s1:]))
+        new = self.TAGS.get(n['tag'])
+        if new and new != n['tag'] and n['kind'] != 'frame':
+            out.append(('tag changed', page[:s0] + '<' + new
+                        + st[1 + len(n['tag']):] + page[s1:e0] + f'</{new}>'
+                        + page[e1:]))
+        after = re.match(r'(\s*)([^<\s]+)', page[e1:])
+        if after:
+            out.append(('word after moved in', page[:e0] + after.group(1)
+                        + after.group(2) + page[e0:e1]
+                        + page[e1 + after.end():]))
+        inner = page[s1:e0]
+        last = re.search(r'(\s+)([^<\s]+)(\s*)$', inner)
+        if last and '<' not in inner[last.start():]:
+            out.append(('last word moved out', page[:s1]
+                        + inner[:last.start()] + page[e0:e1] + last.group(1)
+                        + last.group(2) + page[e1:]))
+        if inner.strip() and '<' not in inner:
+            out.append(('emptied', page[:s1] + page[e0:e1] + ' ' + inner
+                        + page[e1:]))
+        if n['kind'] != 'frame' or n['tag'] not in ('html', 'head', 'body'):
+            out.append(('unwrapped', page[:s0] + inner + page[e1:]))
+        if nxt is not None and not page[e1:nxt['s'][0]].strip():
+            (t0, _), (_, t3) = nxt['s'], nxt['e']
+            out.append(('swapped with the next', page[:s0] + page[t0:t3]
+                        + page[e1:t0] + page[s0:e1] + page[t3:]))
+        return out
+
+    def test_every_element_broken_every_way(self):
+        import report_html
+        maker = TheSummaryPage('fresh')
+        maker.d = self.d
+        fab = maker.fabricated()
+        seen, kinds, passed, cases = set(), set(), [], 0
+        for name, r in fab:
+            page = report_html.render(r)
+            self.assertTrue(self.held(r, page), name)
+            for label, rx, rep in (
+                    ('blanks between blocks', r'</h3>', '</h3>\n  \n'),
+                    ('attributes in another order',
+                     r'<div class="tile (\w+)" data-l="([^"]*)"',
+                     r'<div data-l="\2" class="tile \1"'),
+                    ('classes in another order', r'class="tile (\w+)"',
+                     r'class="\1 tile"')):
+                same = re.sub(rx, rep, page, count=1)
+                if same != page:
+                    self.assertTrue(self.held(r, same), (name, label))
+            p = _Elements(page)
+            p.feed(page)
+            els = sorted(p.out, key=lambda x: x['s'][0])
+            for k, n in enumerate(els):
+                kinds.add(n['kind'])
+                key = (n['kind'], n['path'],
+                       tuple(sorted(n['a'].get('class', '').split())))
+                if key in seen or n['tag'] in ('style', 'title'):
+                    continue
+                seen.add(key)
+                # The next element at its level, inside the same parent.
+                end = min((x['e'][1] for x in els if x['depth'] < n['depth']
+                           and x['e'][1] > n['e'][1]), default=len(page))
+                nxt = next((x for x in els[k + 1:] if x['depth'] == n['depth']
+                            and n['e'][1] <= x['s'][0] < end), None)
+                for how, b in self.broken(page, n, nxt):
+                    if b == page:
+                        continue
+                    cases += 1
+                    if self.held(r, b):
+                        passed.append((name, key, how))
+        self.assertEqual(passed, [])
+        # Counted on the pages fabricated() builds: a kind of part or an
+        # element the pages no longer reach is red here, as is one they
+        # newly do.
+        self.assertEqual((len(kinds), len(seen), cases), (99, 436, 2113))
 
 
 if __name__ == '__main__':
