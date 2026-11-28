@@ -942,17 +942,43 @@ def check_report(returncode, out, out_dir):
     report_page_held(path, r)
 
 
-def page_group_said(r, i):
-    """The words a summary page says of step 11's group I of locales whose
-    order changed (report_html.group_html), rebuilt here from that group's
-    data by this check's own rules, blanks collapsed: so a group that says
-    another's values, leaves one out, adds one or orders them otherwise is
-    refused. As (all its words, [(the words of its <summary>, the words
-    of its own body) for the group and each list folded in it, in
-    order]): what a reader sees with each closed, and what opening each
-    shows, so no word sits under another fold than its own. Only the
-    words of the text that the page repeats are taken from it: how two
-    strings are told apart
+def page_unsettled(g):
+    """What step 11 could not settle for group G, in this check's words:
+    each of its findings of kind 'probes changed', 'left out' and
+    'undecided', in that order (report_data.FINDING_KINDS), then what its
+    compiled sort table changed where step 11 could not measure it, and
+    which sequences that table changed where they cannot be named; []
+    where it has none of these five."""
+    out = []
+    for x in g['findings']:
+        if x['kind'] == 'probes changed':
+            out.append((0, 'the pairs that tell letters, accents and case '
+                           'apart are told apart differently themselves'))
+        elif x['kind'] == 'left out':
+            out.append((1, ' and '.join(x['left_out']) + ' NOT COMPARED'))
+        elif x['kind'] == 'undecided':
+            out.append((2, f'{x["count"]:,} pair(s) not decided'))
+    st = g['sort_table']
+    if st['state'] == 'changed' and st['step11'] == 'unmeasured':
+        out.append((3, 'what its compiled sort table changed NOT MEASURED '
+                       'by step 11'))
+    if st.get('naming', {}).get('state') in ('unread', 'levels'):
+        out.append((4, 'which sequences its compiled sort table changed '
+                       'NOT NAMED'))
+    return [w for _, w in sorted(out)]
+
+
+def page_group_tree(r, i):
+    """Step 11's group I of locales whose order changed as a summary page
+    shows it (report_html.group_html), rebuilt here from that group's
+    data by this check's own rules, as a tree (_e): its line (names,
+    encodings, NOT VERIFIED in PostgreSQL where no SQL file checks its
+    order, NOT SETTLED in part where step 11 left something of it
+    unsettled, what changed) and what opening it shows: what else
+    PostgreSQL calls its locales, its compiled sort table, what moved,
+    the pairs told apart differently, the lists folded in it, and what
+    step 11 could not settle for it. Only the words of the text that the
+    page repeats are taken from it: how two strings are told apart
     (locale_order.RELATION_WORDS), what a changed sort table is
     (locale_order.table_change_lines) and how the SQL files write a
     locale's name (locale_order.ascii_name)."""
@@ -962,50 +988,44 @@ def page_group_said(r, i):
     f = {x['kind']: x for x in g['findings']}
     sql = r['step11']['sql']
     reported = r['step11']['characters']['state'] == 'reported'
-    where = (', all listed in measured_order_characters.'
-             + r['pair']['slug'] + '.tsv' if reported else '')
-    cap = 60
+    file = 'measured_order_characters.' + r['pair']['slug'] + '.tsv'
+    cap, pairs_shown = 60, 10
 
-    def drawn_as(cp):
-        if cp > 0x10FFFF:
-            return ''
-        c = unicodedata.category(chr(cp))
-        return (chr(cp) if c[0] in 'LNPS' else
-                '\u25cc' + chr(cp) if c[0] == 'M' else '')
+    def all_in():
+        return [', all listed in', _e('code', file)] if reported else []
 
     def one(tok, named=False):
         m = rd.STRING.fullmatch(tok)
-        if not m[1]:
-            return tok
-        cp = int(m[1], 16)
-        name = unicodedata.name(chr(cp), '') if cp <= 0x10FFFF else ''
-        return ' '.join(x for x in (drawn_as(cp), tok,
-                                    name if named else '') if x)
+        return _cell(int(m[1], 16) if m[1] else None, tok, named)
 
-    def listed(runs, count, named=False):
+    def drawn(runs, count, named=False):
         # Every string while there are no more than `cap`; past that, the
-        # first `cap` code points that draw, as a sample.
-        sample, out, stands = count > cap, [], 0
+        # first `cap` code points that draw, as a sample; then how many
+        # more and the file that holds them all.
+        sample, cells, stands = count > cap, [], 0
         for a, b in runs:
             ka, kb = rd.STRING.fullmatch(a), rd.STRING.fullmatch(b)
             if not ka[1]:
                 if not sample:
-                    out.append(a if a == b else a + '..' + b[6:])
+                    cells.append(one(a, named) if a == b else _e(
+                        'span', _e('code', a + '..' + b[len('bytes '):]),
+                        c='ch'))
                     stands += rd._run_size('run', [a, b])
                 continue
             for cp in range(int(ka[1], 16), int(kb[1], 16) + 1):
-                if len(out) == cap:
+                if len(cells) == cap:
                     break
-                if not sample or drawn_as(cp):
-                    out.append(one(f'U+{cp:04X}', named))
+                if not sample or _glyph_of(cp):
+                    cells.append(one(f'U+{cp:04X}', named))
                     stands += 1
-        words = ' '.join(out)
+        out = [_e('div', *cells, c='chars named' if named else 'chars')]
         if sample:
-            words += f' A sample: the first {len(out)} that draw as a ' \
-                     'character.'
+            out.append(_e('p', f'A sample: the first {len(cells)} that draw '
+                          'as a character.', c='hint'))
         if count > stands:
-            words += f' and {count - stands:,} more' + where
-        return words
+            out.append(_e('p', f'and {count - stands:,} more', *all_in(),
+                          c='more'))
+        return out
 
     names = list(g['locales'])
     encs = []
@@ -1031,12 +1051,15 @@ def page_group_said(r, i):
     if 'told apart' in f:
         head.append(f'{f["told apart"]["count"]:,} pair(s) told apart '
                     'differently')
-    said = [', '.join(names), '(' + ', '.join(encs) + ')']
-    if unchecked:
-        said.append('NOT VERIFIED in PostgreSQL')
-    said.append('; '.join(head))
-    folds = [[' '.join(said), []]]
-    body = folds[0][1]
+    summary = _e(
+        'summary', _e('span', ', '.join(names), c='loc'),
+        _e('span', '(' + ', '.join(encs) + ')', c='enc'),
+        _e('span', 'NOT VERIFIED in PostgreSQL', c='badge warn')
+        if unchecked else None,
+        _e('span', 'NOT SETTLED in part', c='badge warn')
+        if page_unsettled(g) else None,
+        _e('span', '; '.join(head), c='what'))
+    body = []
     also = []
     for v in g['locales'].values():
         q = v['postgres']
@@ -1045,84 +1068,123 @@ def page_group_said(r, i):
         if q['spelling'] != 'none' and \
                 f'database locale {q["spelling"]}' not in also:
             also.append(f'database locale {q["spelling"]}')
-    def say(words):
-        said.append(words)
-        body.append(words)
-
     if also:
-        say('Also, in PostgreSQL: ' + '; '.join(also) + '.')
+        body.append(_e('p', 'Also, in PostgreSQL: ' + '; '.join(also) + '.',
+                       c='hint'))
     if g['sort_table']['state'] == 'changed':
         t = lo.table_change_lines(g['sort_table'])[2]
-        say(t[:1].upper() + t[1:] + '.')
+        body.append(_e('p', t[:1].upper() + t[1:] + '.', c='hint'))
     if 'moved' in f:
         m = f['moved']
-        say(f'Moved: {m["count"]:,} They now sort in another place. '
-            + listed(m['runs'], m['count'], m['listed'] == 'each')
-            if m['count'] else 'No character moved.')
+        if m['count']:
+            body += [_e('h4', f'Moved: {m["count"]:,}'),
+                     _e('p', 'They now sort in another place.', c='hint')]
+            body += drawn(m['runs'], m['count'], m['listed'] == 'each')
+        else:
+            body.append(_e('p', 'No character moved.'))
     if 'told apart' in f:
         t = f['told apart']
-        say(f'Pairs told apart differently: {t["count"]:,}')
+        body.append(_e('h4', f'Pairs told apart differently: {t["count"]:,}'))
         if t['listed'] == 'each':
-            say('one other before now')
-            for x in t['pairs']:
-                for w in (one(x['strings'][0], True),
-                          one(x['strings'][1], True),
-                          lo.RELATION_WORDS[x['before']],
-                          lo.RELATION_WORDS[x['now']]):
-                    say(w)
+            body.append(_e('table', _e('tr', *[_e('th', w) for w in (
+                'one', 'other', 'before', 'now')]), *[_e(
+                    'tr', _e('td', one(x['strings'][0], True)),
+                    _e('td', one(x['strings'][1], True)),
+                    _e('td', lo.RELATION_WORDS[x['before']]),
+                    _e('td', lo.RELATION_WORDS[x['now']]))
+                    for x in t['pairs']]))
         else:
-            say('Too many to list here' + where + '.')
+            body.append(_e('p', 'Too many to list here', *all_in(), '.',
+                           c='hint'))
     # Each folded list: its own summary and words, apart from the group's.
     if 'did not move' in f:
         d = f['did not move']
-        folds.append([f'Among them, {d["count"]:,} string(s) that did not '
-                      'move', [listed(d['runs'], d['count'])]])
-        said += [folds[-1][0]] + folds[-1][1]
+        body.append(_e('details', _e(
+            'summary', f'Among them, {d["count"]:,} string(s) that did not '
+            'move'), *drawn(d['runs'], d['count']), c='sub'))
     if 'reversed' in f:
         v = f['reversed']
-        folds.append([('all ' if v['all'] else '')
-                      + f'{v["characters"]:,} character(s) and '
-                      f'{v["other_strings"]:,} other string(s) now compare '
-                      'differently against at least one other',
-                      [listed(v['runs'], v['count'])]])
-        said += [folds[-1][0]] + folds[-1][1]
+        body.append(_e('details', _e(
+            'summary', ('all ' if v['all'] else '')
+            + f'{v["characters"]:,} character(s) and {v["other_strings"]:,} '
+            'other string(s) now compare differently against at least one '
+            'other'), *drawn(v['runs'], v['count']), c='sub'))
     gaps = []
     if 'probes changed' in f:
         pc = f['probes changed']
-        gaps.append('The pairs that tell letters, accents and case apart '
-                    'here are told apart differently themselves: letters '
-                    'accents case')
-        for k in ('before', 'now'):
-            gaps.append(k + ' ' + ' '.join(
-                one(x['pair'][0]) + ' / ' + one(x['pair'][1])
-                if x['state'] == 'pair' else x['state'].upper()
-                for x in pc[k]))
+
+        def side(k):
+            return _e('tr', _e('th', k), *[_e(
+                'td', *([one(x['pair'][0]), '/', one(x['pair'][1])]
+                        if x['state'] == 'pair' else
+                        [_e('b', x['state'].upper())])) for x in pc[k]])
+        gaps.append(_e('li', 'The pairs that tell letters, accents and case '
+                       'apart here are told apart differently themselves:',
+                       _e('table', _e('tr', _e('th'), *[_e('th', w) for w in (
+                           'letters', 'accents', 'case')]),
+                          side('before'), side('now'))))
     if 'left out' in f:
         x = f['left out']
-        gaps.append(('Pairs compared only by ' + ' and '.join(x['compared'])
-                     + '; ' if x['compared'] else 'No pair can be compared; ')
-                    + ' and '.join(x['left_out']) + ' NOT COMPARED here.')
+        gaps.append(_e('li', ('Pairs compared only by '
+                              + ' and '.join(x['compared']) + '; '
+                              if x['compared'] else 'No pair can be '
+                              'compared; ') + ' and '.join(x['left_out']),
+                       _e('b', 'NOT COMPARED'), 'here.'))
     if 'undecided' in f:
         u = f['undecided']
-        gaps.append(f'{u["count"]:,} more pair(s) may be told apart '
-                    'differently; what was measured cannot decide: '
-                    + ' '.join(f'{one(a)} and {one(b)}'
-                               for a, b in u['pairs'][:10])
-                    + (f' and {u["count"] - 10:,} more' + where
-                       if u['count'] > 10 else ''))
+        gaps.append(_e(
+            'li', f'{u["count"]:,} more pair(s) may be told apart '
+            'differently; what was measured cannot decide:',
+            _e('ul', *[_e('li', one(a), 'and', one(b))
+                       for a, b in u['pairs'][:pairs_shown]], c='pairs'),
+            _e('p', f'and {u["count"] - pairs_shown:,} more', *all_in(),
+               c='more') if u['count'] > pairs_shown else None))
+    st = g['sort_table']
+    if st['state'] == 'changed' and st['step11'] == 'unmeasured':
+        gaps.append(_e('li', 'What its compiled sort table changed:',
+                       _e('b', 'NOT MEASURED'), 'by step 11.'))
+    if st.get('naming', {}).get('state') in ('unread', 'levels'):
+        gaps.append(_e('li', 'Which sequences its compiled sort table '
+                       'changed:', _e('b', 'NOT NAMED'), '(the line "Its '
+                       'compiled sort table changed" says why).'))
     if sql['state'] != 'reported':
-        gaps.append('Whether an SQL file checks these locales: NOT REPORTED '
-                    '(see Confirm in PostgreSQL).')
+        gaps.append(_e('li', 'Whether an SQL file checks these locales:',
+                       _e('b', 'NOT REPORTED'),
+                       '(see Confirm in PostgreSQL).'))
     for x in unchecked:
-        gaps.append('NOT VERIFIED in PostgreSQL: no SQL file checks these '
-                    'locales \u2014 ' + x['why'] + '.')
+        gaps.append(_e('li', _e('b', 'NOT VERIFIED in PostgreSQL'),
+                       ': no SQL file checks these locales \u2014 '
+                       + x['why'] + '.'))
     if gaps:
-        say('Not settled for this group ' + ' '.join(gaps))
+        body.append(_e('div', _e('b', 'Not settled for this group'),
+                       _e('ul', *gaps), c='gap'))
+    return _e('details', summary, *body, c='grp')
 
-    def flat(t):
-        return re.sub(r'\s+', ' ', t).strip()
-    return flat(' '.join(said)), [(flat(h), flat(' '.join(b)))
-                                  for h, b in folds]
+
+def page_group_said(r, i):
+    """The words a summary page says of step 11's group I (page_group_tree
+    read, blanks collapsed), as (all its words, [(the words of its
+    <summary>, the words of its own body) for the group and each list
+    folded in it, in order]): what a reader sees with each closed, and
+    what opening each shows, so no word sits under another fold."""
+    tree = page_group_tree(r, i)
+    folds = []
+
+    def walk(n):
+        if isinstance(n, str):
+            return
+        tag, cls, p, d, kids = n
+        if tag == 'details':
+            head = next(k for k in kids if not isinstance(k, str)
+                        and k[0] == 'summary')
+            own = [k for k in kids if k is not head and (
+                isinstance(k, str) or k[0] != 'details')]
+            folds.append((_tree_words(head),
+                          _tree_words(('div', '', None, None, own))))
+        for k in kids:
+            walk(k)
+    walk(tree)
+    return _tree_words(tree), folds
 
 
 def _step2_title():
@@ -1303,6 +1365,38 @@ def style_hides(css):
                     bad.append(f'{sel}: --{f} {t[f]} on --{b} {t[b]}')
     return bad
 
+# Every attribute the summary page is written with; every class it is
+# written with; and the attributes whose value is fixed, with every (tag,
+# value) allowed.
+PAGE_ATTRS = {'charset', 'class', 'content', 'data-as', 'data-d', 'data-e',
+              'data-f', 'data-k', 'data-l', 'data-p', 'data-part', 'data-t',
+              'data-v', 'data-w', 'lang', 'name', 'open'}
+PAGE_CLASSES = {'bad', 'badge', 'banner', 'card', 'ch', 'chars', 'disc',
+                'enc', 'g', 'gap', 'grp', 'hint', 'how', 'loc', 'more',
+                'named', 'names', 'nd', 'nd-card', 'nm', 'none', 'ok',
+                'pairs', 'plain', 'sec', 'secb', 'side', 'sub', 'sub0',
+                'tile', 'tile-note', 'tiles', 'warn', 'what'}
+PAGE_FIXED_ATTRS = {
+    'lang': {('html', 'lang', 'en')},
+    'charset': {('meta', 'charset', 'utf-8')},
+    'name': {('meta', 'name', 'viewport')},
+    'content': {('meta', 'content', 'width=device-width,initial-scale=1')},
+    'open': {('details', 'open', None)},
+}
+# The elements a browser closes an open <p> before (HTML's "close a p
+# element"), of those the page could be written with.
+CLOSES_P = {'address', 'article', 'aside', 'blockquote', 'details', 'div',
+            'dl', 'fieldset', 'figcaption', 'figure', 'footer', 'form',
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr',
+            'li', 'main', 'menu', 'nav', 'ol', 'p', 'pre', 'section',
+            'summary', 'table', 'ul'}
+
+# The tags a browser draws as blocks: a part's words are apart at them,
+# as a reader sees them (what PAGE_STYLE draws apart besides is in
+# _shown_apart).
+PART_BLOCKS = {'p', 'div', 'h1', 'h2', 'h3', 'h4', 'li', 'ul', 'table', 'tr',
+               'td', 'th', 'summary', 'details', 'pre'}
+
 HOME = {
     'data-f': {'disc': None, 'nothing': None, 'sub measured': None,
                'sub sources': None, 'sub unreported': None,
@@ -1332,19 +1426,42 @@ HOME = {
                'step2/removed/rows': _ADDED,
                'step2/rules/added/rows': _ADDED,
                'step2/rules/differ': STEP2_SECTION,
+               'compared/machines': _HOW,
                'not verified': _NV, 'other changes': _OTHER}}
 
 
-def page_rules_said(r):
-    """The words a summary page says of step 2's rules
-    (report_html.sources), rebuilt here from the data by this check's own
-    rules, blanks collapsed, as [(its place, its words)] in the order the
-    page must say them: the totals, what their "not compared" counts
-    (where it counts any), each group of locales whose rules differ, the
-    entries not read. Only the words step 2 prints are taken from it
-    (filter_lc_collate_changes' *_WORDS); how a character is drawn, the
-    sample, how many more and what "not compared" counts are this
-    check's own."""
+def _glyph_of(cp):
+    """How the page draws code point CP: a letter, number, punctuation or
+    symbol as itself, a combining mark over a dotted circle, anything
+    else as nothing."""
+    if cp > 0x10FFFF:
+        return ''
+    c = unicodedata.category(chr(cp))
+    return (chr(cp) if c[0] in 'LNPS' else
+            '\u25cc' + chr(cp) if c[0] == 'M' else '')
+
+
+def _cell(cp, tok, named=False):
+    """One string drawn, as this check's tree: the character where it
+    draws, its code TOK, and its Unicode name where NAMED and it has one;
+    a string named by its bytes (CP None) as its bytes."""
+    if cp is None:
+        return _e('span', _e('code', tok), c='ch')
+    g = _glyph_of(cp)
+    name = unicodedata.name(chr(cp), '') if cp <= 0x10FFFF else ''
+    return _e('span', _e('span', g, c='g') if g else None, _e('code', tok),
+              _e('span', name, c='nm') if named and name else None, c='ch')
+
+
+def page_rules_trees(r):
+    """What a summary page says of step 2's rules (report_html.sources),
+    rebuilt here from the data by this check's own rules, as [(its place,
+    its tree)] in the order the page must say them: the totals, what
+    their "not compared" counts (where it counts any), each group of
+    locales whose rules differ, the entries not read. Only the words step
+    2 prints are taken from it (filter_lc_collate_changes' *_WORDS); how
+    a character is drawn, the sample, how many more and what "not
+    compared" counts are this check's own."""
     import filter_lc_collate_changes as flc
     ru = r['step2']['rules']
     if ru['state'] != 'reported':
@@ -1352,21 +1469,9 @@ def page_rules_said(r):
     reported = r['step2']['rules_characters']['state'] == 'reported'
     where = 'step2_rules_characters.' + r['pair']['slug'] + '.tsv'
     cap = 60
-
-    def drawn_as(cp):
-        if cp > 0x10FFFF:
-            return ''
-        c = unicodedata.category(chr(cp))
-        return (chr(cp) if c[0] in 'LNPS' else
-                '\u25cc' + chr(cp) if c[0] == 'M' else '')
-
-    def one(cp):
-        name = unicodedata.name(chr(cp), '') if cp <= 0x10FFFF else ''
-        return ' '.join(x for x in (drawn_as(cp), 'U+%04X' % cp, name) if x)
-
     t = ru['totals']
-    out = [('totals', flc.TOTALS_WORDS.format(
-        **{k: f'{v:,}' for k, v in t.items()}))]
+    out = [('totals', _e('p', flc.TOTALS_WORDS.format(
+        **{k: f'{v:,}' for k, v in t.items()})))]
     if t['not_compared']:
         # What it counts, by this check's own rule: the files of one side
         # only, the entries not read and counted, and the rest, the names
@@ -1384,39 +1489,51 @@ def page_rules_said(r):
                          'under Not verified' if told else 'any other, '
                          'named in the warnings of step 2, which are NOT '
                          'REPORTED')) if k]
-        out.append(('not compared', f'Of the {t["not_compared"]:,} not '
-                    'compared: ' + '; '.join(said) + '.'))
+        out.append(('not compared', _e(
+            'p', f'Of the {t["not_compared"]:,} not compared: '
+            + '; '.join(said) + '.', c='hint')))
     for i, d in enumerate(ru['differ']):
         c = d['characters']
-        words = [', '.join(d['names'])]
+        what = []
         if c['state'] == 'listed':
             cps = c['codepoints']
             sample = len(cps) > cap
-            shown = [x for x in cps if drawn_as(x)][:cap] if sample else cps
-            words.append(f'{flc.LISTED_WORDS} ({len(cps):,}):')
-            words += [one(x) for x in shown]
+            shown = [x for x in cps if _glyph_of(x)][:cap] if sample else cps
+            what += [_e('div', f'{flc.LISTED_WORDS} ({len(cps):,}):'),
+                     _e('div', *[_cell(x, 'U+%04X' % x, True) for x in shown],
+                        c='chars named')]
             if sample:
-                words.append(f'A sample: the first {len(shown)} that draw as '
-                             'a character.')
+                what.append(_e('p', f'A sample: the first {len(shown)} that '
+                               'draw as a character.', c='hint'))
             if len(cps) > len(shown):
-                words.append(f'and {len(cps) - len(shown):,} more'
-                             + (f', all listed in {where}' if reported
-                                else ''))
+                what.append(_e('p', f'and {len(cps) - len(shown):,} more',
+                               ', all listed in' if reported else None,
+                               _e('code', where) if reported else None,
+                               c='more'))
         elif c['state'] == 'counted':
-            words.append(f'{c["count"]:,} {flc.COUNTED_WORDS}'
-                         + (f'; listed in {where}' if reported else ''))
+            what += [f'{c["count"]:,} {flc.COUNTED_WORDS}']
+            if reported:
+                what += ['; listed in', _e('code', where)]
         elif c['state'] == 'none named':
-            words.append(flc.NONE_NAMED_WORDS)
+            what.append(flc.NONE_NAMED_WORDS)
         else:
-            words.append(f'{flc.NOT_KNOWN_WORDS} {c["why"]}')
+            what.append(f'{flc.NOT_KNOWN_WORDS} {c["why"]}')
         if d['every_rule']:
-            words.append(flc.EVERY_RULE_WORDS)
-        out.append((f'differ#{i}', ' '.join(words)))
+            what.append(_e('p', flc.EVERY_RULE_WORDS, c='hint'))
+        out.append((f'differ#{i}', _e('tr', _e('td', ', '.join(d['names'])),
+                                      _e('td', *what))))
     if ru['unread']:
-        out.append(('unread', f'{flc.UNREAD_WORDS} ({len(ru["unread"]):,}): '
-                    + ' '.join(f'{u["name"]} ({"; ".join(u["why"])})'
-                               for u in ru['unread'])))
-    return [(k, re.sub(r'\s+', ' ', w).strip()) for k, w in out]
+        out.append(('unread', _e(
+            'div', _e('b', f'{flc.UNREAD_WORDS} ({len(ru["unread"]):,}):'),
+            _e('ul', *[_e('li', f'{u["name"]} ({"; ".join(u["why"])})')
+                       for u in ru['unread']]), c='gap')))
+    return out
+
+
+def page_rules_said(r):
+    """The words of each part of page_rules_trees, as (its place, its
+    words, blanks collapsed): that tree read (_tree_words)."""
+    return [(k, _tree_words(t)) for k, t in page_rules_trees(r)]
 
 
 def want_w_of(r):
@@ -1433,17 +1550,1293 @@ def want_w_of(r):
     return out
 
 
+# ------------------------------------------------------------------
+# 24.4-3a-2: ONE registry of the summary page's parts.
+
+# Each record the summary page reads (report_html.render) and
+# each state report_data.load allows it: 'done'; 'group', not done and
+# said by its group of step 11 (NOT SETTLED in part, page_unsettled); or
+# the keys beside the state that hold its reason ([] where the data gives
+# none). tests/test_report_data.TheSummaryPage.
+# test_the_state_table_is_closed holds this table, with PAGE_NOT_READ, to
+# every _stated/_one_of call of report_data (PAGE_STATE_SITES), and the
+# records the renderer reads on the pages that test builds from a run
+# to this table.
+PAGE_STATES = {
+    'run/machines': {'given': 'done', 'not given': ['why']},
+    'warnings/step0': {'reported': 'done', 'not run': ['why'],
+                       'not reported': ['why']},
+    'warnings/step1': {'reported': 'done', 'not reported': ['why']},
+    'warnings/step2': {'reported': 'done', 'not reported': ['why']},
+    'warnings/step11': {'reported': 'done', 'not run': ['why'],
+                        'not reported': ['why']},
+    'compared': {'reported': 'done', 'not reported': ['why']},
+    'compared/note': {'printed': 'done', 'not printed': 'done',
+                      'fallback': [], 'not run': ['why'],
+                      'not reported': ['why']},
+    'compared/latest': {'reported': 'done', 'not asked': 'done',
+                        'not reported': ['why']},
+    'compared/latest/resolved#/when': {'dated': 'done', 'no date': []},
+    'compared/machines#/charmaps': {'counted': 'done', 'none': ['why']},
+    'compared/builds': {'none': 'done', 'rebuilt': 'done'},
+    'compared/collation_version': {'differ': 'done', 'same': 'done',
+                                   'unknown': ['sides']},
+    'compared/tags#/status': dict(
+        {'good': 'done'},
+        **{s: ['detail'] for s in ('no-gpg', 'no-key', 'unverifiable',
+                                   'revoked-key', 'expired-key',
+                                   'expired-sig', 'untrusted', 'unsigned',
+                                   'not-a-tag')}),
+    'step2/removed': {'reported': 'done', 'not reported': ['why']},
+    'step2/rules': {'reported': 'done', 'not compared': ['why'],
+                    'not reported': ['why']},
+    'step2/rules/added': {'none': 'done', 'plain': 'done', 'notice': 'done'},
+    'step2/rules/added/rows#/spellings': {
+        'not in SUPPORTED': [], 'not measured on that machine': [],
+        'in the C.UTF-8 notice': []},
+    'step2/rules/differ#/characters': {'listed': 'done', 'counted': 'done',
+                                       'none named': 'done',
+                                       'not known': ['why']},
+    'step2/rules_characters': {'reported': 'done', 'not compared': ['why'],
+                               'not reported': ['why']},
+    'step11': {'reported': 'done', 'not run': ['why', 'not_done'],
+               'not reported': ['why']},
+    'step11/counts': {'reported': 'done', 'not reported': ['why']},
+    'step11/findings': {'reported': 'done', 'not reported': ['why']},
+    'step11/characters': {'reported': 'done', 'not reported': ['why']},
+    'step11/sql': {'reported': 'done', 'not reported': ['why']},
+    'step11/findings/groups#/findings#/probes#': {
+        'pair': 'done', 'none': [], 'not measured': []},
+    # Read since 24.4-3a-2 (what report_html reads).
+    'run/nothing_compared': {'none': 'done', 'commit': [], 'tree': []},
+    'run/old_class': {'tag': 'done', 'commit': 'done', 'build': 'done'},
+    'run/new_class': {'tag': 'done', 'commit': 'done', 'build': 'done'},
+    'run/word': {'tags': 'done', 'builds': 'done', 'sides': 'done'},
+    'step2/removed/source': {
+        'machine sources': 'done', 'build packages': 'done',
+        'old side is a tag': [], 'new side is a tag': [], 'tags': [],
+        "tags, because of a machine's file": []},
+    'step2/removed/rows#/how': {'deleted': 'done', 'renamed': 'done'},
+    'step11/verdicts#/verdict': {
+        'changed': 'done', 'firm': 'done', 'far': [],
+        'unmeasured': ['words'], 'refused': 'done', 'only old': 'done',
+        'only new': 'done'},
+    'step11/findings/groups#/found_by': {'step 11': 'done',
+                                         'its sort table alone': 'done'},
+    'step11/findings/groups#/findings#/kind': {
+        'moved': 'done', 'reversed': 'done', 'probes changed': 'group',
+        'left out': 'group', 'told apart': 'done', 'did not move': 'done',
+        'undecided': 'group'},
+    'step11/findings/groups#/findings#/listed:moved': {
+        'none': 'done', 'each': 'done', 'runs': 'done', 'too many': 'done'},
+    'step11/findings/groups#/findings#/listed:told apart': {
+        'each': 'done', 'too many': 'done'},
+    'step11/findings/groups#/sort_table/state': {'no line': 'done',
+                                                 'changed': 'done'},
+    'step11/findings/groups#/sort_table/step11': {
+        'changed': 'done', 'same': 'done', 'unmeasured': 'group'},
+    'step11/findings/groups#/sort_table/reason': {
+        'no levels on one machine': 'done', 'items differ': 'done'},
+    'step11/findings/groups#/sort_table/naming': {
+        'named': 'done', 'record': 'done', 'numbering': 'done',
+        'unread': 'group', 'levels': 'group'},
+}
+# Where report_data.load decides each record of PAGE_STATES: (the
+# function holding the call, the source of its first argument), a
+# `run.{k}` of a loop named by its key.
+PAGE_STATE_SITES = {
+    'run/machines': ('load', "'run.machines'"),
+    'run/nothing_compared': ('load', 'run.nothing_compared'),
+    'run/old_class': ('load', 'run.old_class'),
+    'run/new_class': ('load', 'run.new_class'),
+    'run/word': ('load', 'run.word'),
+    'warnings/step0': ('load', "'warnings.step0'"),
+    'warnings/step1': ('load', "'warnings.step1'"),
+    'warnings/step2': ('load', "'warnings.step2'"),
+    'warnings/step11': ('load', "'warnings.step11'"),
+    'compared': ('_compared', "'compared'"),
+    'compared/note': ('_compared', "'compared.note'"),
+    'compared/latest': ('_latest', "'compared.latest'"),
+    'compared/latest/resolved#/when': ('_latest', "f'{at}.when'"),
+    'compared/machines#/charmaps': ('_compared', "f'{at}.charmaps'"),
+    'compared/builds': ('_compared', "'compared.builds'"),
+    'compared/collation_version': ('_compared',
+                                   "'compared.collation_version'"),
+    'compared/tags#/status': ('_compared', "f'{at}.status'"),
+    'step2/removed': ('load', "'step2.removed'"),
+    'step2/removed/source': ('removed', "f'{where}.source'"),
+    'step2/removed/rows#/how': ('removed', "f'{where}.rows[{i}].how'"),
+    'step2/rules': ('_rules', 'where'),
+    'step2/rules/added': ('_rules', "f'{where}.added.state'"),
+    'step2/rules/added/rows#/spellings': ('_rules', "f'{at}.spellings'"),
+    'step2/rules/differ#/characters': ('_rules', "f'{at}.characters'"),
+    'step2/rules_characters': ('load', "'step2.rules_characters'"),
+    'step11': ('load', "'step11'"),
+    'step11/counts': ('s11', "f'{where}.counts'"),
+    'step11/findings': ('s11', "f'{where}.findings'"),
+    'step11/characters': ('s11', "f'{where}.characters'"),
+    'step11/sql': ('s11', "f'{where}.sql'"),
+    'step11/verdicts#/verdict': ('s11',
+                                 "f'{where}.verdicts[{name!r}].verdict'"),
+    'step11/findings/groups#/findings#/probes#': ('_probes', "f'{w}.state'"),
+    'step11/findings/groups#/found_by': ('_findings', "f'{w}.found_by'"),
+    'step11/findings/groups#/findings#/kind': ('_finding',
+                                               "f'{where}.kind'"),
+    'step11/findings/groups#/findings#/listed:moved': (
+        '_finding', "f'{where}.listed'", ('none', 'each', 'runs',
+                                          'too many')),
+    'step11/findings/groups#/findings#/listed:told apart': (
+        '_told_apart', "f'{where}.listed'"),
+    'step11/findings/groups#/sort_table/state': ('_sort_table',
+                                                 "f'{where}.state'"),
+    'step11/findings/groups#/sort_table/step11': ('_sort_table',
+                                                  "f'{where}.step11'"),
+    'step11/findings/groups#/sort_table/reason': ('_sort_table',
+                                                  "f'{where}.reason'"),
+    'step11/findings/groups#/sort_table/naming': ('_sort_table',
+                                                  "f'{w}.state'"),
+}
+# Every other _stated/_one_of of report_data: a record the summary page
+# does not read (measured: no render of the pages of
+# test_the_state_table_is_closed reads it, and report_html names none of
+# them), and what shows it instead.
+_LATER = 'not on the summary page; its own part is 24.4-3b'
+_TEXT = 'not on the summary page; the text and its warnings say it'
+PAGE_NOT_READ = {
+    ('load', 'run.route'): _TEXT,
+    ('load', 'run.order'): _TEXT,
+    ('load', "'step2.listed'"): _TEXT,
+    ('load', "'step2.rules_by_name'"): _TEXT,
+    ('by_name', "f'{where}.compared'"): _TEXT,
+    ('by_name', "f'{where}.nothing'"): _TEXT,
+    ('by_name', "f'{where}.measurements'"): _TEXT,
+    ('by_name', "f'{where}.charmaps'"): _TEXT,
+    ('by_name', "f'{where}.locales'"): _TEXT,
+    ('removed', "f'{where}.between'"): _TEXT,
+    ('_rules', "f'{where}.unbuilt'"): _TEXT,
+    ('_character_sets', "f'{where}.state'"): _LATER,
+    ('_character_sets', "f'{where}.basis'"): _LATER,
+    ('_character_sets', 'at', ('compared', 'not compared')): _LATER,
+    ('_character_sets', 'at', ('named', 'not compared')): _LATER,
+    ('_transliteration', "f'{where}.state'"): _LATER,
+    ('_transliteration', "f'{where}.line'"): _LATER,
+    ('_transliteration', 'at'): _LATER,
+    ('s11', "f'{where}.rules_beside'"): _TEXT,
+    ('s11', "f'{where}.checks'"): _LATER,
+    ('_checks', "f'{at}.state'"): _LATER,
+    ('_checks', "f'{where}.money'"): _LATER,
+    ('_checks', "f'{w}.side'"): _LATER,
+    ('_checks', "f'{w}.{side}'"): _LATER,
+    ('libc', "f'{at}.result'"): _LATER,
+    ('_charmaps_shape', "f'{where}.state'"): _LATER,
+    ('_use_shape', "f'{where}.state'"): _LATER,
+    ('_use_shape', "f'{where}.earlier'"): _LATER,
+    ('_use_shape', "f'{at}.kind'"): _LATER,
+    ('_ctype', "f'{where}.state'"): _LATER,
+    ('_finding', "f'{where}.listed'", ('runs', 'too many')): _TEXT,
+    ('_told_apart', "f'{w}.before'"): _TEXT,
+    ('_told_apart', "f'{w}.now'"): _TEXT,
+    ('_told_apart', "f'{w}.measured'"): _TEXT,
+    ('_told_apart', "f'{w}.test.state'"): _TEXT,
+    ('_told_apart', "f'{w}.test.level'"): _TEXT,
+    ('_told_apart', "f'{w}.test.before'"): _TEXT,
+    ('_told_apart', "f'{w}.test.now'"): _TEXT,
+    ('_findings', "f'{lw}.postgres.reach'"): _TEXT,
+}
+# Where each not-done state is said besides its home part: its own entry
+# of Not verified, unless a card of class "not checked" there already
+# says it (its kinds), or step 11's entry does (STEP11).
+PAGE_COVER = {
+    'compared/tags#/status': ('signatures_unchecked',),
+    'compared/collation_version:unknown': ('collation_version_unknown',),
+    'compared/note:fallback': ('machine_falls_back_to_tags',),
+    'step2/rules:not compared': ('same_commit', 'same_tree',
+                                 'same_tree_machines'),
+    'step2/rules_characters:not compared': ('same_commit', 'same_tree',
+                                            'same_tree_machines'),
+    'run/nothing_compared': ('same_commit', 'same_tree',
+                             'same_tree_machines'),
+    'step2/removed/source': ('sides_read_as_tags',),
+    "step2/removed/source:tags, because of a machine's file": (
+        'machine_falls_back_to_tags',),
+    'step11/verdicts#/verdict': ('not_measured',),
+    'run/machines:not given': 'STEP11', 'compared/note:not run': 'STEP11',
+    'warnings/step0:not run': 'STEP11', 'warnings/step11:not run': 'STEP11',
+}
+# Records (a record, or a record and one state) never said in an entry
+# of Not verified of their own (nv:nd): shown in their home part only,
+# what a locale is beside its name (step 2's new files), a probe of a
+# group of step 11 (its group says it) and a locale unchanged only as
+# far as step 11 measured it (its tile counts it, 16.423, and the
+# locales whose order changed name it); and step 11 and the warnings of
+# steps 1 and 2, whose states not done have entries of another kind
+# there (nv:step11, nv:block).
+PAGE_HOME_ONLY = ('step2/rules/added/rows#/spellings',
+                  'step11/findings/groups#/findings#/probes#', 'step11',
+                  'warnings/step1', 'warnings/step2',
+                  'step11/verdicts#/verdict:far')
+
+def report_data_state_calls(src=None):
+    """Every _stated/_one_of call of scripts/report_data.py (or of SRC,
+    a source read with report_data's names) but the one
+    inside _stated itself, read from its source: {key: (first line, last
+    line, its states, a tuple, or None where they cannot be read)}. The
+    key is (the function holding the call, the source of its first
+    argument), with the states added where two calls share both; a
+    call inside a loop over a literal tuple of (key, states), as
+    `run.{k}`, is one key per member, its where spelt out."""
+    import ast
+    import report_data
+    if src is None:
+        with open(report_data.__file__, encoding='utf-8') as f:
+            src = f.read()
+    ns = vars(report_data)
+    found = []
+
+    def states_of(node, env):
+        try:
+            return tuple(eval(ast.get_source_segment(src, node), ns,
+                              dict(env)))
+        except Exception:
+            return None
+
+    def walk(node, fn, loops):
+        for ch in ast.iter_child_nodes(node):
+            f = ch.name if isinstance(ch, ast.FunctionDef) else fn
+            lp = loops
+            if isinstance(ch, ast.For) and isinstance(ch.iter, ast.Tuple) \
+                    and isinstance(ch.target, ast.Tuple):
+                lp = loops + [ch]
+            if isinstance(ch, ast.Call) and isinstance(ch.func, ast.Name) \
+                    and ch.func.id in ('_stated', '_one_of') \
+                    and fn != '_stated':
+                where = ast.get_source_segment(src, ch.args[0])
+                envs = [{}]
+                if lp and isinstance(ch.args[0], ast.JoinedStr):
+                    loop = lp[-1]
+                    names = [t.id for t in loop.target.elts]
+                    envs = [dict(zip(names, v)) for v in eval(
+                        ast.get_source_segment(src, loop.iter), ns)]
+                for env in envs:
+                    w = (eval(where, ns, dict(env)) if env else where)
+                    found.append(((f, w), ch.lineno, ch.end_lineno,
+                                  states_of(ch.args[2], env)))
+            walk(ch, f, lp)
+    walk(ast.parse(src), None, [])
+    count = {}
+    for k, *_ in found:
+        count[k] = count.get(k, 0) + 1
+    out = {}
+    for k, a, b, st in found:
+        key = k if count[k] == 1 else (*k, st)
+        if key in out:
+            raise AssertionError(f'two calls of report_data are {key}')
+        out[key] = (a, b, st)
+    return out
+
+
+# The side(s) a source of step 2's Removed list reads as a tag, which a
+# card of sides_read_as_tags names (report_data.REMOVED_SOURCES).
+PAGE_TAG_SIDES = {'old side is a tag': ('old',),
+                  'new side is a tag': ('new',), 'tags': ('old', 'new')}
+
+
+def home_only(table, state):
+    return table in PAGE_HOME_ONLY or f'{table}:{state}' in PAGE_HOME_ONLY
+
+
+def page_not_done(r):
+    """Each record the page reads that is not done, by PAGE_STATES, in
+    the order of Not verified, as (its place, its state, its record of
+    PAGE_STATES): this check's own walk."""
+    out = []
+
+    def one(table, place, state):
+        if PAGE_STATES[table][state] != 'done':
+            out.append((place, state, table))
+    s11, s2, c = r['step11'], r['step2'], r['compared']
+    one('step11', 'step11', s11['state'])
+    for st in ('step1', 'step2'):
+        one(f'warnings/{st}', f'warnings/{st}', r['warnings'][st]['state'])
+    if s11['state'] == 'reported':
+        for k in ('counts', 'findings', 'characters', 'sql'):
+            one(f'step11/{k}', f'step11/{k}', s11[k]['state'])
+        for k, v in s11['verdicts'].items():
+            one('step11/verdicts#/verdict', f'step11/verdicts/{k}',
+                v['verdict'])
+        if s11['findings']['state'] == 'reported':
+            for g, x in enumerate(s11['findings']['groups']):
+                gp = f'step11/findings/groups#{g}'
+                one('step11/findings/groups#/found_by', gp + '/found_by',
+                    x['found_by'])
+                st = x['sort_table']
+                one('step11/findings/groups#/sort_table/state',
+                    gp + '/sort_table', st['state'])
+                for k in ('step11', 'reason'):
+                    if k in st:
+                        one(f'step11/findings/groups#/sort_table/{k}',
+                            f'{gp}/sort_table/{k}', st[k])
+                if 'naming' in st:
+                    one('step11/findings/groups#/sort_table/naming',
+                        gp + '/sort_table/naming', st['naming']['state'])
+                for f, y in enumerate(x['findings']):
+                    one('step11/findings/groups#/findings#/kind',
+                        f'{gp}/findings#{f}/kind', y['kind'])
+                    if y['kind'] in ('moved', 'told apart'):
+                        one('step11/findings/groups#/findings#/listed:'
+                            + y['kind'], f'{gp}/findings#{f}/listed',
+                            y['listed'])
+                    # The probe pairs of each machine where they changed,
+                    # and those told apart is measured by (its levels
+                    # left out are its group's "NOT COMPARED here").
+                    for k in {'probes changed': ('before', 'now'),
+                              'told apart': ('probes',)}.get(y['kind'], ()):
+                        for i, z in enumerate(y[k]):
+                            one('step11/findings/groups#/findings#/probes#',
+                                f'step11/findings/groups#{g}/findings#{f}/'
+                                f'{k}#{i}', z['state'])
+    one('step2/removed', 'step2/removed', s2['removed']['state'])
+    if s2['removed']['state'] == 'reported':
+        one('step2/removed/source', 'step2/removed/source',
+            s2['removed']['source'])
+        for i, x in enumerate(s2['removed']['rows']):
+            one('step2/removed/rows#/how', f'step2/removed/rows#{i}/how',
+                x['how'])
+    ru = s2['rules']
+    one('step2/rules', 'step2/rules', ru['state'])
+    if ru['state'] == 'reported':
+        one('step2/rules/added', 'step2/rules/added', ru['added']['state'])
+        for i, x in enumerate(ru['added']['rows']):
+            if isinstance(x['spellings'], dict):
+                one('step2/rules/added/rows#/spellings',
+                    f'step2/rules/added/rows#{i}/spellings',
+                    x['spellings']['state'])
+        for i, d in enumerate(ru['differ']):
+            one('step2/rules/differ#/characters',
+                f'step2/rules/differ#{i}/characters', d['characters']['state'])
+    one('step2/rules_characters', 'step2/rules_characters',
+        s2['rules_characters']['state'])
+    for k in ('nothing_compared', 'old_class', 'new_class', 'word'):
+        one(f'run/{k}', f'run/{k}', r['run'][k])
+    one('run/machines', 'run/machines', r['run']['machines']['state'])
+    for st in ('step0', 'step11'):
+        one(f'warnings/{st}', f'warnings/{st}', r['warnings'][st]['state'])
+    one('compared', 'compared', c['state'])
+    if c['state'] == 'reported':
+        one('compared/note', 'compared/note', c['note']['state'])
+        for i, m in enumerate(c['machines']):
+            one('compared/machines#/charmaps',
+                f'compared/machines#{i}/charmaps', m['charmaps']['state'])
+        one('compared/builds', 'compared/builds', c['builds']['state'])
+        one('compared/latest', 'compared/latest', c['latest']['state'])
+        for i, x in enumerate(c['latest'].get('resolved', [])):
+            one('compared/latest/resolved#/when',
+                f'compared/latest/resolved#{i}/when', x['when']['state'])
+        for i, t in enumerate(c['tags']):
+            one('compared/tags#/status', f'compared/tags#{i}', t['status'])
+        one('compared/collation_version', 'compared/collation_version',
+            c['collation_version']['state'])
+    return out
+
+
+# What an entry of Not verified of its own calls each record, in this
+# check's words.
+PAGE_ND_WORDS = {
+    'step11/counts': "Step 11's counts",
+    'step11/findings': 'Which locales sort differently (step 11)',
+    'step11/characters': "Step 11's file of every character found",
+    'step11/sql': "Step 11's SQL files",
+    'step2/removed': "Step 2's list of the locale files gone",
+    'step2/rules': "Step 2's sort rules of the locale sources",
+    'step2/rules/differ': 'The characters of the changed rules of',
+    'step2/rules_characters': "Step 2's file of the characters of the "
+                              'changed rules',
+    'compared': 'How this was compared',
+    'compared/note': "Step 0's note on what each machine was compared as",
+    'compared/machines': 'The charmaps of the',
+    'compared/latest': 'Which build each latest-elN names',
+    'compared/latest/resolved': 'The date of the build of',
+    'compared/tags': 'The signature of',
+    'compared/collation_version': 'The collation version PostgreSQL '
+                                  'records',
+    'run/machines': "The machines' files",
+    'warnings/step0': "The warnings of the machines' files",
+    'warnings/step11': 'The warnings of step 11',
+}
+_BLOCK_WORDS = {'step0': "the machines' files", 'step1': 'the two sides',
+                'step2': 'step 2', 'step11': 'step 11'}
+
+
+def _w(*pieces):
+    return re.sub(r'\s+', ' ', ' '.join(x for x in pieces if x)).strip()
+
+
+def _p(place):
+    return '{' + place + '}'
+
+
+# 24.4-3a-2: each part of the summary page as a tree, its
+# elements, their classes, its values marked and its words in it, in
+# order: (tag, classes sorted, data-p, data-d, [children]), a child a
+# tree or a string of words. The words a part says are this tree read
+# as the page's reader reads them (_tree_words), and the page's own
+# tree is held to it element by element (_tree_tokens), so a word in
+# another element, a class changed or an element moved is refused.
+def _e(tag, *kids, c='', p=None, d=None):
+    return (tag, ' '.join(sorted(c.split())), p, d,
+            [k for k in kids if k not in ('', None)])
+
+
+def _shown_apart(tag, cls, up_cls):
+    """Whether PAGE_STYLE shows an element's words apart from the words
+    around it: a block, a count over its words in a tile, a character of
+    a list drawn (flex, with a gap) and each of its pieces."""
+    return (tag in PART_BLOCKS or (tag == 'b' and 'tile' in up_cls.split())
+            or 'ch' in cls.split() or 'ch' in up_cls.split())
+
+
+def _tree_words(tree):
+    """The words a part's tree says, as report_page_held reads a part's
+    words off the page: a value as {its place}, a worked-out value as
+    {d:its rule}, a block apart from the words before it, blanks
+    collapsed; the words inside a value are the value's."""
+    out = []
+
+    def walk(n, up, in_mark):
+        if isinstance(n, str):
+            if not in_mark:
+                out.append(n)
+            return
+        tag, cls, p, d, kids = n
+        if _shown_apart(tag, cls, up):
+            out.append(' ')
+        if p is not None or d is not None:
+            out.append(' {' + (p if p is not None else 'd:' + d) + '} ')
+        for i, k in enumerate(kids):
+            # Two pieces side by side are two words, but a comma, a
+            # semicolon, a colon, a stop or a closing bracket sits on the
+            # word before it.
+            if i and not (isinstance(k, str) and k[:1] in ',;:.)'):
+                out.append(' ')
+            walk(k, cls, in_mark or p is not None or d is not None)
+    walk(tree, '', False)
+    return re.sub(r'\s+', ' ', ''.join(out)).strip()
+
+
+def _tree_tokens(tree, out=None, in_mark=False):
+    """TREE in order, as the page check reads a page: each element as
+    ('<', tag, classes, data-p, data-d) and its end as ('>',), each
+    piece of words outside a value as ('t', words)."""
+    out = [] if out is None else out
+    if isinstance(tree, str):
+        if not in_mark:
+            out.append(('t', tree))
+        return out
+    tag, cls, p, d, kids = tree
+    out.append(('<', tag, cls, p, d))
+    for k in kids:
+        _tree_tokens(k, out, in_mark or p is not None or d is not None)
+    out.append(('>',))
+    return out
+
+
+def _norm_tokens(toks):
+    """TOKS with the words between two elements joined, blanks collapsed
+    and trimmed, and blank words dropped: the page's spacing around an
+    element is the style's, not a word."""
+    out = []
+    for t in toks:
+        if t[0] == 't' and out and out[-1][0] == 't':
+            out[-1] = ('t', out[-1][1] + t[1])
+        else:
+            out.append(t)
+    return [('t', re.sub(r'\s+', ' ', t[1]).strip()) if t[0] == 't' else t
+            for t in out if t[0] != 't' or t[1].strip()]
+
+
+def page_reason(r, place):
+    """The placeholders of a record's reason, where the data gives one:
+    its why (one, or each of a list), or the sides a collation version is
+    unknown for."""
+    v = r
+    for part in place.split('/'):
+        k, _, i = part.partition('#')
+        v = v[k] if k else v
+        v = v[int(i)] if i else v
+    w = v.get('why')
+    if w is None:
+        return ''
+    if isinstance(w, list):
+        return _w(*[_p(f'{place}/why#{i}') for i in range(len(w))])
+    return _w('\u2014', _p(place + '/why'))
+
+
+def page_nd(r, place):
+    """A part not done: its state, then its reason."""
+    return _w(_p(place + '/state'), page_reason(r, place))
+
+
+def page_nv_called_for(r):
+    """The entries of Not verified, in order, as (part id, its tree):
+    each warnings block not reported, step 11 not done, each record of
+    page_not_done no card or step 11's entry already says (but those
+    shown in their home part only, PAGE_HOME_ONLY), each group
+    step 11 could not settle in part (page_unsettled, "NOT SETTLED in
+    part"), each warning of class "not checked" (each text once, its
+    card), each entry no SQL file checks; [] where none (the page says
+    "(none)")."""
+    out = []
+    w = r['warnings']
+
+    def entry(*kids):
+        return _e('div', *kids, c='card nd-card')
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        if w[st]['state'] == 'not reported':
+            out.append((f'nv:block {st}', entry(
+                _e('b', 'The warnings of', _e('span', _BLOCK_WORDS[st])),
+                _nd_box(r, f'warnings/{st}'),
+                _e('p', 'Whatever that step warned about is not on this '
+                   'page.', c='hint'))))
+    s11 = r['step11']
+    if s11['state'] != 'reported':
+        nd = s11.get('not_done') or []
+        out.append(('nv:step11', entry(
+            _e('b', 'How each machine sorts every locale (the measured '
+               'order)'), _nd_box(r, 'step11'),
+            _e('p', 'So none of these was checked:') if nd else None,
+            _e('ul', *[_e('li', _e('span', p=f'step11/not_done#{i}'))
+                       for i in range(len(nd))]) if nd else None)))
+    cards, texts, nc_cards = [], set(), []
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        for i, x in enumerate(w[st].get('items', [])):
+            if x['text'] in texts:
+                continue
+            texts.add(x['text'])
+            if x['class'] == 'not checked':
+                cards.append(x)
+                nc_cards.append(f'warnings/{st}/items#{i}')
+    settled = set()
+    for place, state, table in page_not_done(r):
+        if PAGE_STATES[table][state] == 'group':
+            settled.add(int(place.split('groups#')[1].split('/')[0]))
+            continue          # nv:settled, below
+        if home_only(table, state):
+            continue
+        if table.startswith('warnings/') and state == 'not reported':
+            continue          # nv:block, above
+        if page_covered(r, table, state, place, cards):
+            continue
+        base = re.sub(r'#\d+.*', '', place)
+        if table == 'step11/verdicts#/verdict':
+            out.append((f'nv:nd:{place}', entry(
+                _e('b', 'Whether this locale sorts differently (step 11):',
+                   _e('span', place.split('/')[2], c='loc')),
+                _e('div', _e('b', p=place + '/verdict'), '\u2014',
+                   _e('span', p=place + '/words'), c='nd'))))
+            continue
+        if table == 'step2/removed/source':
+            out.append((f'nv:nd:{place}', entry(
+                _e('b', 'What each distro adds to its locale files or '
+                   'drops'),
+                _e('div', _e('b', 'NOT CHECKED'), '\u2014 see Gone at, '
+                   'under Locales added and removed.', c='nd'))))
+            continue
+        if table == 'run/nothing_compared':
+            out.append((f'nv:nd:{place}', entry(
+                _e('b', 'What changed between the two sides'),
+                _e('div', _e('b', 'NOTHING COMPARED'), '\u2014 see the top '
+                   'of this page.', c='nd'))))
+            continue
+        words = PAGE_ND_WORDS[base]
+        if base == 'compared/tags':
+            body = entry(_e('b', words, _e('span', p=place + '/ref')),
+                         _e('b', p=place + '/status'), '\u2014',
+                         _e('span', p=place + '/detail'))
+        elif base == 'compared/collation_version':
+            body = entry(_e('b', words), _e(
+                'div', _e('b', p=place + '/state'), '\u2014 no glibc version '
+                'for', *_joined(f'{place}/sides#{i}' for i in range(
+                    len(r['compared']['collation_version']['sides']))),
+                c='nd'))
+        elif base == 'compared/latest/resolved':
+            e = place[:-len('/when')]
+            body = entry(_e('b', words, _e('span', p=e + '/name')),
+                         _nd_box(r, place))
+        elif base == 'compared/machines':
+            body = entry(_e('b', words + (
+                ' old' if place.startswith('compared/machines#0')
+                else ' new') + ' machine'), _nd_box(r, place))
+        elif base == 'step2/rules/differ':
+            d = r['step2']['rules']['differ'][int(
+                place.split('#')[1].split('/')[0])]
+            body = entry(_e('b', words + ' ' + ', '.join(d['names'])),
+                         _nd_box(r, place))
+        else:
+            body = entry(_e('b', words), _nd_box(r, place))
+        out.append((f'nv:nd:{place}', body))
+    if s11['state'] == 'reported' and \
+            s11['findings']['state'] == 'reported':
+        for i, g in enumerate(s11['findings']['groups']):
+            gaps = page_unsettled(g)
+            if bool(gaps) != (i in settled):
+                raise AssertionError(
+                    f'the registry: group {i} unsettled {gaps}, its records '
+                    f'of PAGE_STATES not settled: {i in settled}')
+            if gaps:
+                out.append((f'nv:settled#{i}', entry(
+                    _e('b', 'NOT SETTLED in part'),
+                    ': ' + ', '.join(g['locales']) + ' \u2014 '
+                    + '; '.join(gaps) + '.',
+                    _e('span', 'Open the group under Locales whose sort '
+                       'order changed.', c='hint'))))
+    for p in nc_cards:
+        out.append((f'card:{p}', _e(
+            'details', _e('summary', _e('span', p=p + '/title')),
+            _e('pre', p=p + '/text'), c='card')))
+    if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
+        for i, g in enumerate(s11['sql']['not_checked']):
+            out.append((f'nv:not checked#{i}', entry(
+                _e('span', _e('b', 'NOT VERIFIED in PostgreSQL'),
+                   ': no SQL file checks'),
+                *page_unchecked_kids(f'step11/sql/not_checked#{i}', g))))
+    return out
+
+
+def page_covered(r, table, state, place, cards):
+    """Whether the record at PLACE, not done, is already said under Not
+    verified by another entry whose data names it: step 11's
+    entry where step 11 did not run, since without the machines' files
+    none of these was run; or a warning of class "not checked" of CARDS
+    that names that record (PAGE_COVER), by its data, or by its kind
+    alone where the card speaks for the whole run."""
+    cov = PAGE_COVER.get(f'{table}:{state}') or PAGE_COVER.get(table)
+    if cov is None:
+        return False
+    if cov == 'STEP11':
+        return r['step11']['state'] == 'not run'
+    for x in cards:
+        d = x['data']
+        if x['kind'] not in cov:
+            continue
+        if table == 'step11/verdicts#/verdict':
+            if place.split('/')[2] in [y['name'] for y in d['locales']]:
+                return True
+        elif table == 'step2/removed/source' and \
+                x['kind'] == 'sides_read_as_tags':
+            if all(r['pair'][s] in d['refs'] for s in PAGE_TAG_SIDES[state]):
+                return True
+        elif table == 'compared/tags#/status':
+            t = r['compared']['tags'][int(place.split('#')[1])]
+            if {'ref': t['ref'], 'status': t['status']} in d.get('refs', []):
+                return True
+        elif table == 'compared/collation_version':
+            if d.get('sides') == r['compared']['collation_version']['sides']:
+                return True
+        else:
+            return True
+    return False
+
+
+def page_unchecked(p, g):
+    return _w(' , '.join(_p(f'{p}/names#{j}') for j in range(len(g['names']))),
+              '\u2014', _p(p + '/why'),
+              *(['also, in PostgreSQL:', _p(p + '/also')] if 'also' in g
+                else []))
+
+
+# Each list said empty ("(none)"), by its part, and the records it is
+# made from: called for only where each record listed here is done
+# (PAGE_STATES), and no member of it is left out (_empty_sources_done);
+# where a record is not done, its own not-done part is shown instead,
+# and where a member is left out, the list is said empty among what was
+# read or measured. Not
+# verified's sources are every record of page_not_done but the ones
+# shown in their home part only (PAGE_HOME_ONLY).
+EMPTY_SOURCES = {
+    'added:only old': ('step11',), 'added:only new': ('step11',),
+    'added:gone': ('step2/removed',), 'added:new': ('step2/rules',),
+    'changed:none': ('step11', 'step11/findings'),
+    's2:differ none': ('step2/rules',),
+    'other:none': ('warnings/step0', 'warnings/step1', 'warnings/step2',
+                   'warnings/step11'),
+    'how:machines none': ('compared', 'run/machines', 'compared/note'),
+    'confirm:files none': ('step11', 'step11/sql'),
+    'nv:none': 'every record',
+}
+
+
+def _empty_sources_done(r, pid):
+    """Refuse a "(none)" this registry would call for beside a source not
+    done or a member left out: a defect of the registry itself, not of
+    the page."""
+    src = EMPTY_SOURCES[pid]
+    if src == 'every record':
+        bad = [p for p, s, t in page_not_done(r) if not home_only(t, s)]
+    else:
+        bad = [p for p, s, t in page_not_done(r) if t in src]
+    # Its members too: entries of a machine's sources step 2 did not read
+    # are in neither list of locale files, so neither is "(none)".
+    ru = r['step2']['rules']
+    if pid in ('added:gone', 'added:new') and ru['state'] == 'reported' \
+            and ru['unread']:
+        bad.append('step2/rules/unread')
+    # And a locale step 11 could not measure, glibc refused, or measured
+    # unchanged only in part, is not known to be unchanged, so the locales
+    # whose order changed are not "(none)".
+    s11 = r['step11']
+    if pid == 'changed:none' and s11['state'] == 'reported':
+        bad += [f'step11/verdicts {w}'
+                for w in ('unmeasured', 'refused', 'far')
+                if any(v['verdict'] == w for v in s11['verdicts'].values())]
+    if bad:
+        raise AssertionError(f'the registry calls for {pid} "(none)" beside '
+                             f'{bad}')
+
+
+def _place_value(r, place):
+    v = r
+    for part in place.split('/'):
+        k, _, i = part.partition('#')
+        v = v[k] if k else v
+        v = v[int(i)] if i else v
+    return v
+
+
+def _why_kids(r, place):
+    """A record's reason as the page draws it: its why, or each why of a
+    list, one per line; nothing where the data gives none."""
+    w = _place_value(r, place).get('why')
+    if w is None:
+        return []
+    if isinstance(w, list):
+        return [_e('ul', *[_e('li', _e('span', p=f'{place}/why#{i}'))
+                           for i in range(len(w))])]
+    return ['\u2014', _e('span', p=place + '/why')]
+
+
+def _nd_box(r, place):
+    """A record not done, in its box: its state, then its reason."""
+    return _e('div', _e('b', p=place + '/state'), *_why_kids(r, place),
+              c='nd')
+
+
+def _joined(places, sep=','):
+    """Values one after another, SEP between two."""
+    out = []
+    for i, x in enumerate(places):
+        if i:
+            out.append(sep)
+        out.append(_e('span', p=x))
+    return out
+
+
+def parts_called_for(r):
+    """Every part the summary page of `r` must show, in page order, as
+    (part id, its section (None above every section), its tree): its
+    elements and classes in order, each value marked by its place
+    (data-p) or its rule (data-d), its words in it (_e); what the part
+    says is that tree read (_tree_words). A group of step 11 and a part
+    of step 2's rules are rebuilt whole (page_group_tree,
+    page_rules_trees).
+    The words are this check's own; only the words the text prints are
+    imported from the module that prints them. A list said empty
+    ("(none)") is called for only where every record EMPTY_SOURCES lists
+    for it is done and no member is left out; else that record's own
+    not-done part is, or the list is said empty among what was read or
+    measured."""
+    import filter_lc_collate_changes as flc
+    out = []
+    P = _p
+
+    def add(pid, sec, tree):
+        if isinstance(tree, str) or len(tree) != 5:
+            raise AssertionError(f'the registry gives {pid!r} no tree')
+        words = _tree_words(tree)
+        if pid in EMPTY_SOURCES and '(none)' in words or pid in (
+                's2:differ none', 'confirm:files none', 'other:none',
+                'nv:none', 'how:machines none'):
+            _empty_sources_done(r, pid)
+        out.append((pid, sec, tree))
+    pair, run, s11 = r['pair'], r['run'], r['step11']
+    counts = s11.get('counts', {})
+    measured = s11['state'] == 'reported' and counts.get('state') == \
+        'reported'
+    w_home = want_w_of(r)
+
+    def card(p):
+        return _e('details', _e('summary', _e('span', p=p + '/title')),
+                  _e('pre', p=p + '/text'), c='card')
+
+    def cards(sec):
+        for p, s in w_home:
+            if s == sec:
+                add(f'card:{p}', sec, card(p))
+
+    def none(words='(none)'):
+        return _e('p', words, c='none')
+    # The head.
+    add('h1', None, _e('h1', 'What changes from', _e('span', p='pair/old'),
+                       'to', _e('span', p='pair/new')))
+    if measured:
+        m = 'step11/counts/machines/'
+
+        def side(k, words):
+            return _e('span', _e('span', words), _e('span', p=m + k + '/label'),
+                      ',', _e('span', p=m + k + '/locales'), 'locales')
+        add('sub', None, _e('p', side('old', 'Old machine measured:'), ';',
+                            side('new', 'new machine measured:'), '.',
+                            c='sub0'))
+    elif run['machines']['state'] == 'given':
+        add('sub', None, _e('p', "The two machines' files were given; what "
+                            'they measured is not reported (see below).',
+                            c='sub0'))
+    else:
+        add('sub', None, _e('p', 'Compared as', _e('span', p='run/word'),
+                            "from their glibc sources; no machine's files "
+                            'given.', c='sub0'))
+    if run['nothing_compared'] != 'none':
+        add('nothing', None, _e('div', _e('b', 'Nothing was compared'),
+                                ': the two sides are one',
+                                _e('span', p='run/nothing_compared'), '.',
+                                c='banner'))
+    add('disc', None, _e('p', 'This report is a complement to testing on '
+                         'your own servers, not a guarantee. What it could '
+                         'not verify is listed under \u201cNot '
+                         'verified\u201d.', c='disc'))
+    # The tiles: a count over its words, or what was not measured.
+    if not measured:
+        place = 'step11' if s11['state'] != 'reported' else 'step11/counts'
+        add('tile:not measured', None, _e(
+            'div', _e('span', 'NOT MEASURED: how many locales sort '
+                      'differently, are gone or new'),
+            _e('b', 'the measured order', _e('span', p=place + '/state'),
+               *_why_kids(r, place)), c='tile nm'))
+    else:
+        c = 'step11/counts/'
+
+        def tile(key, cls, value, words):
+            return _e('div', _e('b', value), _e('span', words),
+                      c='tile ' + cls)
+
+        def note(words, place):
+            return _e('div', _e('span', words), _e('span', p=place),
+                      c='tile-note')
+        nc = counts['not_measured'] + counts['refused']
+        add('tile:changed', None, tile(
+            'changed', 'bad', _e('span', p=c + 'changed'),
+            'locales sort differently'))
+        add('tile:tile only old', None, tile(
+            'only old', 'bad' if counts['only_old'] else '',
+            _e('span', p=c + 'only_old'), 'locales gone on the new machine'))
+        add('tile:tile only new', None, tile(
+            'only new', '', _e('span', p=c + 'only_new'),
+            'locales new on the new machine'))
+        add('tile:unchanged', None, tile(
+            'unchanged', 'ok', _e('span', p=c + 'unchanged'),
+            'locales unchanged'))
+        if counts['unchanged_as_far_as_measured']:
+            add('tile:far', None, note('of them only as far as measured:',
+                                       c + 'unchanged_as_far_as_measured'))
+        add('tile:not compared', None, tile(
+            'not compared', 'warn' if nc else '',
+            _e('span', d='not_measured+refused'), 'locales not compared'))
+        add('tile:not measured count', None,
+            note('not measured:', c + 'not_measured'))
+        add('tile:refused', None, note('refused by glibc:', c + 'refused'))
+    add('tile:not verified', None, _e(
+        'div', _e('b', _e('span', d='not_verified')),
+        _e('span', 'things NOT verified, listed below'), c='tile warn'))
+    # Locales added and removed.
+    sec = _ADDED
+    add('added:machines head', sec, _e('h3', 'On the machines (what each '
+                                       'machine measured)'))
+    if s11['state'] != 'reported':
+        add('added:nd:step11', sec, _nd_box(r, 'step11'))
+        cards(sec)
+    else:
+        for verdict, words, card_after in (
+                ('only old', 'Not on the new machine', True),
+                ('only new', 'Only on the new machine', False)):
+            names = [k for k, v in s11['verdicts'].items()
+                     if v['verdict'] == verdict]
+            add('added:' + verdict, sec, _e(
+                'div', _e('h4', words),
+                _e('ul', *[_e('li', p=f'step11/verdicts/{k}/verdict')
+                           for k in names], c='names')
+                if names else none()))
+            if card_after:
+                cards(sec)
+    add('added:sources head', sec, _e('h3', 'Locale source files between '
+                                      'the', _e('span', p='run/word')))
+    rm, ru = r['step2']['removed'], r['step2']['rules']
+    # Entries of a machine's sources step 2 did not read are in neither
+    # list (filter_lc_collate_changes drops them from both): each list
+    # said empty says so, and a line under each says how many.
+    unread = ru['unread'] if ru['state'] == 'reported' else []
+    empty = '(none among the files read)' if unread else '(none)'
+    one = len(unread) == 1
+    unread_line = _e('p', _e('span', d='unread'), ' '.join((
+        'entry' if one else 'entries', "of a machine's locale sources",
+        'was' if one else 'were', 'not read, so',
+        'it is' if one else 'they are',
+        "in neither list: see Which locales' sort rules changed (step "
+        '2).')), c='hint') if unread else None
+    gone_head = _e('h4', 'Gone at', _e('span', p='pair/new'))
+    if rm['state'] != 'reported':
+        add('added:gone', sec, _e('div', gone_head,
+                                  _nd_box(r, 'step2/removed')))
+    else:
+        rows = []
+        for i, x in enumerate(rm['rows']):
+            q = f'step2/removed/rows#{i}/'
+            rows.append(_e('li', _e('span', p=q + 'name'),
+                           _e('span', p=q + 'how', c='how'),
+                           _e('span', p=q + 'to')
+                           if x['how'] == 'renamed' else None))
+        add('added:gone', sec, _e(
+            'div', gone_head,
+            _e('ul', *rows, c='names') if rows else none(empty),
+            _e('p', p='step2/removed/source', c='hint'), unread_line))
+    new_head = _e('h4', 'New at', _e('span', p='pair/new'))
+    if ru['state'] != 'reported':
+        add('added:new', sec, _e('div', new_head,
+                                 _nd_box(r, 'step2/rules')))
+    else:
+        rows = []
+        for i, x in enumerate(ru['added']['rows']):
+            q = f'step2/rules/added/rows#{i}/'
+            sp = x['spellings']
+            rows.append(_e(
+                'li', _e('span', p=q + 'name'),
+                _e('span', 'renamed from', _e('span', p=q + 'renamed_from'),
+                   c='hint') if x['renamed_from'] != '-' else None,
+                _e('span', 'as', *_joined(f'{q}spellings#{j}'
+                                          for j in range(len(sp))), c='hint')
+                if isinstance(sp, list) else
+                _e('span', p=q + 'spellings/state', c='hint')))
+        add('added:new', sec, _e(
+            'div', new_head,
+            _e('ul', *rows, c='names') if rows else none(empty), unread_line,
+            _e('p', _e('span', p='run/old_class'),
+               p='step2/rules/added/state', c='hint')
+            if ru['added']['state'] == 'notice' else None))
+    # Locales whose sort order changed.
+    sec = _CHANGED
+
+    def file_line(words, rule, place, rec):
+        # The file every character is in; where it is not reported, the
+        # box saying so, in a <div> (a <p> cannot hold it).
+        if rec['state'] == 'reported':
+            return _e('p', _e('span', words), _e('code', _e('span', d=rule)),
+                      c='hint')
+        return _e('div', _e('span', words), _nd_box(r, place), c='hint')
+    # Each locale step 11 could not measure, each glibc refused, and each
+    # unchanged only as far as step 11 measured it, named under the
+    # locales whose order changed, groups or none: not known to be
+    # unchanged.
+    verdicts = s11['verdicts'] if s11['state'] == 'reported' else {}
+    unknown = {w: [k for k, v in verdicts.items() if v['verdict'] == w]
+               for w in ('unmeasured', 'refused', 'far')}
+
+    def unmeasured_part():
+        for w, pid, words, after in (
+                ('unmeasured', 'changed:unmeasured', 'Could not be measured,',
+                 '. Why is under Not verified.'),
+                ('refused', 'changed:refused', 'Refused by glibc,',
+                 '. See Locales added and removed.'),
+                ('far', 'changed:far',
+                 'Unchanged only as far as step 11 measured,', '.')):
+            names = []
+            for i, k in enumerate(unknown[w]):
+                names += ([','] if i else []) + [
+                    _e('span', c='loc', p=f'step11/verdicts/{k}/verdict')]
+            if names:
+                add(pid, sec, _e('p', words + ' so NOT known to be '
+                                 'unchanged:', *names, after, c='hint'))
+    if s11['state'] != 'reported':
+        add('changed:nd:step11', sec, _nd_box(r, 'step11'))
+        add('changed:not run hint', sec, _e(
+            'p', 'Only the measurements of the two machines show which '
+            "locales sort differently. Which locales' sort rules changed is "
+            'in the next section.', c='hint'))
+    elif s11['findings']['state'] != 'reported':
+        add('changed:nd:step11/findings', sec,
+            _nd_box(r, 'step11/findings'))
+    elif not s11['findings']['groups']:
+        add('changed:none', sec, none(
+            '(none among the locales measured)'
+            if any(unknown.values()) else '(none)'))
+        unmeasured_part()
+    else:
+        add('changed:hint', sec, _e(
+            'p', 'Indexes, ORDER BY, comparisons and range partitions on '
+            'text in these locales can give other results after the '
+            'upgrade. Open a group for its characters.', c='hint'))
+        add('changed:characters file', sec, file_line(
+            'Every character, other string and pair found:',
+            'characters file', 'step11/characters', s11['characters']))
+        for i in range(len(s11['findings']['groups'])):
+            add(f'grp#{i}', sec, page_group_tree(r, i))
+        unmeasured_part()
+    # Step 2's rules.
+    sec = STEP2_SECTION
+    if ru['state'] != 'reported':
+        add('s2:nd:step2/rules', sec, _nd_box(r, 'step2/rules'))
+    else:
+        said = dict(page_rules_trees(r))
+        add('s2:totals', sec, said['totals'])
+        if 'not compared' in said:
+            add('s2:not compared', sec, said['not compared'])
+        add('s2:not here', sec, _e(
+            'p', flc.CODE_NOT_COMPARED_HERE + "; of step 2's comparison of "
+            'the character sets, only its warnings are on this page.',
+            c='hint'))
+        if ru['differ']:
+            add('s2:rules file', sec, file_line(
+                'Every character of the changed rules:', 'rules file',
+                'step2/rules_characters', r['step2']['rules_characters']))
+            add('s2:heads', sec, _e('tr', _e('th', 'locales whose rules '
+                                             'differ'),
+                                    _e('th', flc.LISTED_WORDS)))
+            for i in range(len(ru['differ'])):
+                add(f's2:differ#{i}', sec, said[f'differ#{i}'])
+        else:
+            add('s2:differ none', sec, none(flc.NONE_DIFFER_WORDS))
+        if ru['unread']:
+            add('s2:unread', sec, said['unread'])
+    cards(sec)
+    # Other changes the run found.
+    sec = _OTHER
+    nd = False
+    for st in ('step0', 'step1', 'step2', 'step11'):
+        if r['warnings'][st]['state'] != 'reported':
+            nd = True
+            add(f'other:block {st}', sec, _e(
+                'div', 'The warnings of', _e('span', _BLOCK_WORDS[st]),
+                _nd_box(r, f'warnings/{st}'), c='nd-card'))
+    n = len(out)
+    cards(sec)
+    if not nd and len(out) == n:
+        add('other:none', sec, none())
+    # Not verified.
+    sec = _NV
+    add('nv:hint', sec, _e('p', 'What this run could not check. None of it '
+                           'means \u201cno change\u201d.', c='hint'))
+    nv = page_nv_called_for(r)
+    for pid, tree in nv or [('nv:none', none())]:
+        add(pid, sec, tree)
+    # How this was compared.
+    sec = _HOW
+    c = r['compared']
+    if c['state'] != 'reported':
+        add('how:nd:compared', sec, _nd_box(r, 'compared'))
+    else:
+        add('how:machines head', sec, _e('h4', 'Machines'))
+        note = c['note']['state']
+        if run['machines']['state'] != 'given':
+            add('how:nd:run/machines', sec, _nd_box(r, 'run/machines'))
+        elif note == 'fallback':
+            add('how:nd:compared/note', sec, _e(
+                'div', _e('b', p='compared/note/state'),
+                "\u2014 a machine's file made both sides read their "
+                'upstream tags; why is under Not verified', c='nd'))
+        else:
+            if note == 'not reported':
+                add('how:nd:compared/note', sec,
+                    _nd_box(r, 'compared/note'))
+            elif not c['machines']:
+                add('how:machines none', sec, none())
+            for i, x in enumerate(c['machines']):
+                q = f'compared/machines#{i}/'
+                ch = x['charmaps']['state'] == 'counted'
+
+                def item(words, *kids):
+                    return _e('li', _e('span', words), *kids)
+                add(f'how:machine#{i}', sec, _e(
+                    'div', _e('b', ('old', 'new')[i]), _e(
+                        'ul',
+                        item('rpm -q glibc:', _e('span', p=q + 'word')),
+                        item('locale sources:', _e('span', p=q + 'locales')),
+                        item('charmaps:', _e('span', p=q + 'charmaps/count')
+                             if ch else _nd_box(r, q + 'charmaps')),
+                        item('compared as:', 'its locale sources and '
+                             'charmaps on' if ch else 'its locale sources '
+                             'on', _e('span', p=q + 'tag'), ', as commit',
+                             _e('code', _e('span', p=q + 'commit'))),
+                        c='plain'), c='side'))
+        if c['builds']['state'] == 'rebuilt':
+            add('how:builds head', sec, _e('h4', 'Builds rebuilt from their '
+                                           'packages'))
+            for i in range(len(c['builds']['entries'])):
+                q = f'compared/builds/entries#{i}/'
+                add(f'how:build#{i}', sec, _e(
+                    'li', _e('span', _e('span', p=q + 'build'), ':'),
+                    _e('span', p=q + 'tag'), 'with localedata/ and locale/ '
+                    'from its source RPM (', _e('span', p=q + 'patches/'
+                                                'applied'),
+                    'of its', _e('span', p=q + 'patches/of'), 'patches '
+                    'change them), as commit',
+                    _e('code', _e('span', p=q + 'commit'))))
+        la = c['latest']
+        if la['state'] == 'reported':
+            add('how:latest head', sec, _e('h4', 'latest-elN'))
+            for i, x in enumerate(la['resolved']):
+                q = f'compared/latest/resolved#{i}/'
+                add(f'how:latest#{i}', sec, _e(
+                    'li', _e('span', _e('span', p=q + 'name'), '='),
+                    _e('span', p=q + 'build'), ', the newest glibc build in',
+                    _e('span', p=q + 'folder'),
+                    *([', by its metadata of', _e('span', p=q + 'when/utc')]
+                      if x['when']['state'] == 'dated' else
+                      [', and its metadata gives',
+                       _e('b', p=q + 'when/state'), 'this reads'])))
+        elif la['state'] == 'not reported':
+            add('how:latest head', sec, _e('h4', 'latest-elN'))
+            add('how:nd:compared/latest', sec,
+                _nd_box(r, 'compared/latest'))
+        add('how:tags head', sec, _e('h4', 'Upstream tags'))
+        for i, t in enumerate(c['tags']):
+            q = f'compared/tags#{i}/'
+            add(f'how:tag#{i}', sec, _e(
+                'li', _e('span', _e('span', p=q + 'ref'), '='),
+                _e('code', _e('span', p=q + 'commit')),
+                _e('span', _e('span', p=q + 'detail'), p=q + 'status',
+                   c='badge ' + ('ok' if t['status'] == 'good'
+                                 else 'warn'))))
+        add('how:cv head', sec, _e('h4', 'Collation version PostgreSQL '
+                                   'records'))
+        cv, q = c['collation_version'], 'compared/collation_version'
+
+        def said(words, place):
+            return _e('span', _e('span', words), _e('span', p=place))
+        if cv['state'] == 'differ':
+            add('how:cv', sec, _e('p', said('old side:', q + '/old'), ';',
+                                  said('new side:', q + '/new'), '.'))
+        elif cv['state'] == 'same':
+            add('how:cv', sec, _e('p', said('both sides:', q + '/version'),
+                                  '.'))
+        else:
+            add('how:nd:' + q, sec, _e(
+                'div', _e('b', p=q + '/state'), '\u2014 no glibc version '
+                'for', *_joined(f'{q}/sides#{i}'
+                                for i in range(len(cv['sides']))), c='nd'))
+    cards(sec)
+    # Confirm in PostgreSQL.
+    sec = _CONFIRM
+    if s11['state'] != 'reported':
+        add('confirm:nd:step11', sec, _nd_box(r, 'step11'))
+        add('confirm:not run hint', sec, _e(
+            'p', 'The SQL files that confirm a change are written from the '
+            "machines' measurements.", c='hint'))
+    elif s11['sql']['state'] != 'reported':
+        add('confirm:nd:step11/sql', sec, _nd_box(r, 'step11/sql'))
+    else:
+        if not s11['sql']['files']:
+            add('confirm:files none', sec, none('(no SQL file was written)'))
+        else:
+            add('confirm:run each', sec, _e(
+                'p', 'Run each file unchanged on both servers, in a database '
+                'of its encoding, then compare the two outputs:'))
+            add('confirm:psql', sec, _e(
+                'pre', 'psql -X -d DATABASE -f FILE > old.out 2>&1 # and '
+                'new.out on the new server python3 scripts/confirm_sql.py '
+                'read FILE old.out new.out'))
+            for i in range(len(s11['sql']['files'])):
+                q = f'step11/sql/files#{i}/'
+                add(f'confirm:sql#{i}', sec, _e(
+                    'li', _e('span', _e('span', p=q + 'encoding'),
+                             'database:'),
+                    _e('code', _e('span', p=q + 'file')), '\u2014',
+                    _e('span', p=q + 'tests'), 'test(s)'))
+        for i, g in enumerate(s11['sql']['not_checked']):
+            add(f'confirm:not checked#{i}', sec, _e(
+                'div', _e('span', _e('b', 'NOT VERIFIED'), 'by these files:'),
+                *page_unchecked_kids(f'step11/sql/not_checked#{i}', g),
+                c='nd'))
+    return out
+
+
+def page_unchecked_kids(p, g):
+    """An entry no SQL file checks, as the page draws it after its
+    heading: its names, its reason and what else PostgreSQL calls it."""
+    return (_joined(f'{p}/names#{j}' for j in range(len(g['names'])))
+            + ['\u2014', _e('span', p=p + '/why')]
+            + ([_e('div', 'also, in PostgreSQL:', _e('span', p=p + '/also'),
+                   c='hint')] if 'also' in g else []))
+
+
+# The parts each list or table of the page holds, by kind: a run of parts
+# of one container in a row sits in one of it.
+PAGE_CONTAINERS = {'s2:heads': ('table', 's2'), 's2:differ#': ('table', 's2'),
+                   'how:tag#': ('ul plain', 'tag'),
+                   'how:build#': ('ul plain', 'build'),
+                   'how:latest#': ('ul plain', 'latest'),
+                   'confirm:sql#': ('ul plain', 'sql')}
+PAGE_SECTION_ORDER = (_ADDED, _CHANGED, STEP2_SECTION, _OTHER, _NV, _HOW,
+                      _CONFIRM)
+
+
+def page_frame(parts):
+    """The page's elements outside its parts, in order, built from the
+    parts this check calls for (parts_called_for), each part as ('part',
+    its id) where it starts: the head (its title and its style), the
+    page's <main> with the parts above every section, the tiles in their
+    <div class="tiles">, the seven sections, each a <details class="sec">
+    with its <summary> and <h2> and its <div class="secb"> holding its
+    parts, a run of parts of one list or table in one of it
+    (PAGE_CONTAINERS)."""
+    def el(tag, cls=''):
+        return ('<', tag, cls, None, None)
+    end = ('>',)
+    out = [el('html'), el('head'), el('title'), end, el('style'), end, end,
+           el('body'), el('main')]
+    top = [pid for pid, sec, _ in parts if sec is None]
+    tiles = [pid for pid in top if pid.startswith('tile:')]
+    out += [('part', pid) for pid in top if not pid.startswith('tile:')]
+    out += [el('div', 'tiles')] + [('part', pid) for pid in tiles] + [end]
+    for sec in PAGE_SECTION_ORDER:
+        out += [el('details', 'sec'), el('summary'), el('h2'), end, end,
+                el('div', 'secb')]
+        box = None
+        for pid, s, _ in parts:
+            if s != sec:
+                continue
+            want = PAGE_CONTAINERS.get(re.sub(r'#\d+$', '#', pid))
+            if want != box:
+                if box is not None:
+                    out.append(end)
+                if want is not None:
+                    tag, _, cls = want[0].partition(' ')
+                    out.append(el(tag, cls))
+                box = want
+            out.append(('part', pid))
+        if box is not None:
+            out.append(end)
+        out += [end, end]
+    return out + [end, end, end]
+
+
 def report_page_held(path, r):
     """The summary page report.<pair>.html beside the data file `path`,
     held to the report `r` read from it (scripts/report_html.py).
 
+    - The page is the parts the data calls for (parts_called_for, each
+      marked data-part), each once, in order, in its section (the frame,
+      below), with no
+      word outside them but a section's <h2>, the <title> and the
+      <style>; each part is the tree the data calls for, its
+      elements, their classes, its marks and its words in it, and around
+      the parts the frame they call for (page_frame), compared element
+      by element; every attribute and class is one the page is written
+      with (PAGE_ATTRS, PAGE_CLASSES), and the <title> is the two sides.
     - Every value marked data-p in the body is the value at its place in
       `r`, in the page's spelling: a whole number with thousands
       separators; a state in capitals; step 2's file C as C.UTF-8; a
       warning's text without its `!!` margin; a closed word (data-v) in
       the words this check gives it, but a tag's signature, held by the
-      colour of its badge; a name a map is keyed by (data-k) with its
-      verdict.
+      colour of its badge in the list of tags and by the words NOT
+      VERIFIED in its entry of Not verified; a name a map is keyed by
+      (data-k) with its verdict.
     - Every value marked data-d is worked out again by this check's rule.
     - Each label (data-l) carries the words this check's table gives it
       (data-t), and holds only values of the places that table allows;
@@ -1474,8 +2867,15 @@ def report_page_held(path, r):
       compared as a set, not by where each sits.
     - Each list that holds nothing says "(none)" ("(no SQL file was
       written)" for the SQL files, step 2's own "Rules differ: none."
-      for its rules).
-    - Each group of locales whose order changed (data-grp) is shown
+      for its rules); step 2's files gone and new say "(none among the
+      files read)" where step 2 left entries unread, and how many under
+      each list; the locales whose order changed say "(none among the
+      locales measured)" where a locale is not known to be unchanged
+      (step 11 could not measure it, glibc refused it, or it is unchanged
+      only as far as step 11 measured it) and step 11 found no group, and
+      name each such locale under the list, groups or none.
+    - Each group of locales whose order changed (a part of kind grp#) is
+      shown
       once, in step 11's order, in its section, and says, blanks
       collapsed, exactly the words page_group_said rebuilds from that
       group's data; and so does each fold of it, the group and each list
@@ -1483,7 +2883,7 @@ def report_page_held(path, r):
       body what opening it shows, so no word sits under another fold.
     - Step 2's totals, what their "not compared" counts, each of its
       groups of locales whose rules differ and its entries not read
-      (data-s2) are shown once each, in the
+      (parts of kind s2:) are shown once each, in the
       data's order, in their section, each saying, blanks collapsed,
       exactly the words page_rules_said rebuilds from the data.
     - The seven sections are there, once each, in the page's order, each
@@ -1511,7 +2911,7 @@ def report_page_held(path, r):
       "(none)" only where every block was reported and none is there.
     - Each tag, build and latest-elN is shown once, in the data's order.
     - Every other word of the page outside marks, labels' words, data-e,
-      data-f, data-grp, data-s2, <title> and <style> is one of this
+      data-f, data-part, <title> and <style> is one of this
       check's own
       list, so a sentence the data does not call for is refused; a label
       whose words are its first value says that value and this check's
@@ -1526,6 +2926,17 @@ def report_page_held(path, r):
     def fail(what):
         raise AssertionError(f'{page_path}: {what}')
 
+    def shown_apart(node):
+        """Whether PAGE_STYLE shows NODE's words apart from the words
+        around it: a block, a count over its words in a tile, a character
+        of a list drawn (flex, with a gap) and each of its pieces."""
+        up = node['parent'] or {'a': {}}
+        cls = node['a'].get('class', '').split()
+        ucls = up['a'].get('class', '').split()
+        return (node['tag'] in PART_BLOCKS
+                or (node['tag'] == 'b' and 'tile' in ucls)
+                or 'ch' in cls or 'ch' in ucls)
+
     class Page(html.parser.HTMLParser):
         VOID = {'meta', 'br', 'hr', 'img', 'input', 'link'}
         BLOCKS = {'p', 'div', 'h4', 'li', 'ul', 'table', 'tr', 'td', 'th',
@@ -1536,12 +2947,38 @@ def report_page_held(path, r):
             self.stack, self.marks, self.labels, self.loose = [], [], [], []
             self.fixed, self.empties, self.groups = [], [], []
             self.s2, self.sections, self.cards = [], [], []
-            self.styles = []
+            self.styles, self.titles = [], []
             self.section = None
+            self.parts, self.outside = [], []
+            # The page's elements outside its parts, in order,
+            # each part where it starts as ('part', its id).
+            self.frame = []
 
         def handle_starttag(self, tag, attrs):
             if tag not in PAGE_TAGS:
                 fail(f'a <{tag}>, which the page is not written with')
+            # The tree a browser builds is the one read here: a block
+            # inside a <p> closes the <p> first, and a table keeps only
+            # its rows, each only its cells.
+            up_tag = self.stack[-1]['tag'] if self.stack else None
+            if tag in CLOSES_P and any(x['tag'] == 'p' for x in self.stack):
+                fail(f'a <{tag}> inside a <p>, which a browser closes '
+                     'before it')
+            if (up_tag == 'table') != (tag == 'tr') or \
+                    (up_tag == 'tr') != (tag in ('td', 'th')):
+                fail(f'a <{tag}> inside a <{up_tag}>')
+            for k, v in attrs:
+                # 24.4-3a-2: the attributes the page is written with, and
+                # its classes: a word in a tooltip, or a class that colours
+                # a not-done box as a hint, is no word this check reads.
+                if k not in PAGE_ATTRS:
+                    fail(f'<{tag}> with the attribute {k!r}')
+                if k == 'class' and not set((v or '').split()) <= \
+                        PAGE_CLASSES:
+                    fail(f'<{tag}> with the class {v!r}')
+                if k in PAGE_FIXED_ATTRS and (tag, k, v) not in \
+                        PAGE_FIXED_ATTRS[k]:
+                    fail(f'<{tag} {k}={v!r}>')
             card = next((x for x in reversed(self.stack)
                          if 'data-w' in x['a']), None)
             if card is not None:
@@ -1564,6 +3001,15 @@ def report_page_held(path, r):
             if tag in self.VOID:
                 return
             a = {k: (v or '') for k, v in attrs}
+            # A group of step 11 and a part of step 2's rules are kinds
+            # of part (grp#I, s2:...), read also as data-grp and data-s2.
+            pid = a.get('data-part')
+            if pid is not None:
+                if re.fullmatch(r'grp#\d+', pid):
+                    a['data-grp'] = pid[4:]
+                elif re.fullmatch(r's2:(totals|not compared|unread|'
+                                  r'differ#\d+)', pid):
+                    a['data-s2'] = pid[3:]
             # Its section: the one whose <details> holds it, not the last
             # heading read, so a part put after a section is not in it.
             home = next((x['sec'] for x in reversed(self.stack)
@@ -1597,6 +3043,39 @@ def report_page_held(path, r):
                 # A word the page hides, or styles out of sight, is not
                 # said: the page uses neither.
                 fail(f'<{tag}> hidden or styled: {sorted(a)}')
+            if pid is not None:
+                # Each part whole and apart: never inside another.
+                if any('pw' in x for x in self.stack):
+                    fail(f'the part {pid!r} inside another part')
+                node['pw'] = []
+                self.parts.append(node)
+            if pid is not None:
+                node['raw'] = []
+            up = next((x for x in reversed(self.stack + [node])
+                       if 'pw' in x), None)
+            node['part'] = up['a']['data-part'] if up is not None else None
+            tok = ('<', tag, ' '.join(sorted(a.get('class', '').split())),
+                   a.get('data-p'), a.get('data-d'))
+            if pid is not None:
+                node['tok'] = [tok]
+                self.frame.append(('part', pid))
+            elif up is not None:
+                up['tok'].append(tok)
+            else:
+                self.frame.append(tok)
+            if up is not None and shown_apart(node):
+                # A block's words are apart from the ones before it.
+                up['pw'].append(' ')
+                up['raw'].append(' ')
+            if ('data-p' in a or 'data-d' in a) and up is not None:
+                # One placeholder per marked element, at its
+                # opening tag, so a value said twice is two.
+                up['pw'].append(' {' + a['data-p'] + '} ' if 'data-p' in a
+                                else ' {d:' + a['data-d'] + '} ')
+                # Where a value starts and ends, so that a value
+                # glued to the word beside it is seen.
+                up['raw'].append('\x00')
+                node['own'] = []
             if 'data-grp' in a:
                 node['folds'] = []
                 self.groups.append(node)
@@ -1655,6 +3134,25 @@ def report_page_held(path, r):
             if not self.stack or self.stack[-1]['tag'] != tag:
                 fail(f'</{tag}> closes nothing open')
             node = self.stack.pop()
+            owner = next((x for x in reversed(self.stack + [node])
+                          if 'tok' in x), None)
+            (owner['tok'] if owner is not None else self.frame).append(
+                ('>',))
+            up = next((x for x in reversed(self.stack + [node])
+                       if 'raw' in x), None)
+            if up is not None:
+                if 'own' in node:
+                    up['raw'].append('\x01')
+                if shown_apart(node):
+                    up['raw'].append(' ')
+            if 'raw' in node:
+                glued = re.search(r'(.{0,20}[^\W_])\x00|\x01([^\W_].{0,20})',
+                                  ''.join(node['raw']), re.S)
+                if glued:
+                    fail(f'part {node["a"]["data-part"]!r}: a value touches '
+                         'the word beside it: '
+                         + repr(glued.group(0).replace(chr(0), '<')
+                                .replace(chr(1), '>')))
             if tag == 'h2':
                 self.sections.append(self.section)
                 sec = next((x for x in reversed(self.stack)
@@ -1722,6 +3220,27 @@ def report_page_held(path, r):
             stack[k]['fold'][part].append(d)
 
         def handle_data(self, d):
+            # 24.4-3a-2: every word in one part, a value as {its place}.
+            pi = next((i for i in range(len(self.stack) - 1, -1, -1)
+                       if 'pw' in self.stack[i]), None)
+            if pi is None:
+                if d.strip() and not any(x['tag'] in ('h2', 'title',
+                                                      'style')
+                                         for x in self.stack):
+                    self.outside.append(d.strip())
+            else:
+                # A value's words are its placeholder, put at its opening
+                # tag; every other word is said as it is.
+                mk = next((x for x in reversed(self.stack[pi:])
+                           if 'own' in x), None)
+                if mk is None:
+                    self.stack[pi]['pw'].append(d)
+                    self.stack[pi]['tok'].append(('t', d))
+                else:
+                    mk['own'].append(d)
+                self.stack[pi]['raw'].append(d)
+            if self.stack and self.stack[-1]['tag'] == 'title':
+                self.titles.append(d)
             if self.stack and self.stack[-1]['tag'] == 'h2':
                 self.section += d
             if self.stack and self.stack[-1]['tag'] == 'style':
@@ -1740,7 +3259,7 @@ def report_page_held(path, r):
             held = any(('data-p' in x['a'] or 'data-d' in x['a']
                         or 'data-e' in x['a'] or 'data-f' in x['a']
                         or 'data-t' in x['a'] or 'data-grp' in x['a']
-                        or 'data-s2' in x['a']
+                        or 'data-s2' in x['a'] or 'data-part' in x['a']
                         or x['tag'] in ('style', 'title'))
                        for x in self.stack)
             if not held:
@@ -1758,6 +3277,10 @@ def report_page_held(path, r):
              'Confirm in PostgreSQL']
     if p.sections != order:
         fail(f'sections {p.sections}, not {order}')
+    # The tab's title, in this check's words: the two sides.
+    if ''.join(p.titles) != f'{r["pair"]["old"]} to {r["pair"]["new"]}' or \
+            page.count('<title>') != 1:
+        fail(f'the title {"".join(p.titles)!r}')
     # The styles: none that can keep a word out of sight.
     if len(p.styles) != 1:
         fail(f'{len(p.styles)} <style> elements')
@@ -1880,12 +3403,21 @@ def report_page_held(path, r):
             if place.endswith('/status'):
                 if ('ok' in a.get('class', '').split()) != (v == 'good'):
                     fail(f'{place} {v!r} shown as {a.get("class")!r}')
+                # Its own words, besides the detail it holds:
+                # NOT VERIFIED in its entry of Not verified, none in the
+                # list of tags (its badge's colour and detail say it).
+                own = re.sub(r'\s+', ' ', ''.join(m.get('own', []))).strip()
+                want = ('NOT VERIFIED' if (m.get('part') or '').startswith(
+                    'nv:nd:compared/tags#') else '')
+                if own != want or (want and v == 'good'):
+                    fail(f'{place} {v!r} says {own!r}')
                 continue
             words = (sources.get(v) if place == 'step2/removed/source'
                      else notice if place == 'step2/rules/added/state'
                      else {'renamed': 'renamed to',
                            'in the C.UTF-8 notice':
-                               'C.UTF-8: see Not verified'}.get(v, v))
+                               'C.UTF-8: see Not verified',
+                           'unmeasured': 'NOT MEASURED'}.get(v, v))
             if t != words:
                 fail(f'{place} {v!r} shown as {t!r}')
             continue
@@ -1928,9 +3460,11 @@ def report_page_held(path, r):
         'not verified': ('things NOT verified, listed below',
                          r'd:not_verified$'),
         'gone': ('Gone at ' + new_at,
-                 r'pair/new$|step2/removed/(state|why|source|rows#)'),
+                 r'pair/new$|step2/removed/(state|why|source|rows#)'
+                 r'|d:unread$'),
         'new': ('New at ' + new_at,
-                r'pair/new$|run/old_class$|step2/rules/(state|why|added/)'),
+                r'pair/new$|run/old_class$|step2/rules/(state|why|added/)'
+                r'|d:unread$'),
         'machine old': ('old', r'compared/machines#0/'),
         'machine new': ('new', r'compared/machines#1/'),
         'word': ('rpm -q glibc:', r'compared/machines#\d+/word$'),
@@ -2077,7 +3611,9 @@ def report_page_held(path, r):
     if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
         nc += [f'step11/sql/not_checked#{i}'
                for i in range(len(s11['sql']['not_checked']))]
-    rules = {'not_verified': len(nc),
+    nv_parts = page_nv_called_for(r)
+    rules = {'not_verified': len(nv_parts),
+             'unread': len(r['step2']['rules'].get('unread', [])),
              'characters file': 'measured_order_characters.'
                                 + r['pair']['slug'] + '.tsv',
              'rules file': 'step2_rules_characters.' + r['pair']['slug']
@@ -2402,40 +3938,42 @@ def report_page_held(path, r):
     if ru['state'] == 'reported' and not ru['differ']:
         gaps.append('step2/rules/differ')
     if c['state'] == 'reported' and run['machines']['state'] == 'given' \
-            and c['note']['state'] != 'fallback' and not c['machines']:
+            and c['note']['state'] not in ('fallback', 'not reported') \
+            and not c['machines']:
         gaps.append('compared/machines')
-    if not nc:
+    if not nv_parts:
         gaps.append('not verified')
     if not [x for x in want_w_of(r) if x[1] == _OTHER] and all(
             r['warnings'][st]['state'] == 'reported'
             for st in ('step0', 'step1', 'step2', 'step11')):
         gaps.append('other changes')
     said = re.findall(r'data-e="([^"]*)"', page)
+    # The locale files gone and new, where step 2 left entries of a
+    # machine's sources unread, are empty only among the files read.
+    files = ('(none among the files read)' if ru['state'] == 'reported'
+             and ru['unread'] else '(none)')
+    # The locales whose order changed, where a locale is not known to be
+    # unchanged, are empty only among the locales measured.
+    changed = ('(none among the locales measured)'
+               if s11['state'] == 'reported' and any(
+                   v['verdict'] in ('unmeasured', 'refused', 'far')
+                   for v in s11['verdicts'].values()) else '(none)')
     for n in p.empties:
         import filter_lc_collate_changes as flc
         words = {'step11/sql/files': '(no SQL file was written)',
-                 'step2/rules/differ': flc.NONE_DIFFER_WORDS}.get(
+                 'step2/rules/differ': flc.NONE_DIFFER_WORDS,
+                 'step2/removed/rows': files,
+                 'step2/rules/added/rows': files,
+                 'step11/findings/groups': changed}.get(
                      n['a']['data-e'], '(none)')
         if text(n) != words:
             fail(f'{n["a"]["data-e"]} empty, said as {text(n)!r}')
     if sorted(said) != sorted(gaps):
         fail(f'empty lists said {said}, the data gives {gaps}')
 
-    # The Not verified entries: which, and in order.
-    nv = [m for m in p.marks if m['section'] == 'Not verified']
-    entries = []
-    for m in nv:
-        place = m['a'].get('data-p', '')
-        if place.endswith('/title') and 'items#' in place:
-            entries.append(place[:-len('/title')])
-        elif re.fullmatch(r'step11/sql/not_checked#\d+/names#0', place):
-            entries.append(place[:-len('/names#0')])
-        elif place in ('step11/state', 'warnings/step0/state',
-                       'warnings/step1/state', 'warnings/step2/state',
-                       'warnings/step11/state'):
-            entries.append(place[:-len('/state')])
-    if entries != nc:
-        fail(f'Not verified shows {entries}, the data gives {nc}')
+    # Which Not verified entries, and in which order, the registry holds
+    # (page_nv_called_for, through parts_called_for). Each warning of
+    # class "not checked" shows its text once.
     for place in nc:
         if 'items#' in place and len(shown(place + '/text')) != 1:
             fail(f'{place} without its text')
@@ -2474,6 +4012,49 @@ def report_page_held(path, r):
                          and m['a']['data-p'] not in
                          ('step11/counts/state', 'step11/counts/why')]:
         fail('a count of step 11 shown where its counts are not reported')
+    # 24.4-3a-2: the page's parts are the ones the data calls for, each
+    # once, in order, in its section, each saying exactly its words.
+    if p.outside:
+        fail(f'words outside every part: {p.outside[0]!r}')
+    # Which parts, in which order and section, the comparison of the
+    # whole page below holds: the frame calls for each part where the
+    # data puts it. Here each part's words, part by part by its id: a
+    # part missing, doubled or out of place is the comparison's.
+    want_parts = parts_called_for(r)
+    shown = {}
+    for n in p.parts:
+        shown.setdefault(n['a']['data-part'], n)
+    for pid, _, tree in want_parts:
+        if pid not in shown:
+            continue
+        words = _tree_words(tree)
+        said = re.sub(r'\s+', ' ', ''.join(shown[pid]['pw'])).strip()
+        if said != words:
+            fail(f'part {pid!r} says {said!r}, not {words!r}')
+    # The whole page, element by element, each part's tree
+    # with its words in it, and around them the frame the parts call for.
+    trees = {pid: tree for pid, _, tree in want_parts}
+    got = []
+    for t in p.frame:
+        if t[0] != 'part':
+            got.append((t, None))
+            continue
+        n = next(x for x in p.parts if x['a']['data-part'] == t[1])
+        got += [(x, t[1]) for x in _norm_tokens(n['tok'])]
+    want = []
+    for t in page_frame(want_parts):
+        if t[0] != 'part':
+            want.append((t, None))
+            continue
+        want += [(x, t[1]) for x in _norm_tokens(_tree_tokens(trees[t[1]]))]
+    if got != want:
+        i = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b),
+                 min(len(got), len(want)))
+        where = (got[i][1] if i < len(got) else None) or \
+            (want[i][1] if i < len(want) else None)
+        fail(f'the page\'s elements differ from what the data calls for at '
+             f'{i} (part {where!r}): {[x for x, _ in got[i:i + 4]]}, not '
+             f'{[x for x, _ in want[i:i + 4]]}')
 
 
 def check_warnings(r, out_dir, path):

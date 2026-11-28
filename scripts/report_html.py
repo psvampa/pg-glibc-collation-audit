@@ -17,9 +17,14 @@ verified, of class "change" in the section WARN_HOME gives its kind, or
 under "Other changes the run found". So that a check can hold the page
 to the data file
 (tests/_harness.report_page_held):
-  - a value of the data file shown in the body outside a group of
-    locales (data-grp, below) is marked with its place there
-    (data-p="step11/counts/changed": '/' a key, '#' an index); a closed
+  - every word of the page but a section's <h2>, the <title> and the
+    <style> is in exactly one part (data-part, part() below), and the
+    check holds the page's parts, their elements and their words to the
+    ones the data calls for;
+  - a value of the data file shown in the body is marked with its place
+    there (data-p="step11/counts/changed": '/' a key, '#' an index), but
+    where a part says it in words the check rebuilds whole from the data
+    (a group, step 2's parts, some entries of Not verified); a closed
     word of the file shown in the page's own words also carries the word
     (data-v); a name a map is keyed by carries the map (data-k);
   - a value the page works out of the file is marked data-d with its
@@ -29,16 +34,24 @@ to the data file
   - a sentence the page says whole is marked data-f with its name;
   - a list that holds nothing says so where the list would be ("(none)",
     "(no SQL file was written)", or step 2's "Rules differ: none."),
-    marked data-e with what the list is;
+    marked data-e with what the list is; the locale files gone and new
+    say "(none among the files read)" where step 2 left entries of a
+    machine's sources unread, and say under the list how many; the
+    locales whose sort order changed say "(none among the locales
+    measured)" where a locale is not known to be unchanged (step 11
+    could not measure it, glibc refused it, or it is unchanged only as far
+    as step 11 measured it) and step 11 found no group, and name each such
+    locale under the list, groups or none;
   - a block the run did not do or could not know shows its state in
     capitals, with its reason where the data file gives one, never a 0 or
     an empty list. (A locale step 2 found new and could not spell is a
     state of that locale, shown in lower case beside its name.)
-  - a group of locales whose sort order changed is marked data-grp with
-    its place among step 11's groups; the check holds its text whole,
-    rebuilt from that group's data; so are step 2's totals, what they
-    count as not compared, each of its groups of locales whose rules
-    differ and its entries not read (data-s2, with their place).
+  - a group of locales whose sort order changed is a part of kind
+    grp#<its place among step 11's groups>; the check holds its text
+    whole, rebuilt from that group's data; so are step 2's totals, what
+    they count as not compared, each of its groups of locales whose rules
+    differ and its entries not read (parts of kind s2:..., with their
+    place).
 The page's <title> repeats the two sides unmarked.
 
 usage: report_html.py REPORT_JSON
@@ -46,6 +59,7 @@ usage: report_html.py REPORT_JSON
 
 import html
 import os
+import re
 import sys
 import unicodedata
 
@@ -93,8 +107,20 @@ def empty(place, words='(none)'):
     return f'<p class="none" data-e="{esc(place)}">{esc(words)}</p>'
 
 
+def part(pid, h):
+    """H with its first element marked as one part of the page
+    (data-part="<kind>" or "<kind>#<i>"): every word of the page but a
+    section's <h2>, the <title> and the <style> is in exactly one part,
+    and the check holds the page's parts to the ones the data calls for
+    (tests/_harness.parts_called_for)."""
+    i = h.index('>')
+    return h[:i] + f' data-part="{esc(pid)}"' + h[i:]
+
+
 def not_done(word, path, why_html):
-    """A part the run did not do: its state in capitals and its reason."""
+    """The box of a record the run did not do, inside the part that
+    shows it: its state in capitals and its reason, where the caller
+    gives one."""
     return (
         f'<div class="nd"><b data-p="{esc(path)}/state">{esc(word.upper())}</b>'
         f' {why_html}</div>'
@@ -138,7 +164,8 @@ def card(path, w):
         + [ln[3:] if ln.startswith('   ') else ln for ln in lines[1:]]
     )
     return (
-        f'<details class="card" data-w="{esc(path)}"><summary>'
+        f'<details class="card" data-w="{esc(path)}"'
+        f' data-part="card:{esc(path)}"><summary>'
         f'{mark(path + "/title", w["title"])}</summary>'
         f'<pre data-p="{esc(path)}/text">{esc(body)}</pre></details>'
     )
@@ -164,11 +191,176 @@ def homed(r, home):
                    and WARN_HOME.get(w['kind'], 'other') == home)
 
 
+# The warnings of class "not checked" that already say, under Not
+# verified, that a record the page reads is not done (covered(): where
+# its data names that record, or by its kind alone where one card says it
+# for the whole run): the record then needs no entry of its own there.
+# Where the card is not on the page (its block not reported, or the
+# warning absent), the record has its own.
+COVERED_BY = {
+    'compared/tags': ('signatures_unchecked',),
+    'compared/collation_version': ('collation_version_unknown',),
+    'compared/note:fallback': ('machine_falls_back_to_tags',),
+    'step11/verdicts': ('not_measured',),
+    'step2/removed/source': ('sides_read_as_tags',),
+    "step2/removed/source:tags, because of a machine's file": (
+        'machine_falls_back_to_tags',),
+    'run/nothing_compared': ('same_commit', 'same_tree',
+                             'same_tree_machines'),
+    'step2/rules:not compared': ('same_commit', 'same_tree',
+                                 'same_tree_machines'),
+    'step2/rules_characters:not compared': ('same_commit', 'same_tree',
+                                            'same_tree_machines'),
+}
+# Records not done because the machines' files were not given, which is
+# when step 11 does not run: said by step 11's own entry where step 11 did
+# not run.
+UNDER_STEP11 = ('run/machines', 'compared/note:not run', 'warnings/step0',
+                'warnings/step11')
+# What each record the page reads is called in its own entry of Not
+# verified.
+RECORD_WORDS = {
+    'step11/counts': "Step 11's counts",
+    'step11/findings': 'Which locales sort differently (step 11)',
+    'step11/characters': "Step 11's file of every character found",
+    'step11/sql': "Step 11's SQL files",
+    'step2/removed': "Step 2's list of the locale files gone",
+    'step2/rules': "Step 2's sort rules of the locale sources",
+    'step2/rules/differ': 'The characters of the changed rules of',
+    'step2/rules_characters': "Step 2's file of the characters of the "
+                              'changed rules',
+    'compared': 'How this was compared',
+    'compared/note': "Step 0's note on what each machine was compared as",
+    'compared/machines': 'The charmaps of the',
+    'compared/latest': 'Which build each latest-elN names',
+    'compared/latest/resolved': 'The date of the build of',
+    'compared/tags': 'The signature of',
+    'compared/collation_version': 'The collation version PostgreSQL '
+                                  'records',
+    'run/machines': "The machines' files",
+    'warnings/step0': "The warnings of the machines' files",
+    'warnings/step11': 'The warnings of step 11',
+}
+
+
+# The sources of step 2's Removed list that leave what a distro adds or
+# drops not checked, and the side(s) read as a tag (report_data
+# REMOVED_SOURCES); "tags, because of a machine's file" by its card.
+SOURCE_TAG_SIDES = {'old side is a tag': ('old',),
+                    'new side is a tag': ('new',), 'tags': ('old', 'new'),
+                    "tags, because of a machine's file": ()}
+
+
+def nd_records(r):
+    """Each record the page reads that is not done and is said under Not
+    verified in an entry of its own (nd_entry) unless an entry there
+    already says it, in the order of Not verified, as (place, state). Not
+    here: step 11 and the warnings blocks not reported (their entries
+    above), what a group of step 11 leaves unknown (its NOT SETTLED in
+    part), and what has no entry of its own there (a new locale's
+    spelling, a probe of a group, a locale unchanged only as far as step
+    11 measured it, which its tile counts and far_line names)."""
+    out = []
+    s11, s2, c = r['step11'], r['step2'], r['compared']
+    if s11['state'] == 'reported':
+        for k in ('counts', 'findings', 'characters', 'sql'):
+            if s11[k]['state'] != 'reported':
+                out.append((f'step11/{k}', s11[k]['state']))
+    if s11['state'] == 'reported':
+        for k, v in s11['verdicts'].items():
+            if v['verdict'] == 'unmeasured':
+                out.append((f'step11/verdicts/{k}', 'unmeasured'))
+    if s2['removed']['state'] != 'reported':
+        out.append(('step2/removed', s2['removed']['state']))
+    elif s2['removed']['source'] in SOURCE_TAG_SIDES:
+        out.append(('step2/removed/source', s2['removed']['source']))
+    ru = s2['rules']
+    if ru['state'] != 'reported':
+        out.append(('step2/rules', ru['state']))
+    else:
+        for i, d in enumerate(ru['differ']):
+            if d['characters']['state'] == 'not known':
+                out.append((f'step2/rules/differ#{i}/characters',
+                            'not known'))
+    if s2['rules_characters']['state'] not in ('reported',):
+        out.append(('step2/rules_characters',
+                    s2['rules_characters']['state']))
+    if r['run']['nothing_compared'] != 'none':
+        out.append(('run/nothing_compared', r['run']['nothing_compared']))
+    m = r['run']['machines']
+    if m['state'] != 'given':
+        out.append(('run/machines', m['state']))
+    for st in ('step0', 'step11'):
+        if r['warnings'][st]['state'] == 'not run':
+            out.append((f'warnings/{st}', 'not run'))
+    if c['state'] != 'reported':
+        out.append(('compared', c['state']))
+        return out
+    if c['note']['state'] in ('fallback', 'not reported', 'not run'):
+        out.append(('compared/note', c['note']['state']))
+    for i, x in enumerate(c['machines']):
+        if x['charmaps']['state'] != 'counted':
+            out.append((f'compared/machines#{i}/charmaps',
+                        x['charmaps']['state']))
+    if c['latest']['state'] == 'not reported':
+        out.append(('compared/latest', 'not reported'))
+    for i, x in enumerate(c['latest'].get('resolved', [])):
+        if x['when']['state'] != 'dated':
+            out.append((f'compared/latest/resolved#{i}/when',
+                        x['when']['state']))
+    for i, t in enumerate(c['tags']):
+        if t['status'] != 'good':
+            out.append((f'compared/tags#{i}', t['status']))
+    if c['collation_version']['state'] == 'unknown':
+        out.append(('compared/collation_version', 'unknown'))
+    return out
+
+
+def covered(r, place, state, cards):
+    """Whether the not-done record at PLACE is already said under Not
+    verified by an entry whose data names it: step 11's entry where step
+    11 did not run (no machines' files); or a card of class "not checked"
+    of CARDS (each one's kind and data) that names that record: by its
+    data, or by its kind alone where the card speaks for the whole run
+    (each kind's rule below)."""
+    base = re.sub(r'#\d+.*', '', place)
+    if base.startswith('step11/verdicts/'):
+        base = 'step11/verdicts'
+    if base in UNDER_STEP11 or f'{base}:{state}' in UNDER_STEP11:
+        return r['step11']['state'] == 'not run'
+    kinds = COVERED_BY.get(f'{base}:{state}') or COVERED_BY.get(base) or ()
+    for kind, d in cards:
+        if kind not in kinds:
+            continue
+        if base == 'step11/verdicts':
+            name = place.split('/')[2]
+            if name in [x['name'] for x in d['locales']]:
+                return True
+        elif base == 'step2/removed/source' and kind == 'sides_read_as_tags':
+            pair = r['pair']
+            want = [pair[s] for s in SOURCE_TAG_SIDES[state]]
+            if all(x in d['refs'] for x in want):
+                return True
+        elif base == 'compared/tags':
+            x = at(r, place)
+            if {'ref': x['ref'], 'status': x['status']} in d.get('refs', []):
+                return True
+        elif base == 'compared/collation_version':
+            if d.get('sides') == r['compared']['collation_version']['sides']:
+                return True
+        else:
+            return True
+    return False
+
+
 def not_verified(r):
     """The entries of the Not verified section: each warnings block not
-    reported, step 11 when it did not run or was not reported, each
-    warning of class "not checked", and each entry no SQL file of step 11
-    checks (16.413)."""
+    reported, step 11 when it did not run or was not reported, each other
+    record the page reads that is not done and that no entry here
+    already says (nd_records, covered), each group of step 11 it could
+    not settle in part (unsettled, "NOT SETTLED in part"), each warning
+    of class "not checked", and each entry no SQL file of step 11 checks
+    (16.413)."""
     out = []
     for st in ('step0', 'step1', 'step2', 'step11'):
         b = r['warnings'][st]
@@ -177,6 +369,16 @@ def not_verified(r):
     s11 = r['step11']
     if s11['state'] != 'reported':
         out.append(('step11', None, s11))
+    cards = [(w['kind'], w['data']) for _, w in items(r)
+             if w['class'] == 'not checked']
+    for place, state in nd_records(r):
+        if not covered(r, place, state, cards):
+            out.append(('nd', place, state))
+    if s11['state'] == 'reported' and \
+            s11['findings']['state'] == 'reported':
+        for i, g in enumerate(s11['findings']['groups']):
+            if unsettled(g):
+                out.append(('settled', i, g))
     for path, w in items(r):
         if w['class'] == 'not checked':
             out.append(('card', path, w))
@@ -195,21 +397,93 @@ BLOCK_WORDS = {
 }
 
 
-def nv_html(entry):
+def at(r, place):
+    """The value at PLACE of the report ('/' a key, '#' an index)."""
+    v = r
+    for p in place.split('/'):
+        k, _, i = p.partition('#')
+        v = v[k] if k else v
+        v = v[int(i)] if i else v
+    return v
+
+
+def nd_entry(r, place, state):
+    """A record not done in its own entry of Not verified: what it is
+    and, in capitals, what that leaves (its state, or NOT MEASURED, NOT
+    CHECKED, NOTHING COMPARED, NOT VERIFIED), with its reason where the
+    data gives one, or where the page says it."""
+    base = re.sub(r'#\d+.*', '', place)
+    if base.startswith('step11/verdicts/'):
+        name = place.split('/')[2]
+        return part('nv:nd:' + place, (
+            '<div class="card nd-card"><b>Whether this locale sorts '
+            'differently (step 11): <span class="loc">' + esc(name)
+            + '</span></b> <div class="nd"><b data-p="' + esc(place)
+            + '/verdict" data-v="unmeasured">NOT MEASURED</b> &mdash; '
+            + mark(place + '/words', at(r, place)['words']) + '</div></div>'))
+    if base == 'step2/removed/source':
+        return part('nv:nd:' + place, (
+            '<div class="card nd-card"><b>What each distro adds to its '
+            'locale files or drops</b> <div class="nd"><b>NOT CHECKED</b> '
+            '&mdash; see Gone at, under Locales added and removed.</div>'
+            '</div>'))
+    if base == 'run/nothing_compared':
+        return part('nv:nd:' + place, (
+            '<div class="card nd-card"><b>What changed between the two '
+            'sides</b> <div class="nd"><b>NOTHING COMPARED</b> &mdash; see '
+            'the top of this page.</div></div>'))
+    what = esc(RECORD_WORDS[base])
+    x = at(r, place)
+    if base == 'compared/tags':
+        what += ' ' + mark(place + '/ref', x['ref'])
+        st = (f'<b data-p="{place}/status" data-v="{esc(x["status"])}">NOT '
+              'VERIFIED</b> &mdash; ' + mark(place + '/detail', x['detail']))
+    elif base == 'compared/collation_version':
+        st = not_done(state, place, '&mdash; no glibc version for ' + ', '.join(
+            mark(f'{place}/sides#{i}', s) for i, s in enumerate(x['sides'])))
+    elif base == 'compared/latest/resolved':
+        e = at(r, place[:-len('/when')])
+        what += ' ' + mark(place[:-len('/when')] + '/name', e['name'])
+        st = not_done(state, place, '')
+    elif base == 'compared/machines':
+        what += ' ' + ('old' if place.startswith('compared/machines#0')
+                       else 'new') + ' machine'
+        st = not_done(state, place, why_of(place, x))
+    elif base == 'step2/rules/differ':
+        d = at(r, place[:-len('/characters')])
+        what += ' ' + esc(', '.join(d['names']))
+        st = not_done(state, place, why_of(place, x))
+    else:
+        st = not_done(state, place, why_of(place, x))
+    return part('nv:nd:' + place,
+                f'<div class="card nd-card"><b>{what}</b> {st}</div>')
+
+
+def nv_html(r, entry):
     kind, path, x = entry
     if kind == 'card':
         return card(path, x)
+    if kind == 'nd':
+        return nd_entry(r, path, x)
+    if kind == 'settled':
+        return part(f'nv:settled#{path}', (
+            '<div class="card nd-card"><b>NOT SETTLED in part</b>: '
+            + esc(', '.join(x['locales'])) + ' &mdash; '
+            + esc('; '.join(unsettled(x)))
+            + '. <span class="hint">Open the group under Locales whose '
+            'sort order changed.</span></div>'))
     if kind == 'sql':
-        return label(
+        return part('nv:not checked#' + path.rsplit('#', 1)[1], label(
             'nv not checked',
             '<b>NOT VERIFIED in PostgreSQL</b>: no SQL file checks',
             ' ' + unchecked(path, x),
             cls='card nd-card',
-        )
+        ))
     if kind == 'block':
         p = f'warnings/{path}'
         return (
-            f'<div class="card nd-card"><b>The warnings of '
+            f'<div class="card nd-card" data-part="nv:block {path}">'
+            '<b>The warnings of '
             + fixed('block ' + path, esc(BLOCK_WORDS[path]))
             + '</b> '
             + not_done(x['state'], p, why_of(p, x))
@@ -222,7 +496,8 @@ def nv_html(entry):
         for i, t in enumerate(x.get('not_done', []))
     )
     return (
-        '<div class="card nd-card"><b>How each machine sorts every '
+        '<div class="card nd-card" data-part="nv:step11"><b>How each '
+        'machine sorts every '
         'locale (the measured order)</b> '
         + not_done(x['state'], p, why_of(p, x))
         + (
@@ -237,13 +512,13 @@ def nv_html(entry):
 
 def tile(key, words, body, cls=''):
     """A count over its words; NOT MEASURED (cls 'nm') under them."""
-    return label(
+    return part('tile:' + key, label(
         key,
         words,
         f'<b>{body}</b>',
         cls=('tile ' + cls).strip(),
         after=cls != 'nm',
-    )
+    ))
 
 
 def tiles(r):
@@ -290,12 +565,12 @@ def tiles(r):
                 'ok',
             )
             + (
-                label(
+                part('tile:far', label(
                     'far',
                     'of them only as far as measured:',
                     mark(p + '/unchanged_as_far_as_measured', far),
                     cls='tile-note',
-                )
+                ))
                 if far
                 else ''
             ),
@@ -305,18 +580,18 @@ def tiles(r):
                 made('not_measured+refused', nc),
                 'warn' if nc else '',
             )
-            + label(
+            + part('tile:not measured count', label(
                 'not measured count',
                 'not measured:',
                 mark(p + '/not_measured', c['not_measured']),
                 cls='tile-note',
-            )
-            + label(
+            ))
+            + part('tile:refused', label(
                 'refused',
                 'refused by glibc:',
                 mark(p + '/refused', c['refused']),
                 cls='tile-note',
-            ),
+            )),
         ]
     t.append(
         tile(
@@ -372,7 +647,36 @@ def verdict_list(r, verdict, key, words):
         if names
         else empty('step11/verdicts:' + verdict)
     )
-    return label(key, words, body, head='h4')
+    return part('added:' + key, label(key, words, body, head='h4'))
+
+
+def unread_note(r):
+    """Where step 2 compared and left entries of a machine's locale
+    sources unread, the line under Gone at and New at that says they are
+    in neither list (filter_lc_collate_changes drops them from both); ''
+    where it left none. Each list said empty then says "(none among the
+    files read)" (unread_none)."""
+    ru = r['step2']['rules']
+    if ru['state'] != 'reported' or not ru['unread']:
+        return ''
+    n = len(ru['unread'])
+    one = n == 1
+    return (
+        '<p class="hint">' + made('unread', n)
+        + (' entry' if one else ' entries')
+        + " of a machine's locale sources "
+        + ('was' if one else 'were') + ' not read, so '
+        + ('it is' if one else 'they are')
+        + " in neither list: see Which locales' sort rules changed"
+        ' (step 2).</p>'
+    )
+
+
+def unread_none(r, place):
+    """A list of step 2 said empty: "(none among the files read)" where
+    it left entries unread (unread_note), else "(none)"."""
+    return empty(place, '(none among the files read)'
+                 if unread_note(r) else '(none)')
 
 
 def added_removed(r):
@@ -381,9 +685,11 @@ def added_removed(r):
         '</h2></summary><div class="secb">'
     ]
     s11 = r['step11']
-    out.append('<h3>On the machines (what each machine measured)</h3>')
+    out.append('<h3 data-part="added:machines head">On the machines '
+               '(what each machine measured)</h3>')
     if s11['state'] != 'reported':
-        out.append(not_done(s11['state'], 'step11', why_of('step11', s11)))
+        out.append(part('added:nd:step11', not_done(
+            s11['state'], 'step11', why_of('step11', s11))))
         out.append(homed(r, 'added'))
     else:
         out.append(
@@ -396,13 +702,13 @@ def added_removed(r):
     s2 = r['step2']
     rm, ru = s2['removed'], s2['rules']
     out.append(
-        '<h3>Locale source files between the '
+        '<h3 data-part="added:sources head">Locale source files between the '
         + mark('run/word', r['run']['word'])
         + '</h3>'
     )
     new_at = mark('pair/new', r['pair']['new'])
     if rm['state'] != 'reported':
-        out.append(
+        out.append(part('added:gone',
             label(
                 'gone',
                 'Gone at ' + new_at,
@@ -410,7 +716,7 @@ def added_removed(r):
                     rm['state'], 'step2/removed', why_of('step2/removed', rm)
                 ),
                 head='h4',
-            )
+            ))
         )
     else:
         if rm['rows']:
@@ -434,7 +740,7 @@ def added_removed(r):
                 )
             body = '<ul class="names">' + ''.join(rows) + '</ul>'
         else:
-            body = empty('step2/removed/rows')
+            body = unread_none(r, 'step2/removed/rows')
         words = SOURCE_WORDS[rm['source']].format(
             old=r['run']['old_class'],
             new=r['run']['new_class'],
@@ -443,10 +749,11 @@ def added_removed(r):
         body += (
             '<p class="hint" data-p="step2/removed/source" '
             f'data-v="{esc(rm["source"])}">{esc(words)}</p>'
-        )
-        out.append(label('gone', 'Gone at ' + new_at, body, head='h4'))
+        ) + unread_note(r)
+        out.append(part('added:gone', label('gone', 'Gone at ' + new_at,
+                                            body, head='h4')))
     if ru['state'] != 'reported':
-        out.append(
+        out.append(part('added:new',
             label(
                 'new',
                 'New at ' + new_at,
@@ -454,7 +761,7 @@ def added_removed(r):
                     ru['state'], 'step2/rules', why_of('step2/rules', ru)
                 ),
                 head='h4',
-            )
+            ))
         )
     else:
         rows = ru['added']['rows']
@@ -485,7 +792,8 @@ def added_removed(r):
                 li.append(f'<li>{mark(p + "/name", x["name"])}{fr}{spl}</li>')
             body = '<ul class="names">' + ''.join(li) + '</ul>'
         else:
-            body = empty('step2/rules/added/rows')
+            body = unread_none(r, 'step2/rules/added/rows')
+        body += unread_note(r)
         if ru['added']['state'] == 'notice':
             body += (
                 '<p class="hint" data-p="step2/rules/added/state" '
@@ -494,7 +802,8 @@ def added_removed(r):
                 + ': a file it does not have does not prove the locale '
                 'was absent on the old system (see Not verified).</p>'
             )
-        out.append(label('new', 'New at ' + new_at, body, head='h4'))
+        out.append(part('added:new', label('new', 'New at ' + new_at,
+                                           body, head='h4')))
     out.append('</div></details>')
     return ''.join(out)
 
@@ -502,17 +811,23 @@ def added_removed(r):
 def machines(r, c):
     m = r['run']['machines']
     if m['state'] != 'given':
-        return not_done(m['state'], 'run/machines', why_of('run/machines', m))
+        return part('how:nd:run/machines', not_done(
+            m['state'], 'run/machines', why_of('run/machines', m)))
     if c['note']['state'] == 'fallback':
-        return not_done(
+        return part('how:nd:compared/note', not_done(
             'fallback',
             'compared/note',
             "&mdash; a machine's file made both sides read their upstream "
             'tags; why is under Not verified',
-        )
-    if not c['machines']:
-        return empty('compared/machines')
+        ))
     out = []
+    if c['note']['state'] == 'not reported':
+        # What each machine was compared as is step 0's note: not known.
+        out.append(part('how:nd:compared/note', not_done(
+            'not reported', 'compared/note',
+            why_of('compared/note', c['note']))))
+    elif not c['machines']:
+        return part('how:machines none', empty('compared/machines'))
     for i, x in enumerate(c['machines']):
         p = f'compared/machines#{i}'
         ch = x['charmaps']
@@ -528,7 +843,7 @@ def machines(r, c):
             if ch['state'] == 'counted'
             else 'its locale sources'
         )
-        out.append(
+        out.append(part(f'how:machine#{i}',
             label(
                 'machine ' + ('old' if i == 0 else 'new'),
                 'old' if i == 0 else 'new',
@@ -559,7 +874,7 @@ def machines(r, c):
                 + '</ul>',
                 cls='side',
                 head='b',
-            )
+            ))
         )
     return ''.join(out)
 
@@ -571,17 +886,19 @@ def compared(r):
         '</summary><div class="secb">'
     ]
     if c['state'] != 'reported':
-        out.append(not_done(c['state'], 'compared', why_of('compared', c)))
+        out.append(part('how:nd:compared', not_done(
+            c['state'], 'compared', why_of('compared', c))))
         out.append(homed(r, 'how'))
         out.append('</div></details>')
         return ''.join(out)
-    out.append('<h4>Machines</h4>' + machines(r, c))
+    out.append('<h4 data-part="how:machines head">Machines</h4>'
+               + machines(r, c))
     b = c['builds']
     if b['state'] == 'rebuilt':
         li = []
         for i, x in enumerate(b['entries']):
             p = f'compared/builds/entries#{i}'
-            li.append(
+            li.append(part(f'how:build#{i}',
                 label(
                     'build',
                     mark(p + '/build', x['build']) + ':',
@@ -595,10 +912,11 @@ def compared(r):
                     + mark(p + '/commit', x['commit'])
                     + '</code>',
                     'li',
-                )
+                ))
             )
         out.append(
-            '<h4>Builds rebuilt from their packages</h4><ul class="plain">'
+            '<h4 data-part="how:builds head">Builds rebuilt from their '
+            'packages</h4><ul class="plain">'
             + ''.join(li)
             + '</ul>'
         )
@@ -613,7 +931,7 @@ def compared(r):
                 else ', and its metadata gives '
                 f'<b data-p="{p}/when/state">NO DATE</b> this reads'
             )
-            li.append(
+            li.append(part(f'how:latest#{i}',
                 label(
                     'latest',
                     mark(p + '/name', x['name']) + ' =',
@@ -623,22 +941,23 @@ def compared(r):
                     + mark(p + '/folder', x['folder'])
                     + when,
                     'li',
-                )
+                ))
             )
         out.append(
-            '<h4>latest-elN</h4><ul class="plain">' + ''.join(li) + '</ul>'
+            '<h4 data-part="how:latest head">latest-elN</h4>'
+            '<ul class="plain">' + ''.join(li) + '</ul>'
         )
     elif la['state'] == 'not reported':
         out.append(
-            '<h4>latest-elN</h4>'
-            + not_done(
+            '<h4 data-part="how:latest head">latest-elN</h4>'
+            + part('how:nd:compared/latest', not_done(
                 la['state'], 'compared/latest', why_of('compared/latest', la)
-            )
+            ))
         )
     li = []
     for i, t in enumerate(c['tags']):
         p = f'compared/tags#{i}'
-        li.append(
+        li.append(part(f'how:tag#{i}',
             label(
                 'tag',
                 mark(p + '/ref', t['ref']) + ' =',
@@ -648,17 +967,19 @@ def compared(r):
                 + mark(p + '/detail', t['detail'])
                 + '</span>',
                 'li',
-            )
+            ))
         )
     out.append(
-        '<h4>Upstream tags</h4><ul class="plain">' + ''.join(li) + '</ul>'
+        '<h4 data-part="how:tags head">Upstream tags</h4><ul class="plain">'
+        + ''.join(li) + '</ul>'
     )
     cv = c['collation_version']
-    out.append('<h4>Collation version PostgreSQL records</h4>')
+    out.append('<h4 data-part="how:cv head">Collation version PostgreSQL '
+               'records</h4>')
     q = 'compared/collation_version'
     if cv['state'] == 'differ':
         out.append(
-            '<p>'
+            '<p data-part="how:cv">'
             + label(
                 'cv old',
                 'old side:',
@@ -676,7 +997,7 @@ def compared(r):
         )
     elif cv['state'] == 'same':
         out.append(
-            '<p>'
+            '<p data-part="how:cv">'
             + label(
                 'cv same',
                 'both sides:',
@@ -686,7 +1007,7 @@ def compared(r):
             + '.</p>'
         )
     else:
-        out.append(
+        out.append(part('how:nd:compared/collation_version',
             not_done(
                 cv['state'],
                 q,
@@ -695,7 +1016,7 @@ def compared(r):
                     mark(f'{q}/sides#{i}', s)
                     for i, s in enumerate(cv['sides'])
                 ),
-            )
+            ))
         )
     out.append(homed(r, 'how'))
     out.append('</div></details>')
@@ -726,50 +1047,55 @@ def confirm(r):
         '</summary><div class="secb">'
     ]
     if s11['state'] != 'reported':
-        out.append(not_done(s11['state'], 'step11', why_of('step11', s11)))
+        out.append(part('confirm:nd:step11', not_done(
+            s11['state'], 'step11', why_of('step11', s11))))
         out.append(
-            '<p class="hint">The SQL files that confirm a change are '
+            '<p class="hint" data-part="confirm:not run hint">The SQL files '
+            'that confirm a change are '
             "written from the machines' measurements.</p>"
         )
     elif s11['sql']['state'] != 'reported':
-        out.append(not_done(s11['sql']['state'], 'step11/sql',
-                            why_of('step11/sql', s11['sql'])))
+        out.append(part('confirm:nd:step11/sql', not_done(
+            s11['sql']['state'], 'step11/sql',
+            why_of('step11/sql', s11['sql']))))
     elif not s11['sql']['files']:
-        out.append(empty('step11/sql/files', '(no SQL file was written)'))
+        out.append(part('confirm:files none', empty(
+            'step11/sql/files', '(no SQL file was written)')))
     else:
         out.append(
-            '<p>Run each file unchanged on both servers, in a database of '
+            '<p data-part="confirm:run each">Run each file unchanged on '
+            'both servers, in a database of '
             'its encoding, then compare the two outputs:</p>'
-            + fixed(
+            + part('confirm:psql', fixed(
                 'psql',
                 'psql -X -d DATABASE -f FILE &gt; old.out 2&gt;&amp;1   '
                 '# and new.out on the new server\npython3 '
                 'scripts/confirm_sql.py read FILE old.out new.out',
                 'pre',
-            )
+            ))
             + '<ul class="plain">'
         )
         for i, x in enumerate(s11['sql']['files']):
             p = f'step11/sql/files#{i}'
-            out.append(
+            out.append(part(f'confirm:sql#{i}',
                 label(
                     'sql',
                     mark(p + '/encoding', x['encoding']) + ' database:',
                     ' <code>' + mark(p + '/file', x['file']) + '</code>'
                     ' &mdash; ' + mark(p + '/tests', x['tests']) + ' test(s)',
                     'li',
-                )
+                ))
             )
         out.append('</ul>')
     if s11['state'] == 'reported' and s11['sql']['state'] == 'reported':
         for i, g in enumerate(s11['sql']['not_checked']):
-            out.append(
+            out.append(part(f'confirm:not checked#{i}',
                 label(
                     'not checked',
                     '<b>NOT VERIFIED</b> by these files:',
                     ' ' + unchecked(f'step11/sql/not_checked#{i}', g),
                     cls='nd',
-                )
+                ))
             )
     out.append('</div></details>')
     return ''.join(out)
@@ -911,13 +1237,40 @@ def encodings(g):
     return ', '.join(out)
 
 
+def unsettled(g):
+    """What step 11 could not settle for group G, in short words, in the
+    order the group's own "Not settled for this group" says it: the
+    pairs that tell levels apart told apart differently themselves, the
+    levels not compared, the pairs it could not decide, what its
+    compiled sort table changed where step 11 could not measure it, and
+    which sequences that table changed where they cannot be named. Empty
+    where it settled everything."""
+    f = {x['kind']: x for x in g['findings']}
+    out = []
+    if 'probes changed' in f:
+        out.append('the pairs that tell letters, accents and case apart '
+                   'are told apart differently themselves')
+    if 'left out' in f:
+        out.append(' and '.join(f['left out']['left_out']) + ' NOT COMPARED')
+    if 'undecided' in f:
+        out.append(f"{f['undecided']['count']:,} pair(s) not decided")
+    st = g['sort_table']
+    if st['state'] == 'changed' and st['step11'] == 'unmeasured':
+        out.append('what its compiled sort table changed NOT MEASURED by '
+                   'step 11')
+    if st.get('naming', {}).get('state') in ('unread', 'levels'):
+        out.append('which sequences its compiled sort table changed NOT '
+                   'NAMED')
+    return out
+
+
 def group_html(r, i, g):
     """One group of locales whose order changed (step11/findings/groups#I),
     held whole by the check: its names and encodings, what PostgreSQL
     also calls them, its compiled sort table, what moved, the pairs told
     apart differently, what did not move, what compares differently
-    against another; and what step 11 could not settle for it (pairs that
-    tell levels apart changed, levels not compared, pairs undecided) and
+    against another; and what step 11 could not settle for it
+    (unsettled: then "NOT SETTLED in part" on its closed line too) and
     whether an SQL file checks its order."""
     f = {x['kind']: x for x in g['findings']}
     s11 = r['step11']
@@ -941,6 +1294,8 @@ def group_html(r, i, g):
         f'<span class="enc">({esc(encodings(g))})</span>'
         + (' <span class="badge warn">NOT VERIFIED in PostgreSQL</span>'
            if unchecked_here else '')
+        + (' <span class="badge warn">NOT SETTLED in part</span>'
+           if unsettled(g) else '')
         + ' <span class="what">' + esc('; '.join(head)) + '</span>'
     )
     body = []
@@ -1032,6 +1387,13 @@ def group_html(r, i, g):
             + (f'<p class="more">and {ud["count"] - UNDECIDED_SHOWN:,} more'
                + all_in(r) + '</p>'
                if ud['count'] > UNDECIDED_SHOWN else ''))
+    if st['state'] == 'changed' and st['step11'] == 'unmeasured':
+        gaps.append('What its compiled sort table changed: <b>NOT MEASURED</b> '
+                    'by step 11.')
+    if st.get('naming', {}).get('state') in ('unread', 'levels'):
+        gaps.append('Which sequences its compiled sort table changed: '
+                    '<b>NOT NAMED</b> (the line "Its compiled sort '
+                    'table changed" says why).')
     if sql['state'] != 'reported':
         gaps.append('Whether an SQL file checks these locales: <b>NOT '
                     'REPORTED</b> (see Confirm in PostgreSQL).')
@@ -1041,45 +1403,117 @@ def group_html(r, i, g):
     if gaps:
         body.append('<div class="gap"><b>Not settled for this group</b><ul>'
                     + ''.join(f'<li>{x}</li>' for x in gaps) + '</ul></div>')
-    return (f'<details class="grp" data-grp="{i}"><summary>{summary}'
+    return (f'<details class="grp" data-part="grp#{i}"><summary>{summary}'
             '</summary>' + ''.join(body) + '</details>')
+
+
+def unmeasured_line(r):
+    """Under the locales whose sort order changed, with groups or
+    without: each locale step 11 could not measure, named, in step 11's
+    order, since it is not known to be unchanged; '' where step 11 gives
+    no locale the verdict unmeasured."""
+    un = [k for k, v in r['step11']['verdicts'].items()
+          if v['verdict'] == 'unmeasured']
+    if not un:
+        return ''
+    return part('changed:unmeasured', (
+        '<p class="hint">Could not be measured, so NOT known to be '
+        'unchanged: ' + ', '.join(
+            '<span class="loc" data-k="step11/verdicts" data-p="'
+            f'step11/verdicts/{esc(k)}/verdict" data-v="unmeasured">'
+            f'{esc(k)}</span>' for k in un)
+        + '. Why is under Not verified.</p>'))
+
+
+def refused_line(r):
+    """Under the locales whose sort order changed, with groups or
+    without: each locale glibc refused, named, in step 11's order, since
+    it is not known to be unchanged; its card, where step 11's warnings
+    are reported, is under Locales added and removed (WARN_HOME). ''
+    where glibc refused none."""
+    re_ = [k for k, v in r['step11']['verdicts'].items()
+           if v['verdict'] == 'refused']
+    if not re_:
+        return ''
+    return part('changed:refused', (
+        '<p class="hint">Refused by glibc, so NOT known to be unchanged: '
+        + ', '.join(
+            '<span class="loc" data-k="step11/verdicts" data-p="'
+            f'step11/verdicts/{esc(k)}/verdict" data-v="refused">'
+            f'{esc(k)}</span>' for k in re_)
+        + '. See Locales added and removed.</p>'))
+
+
+def far_line(r):
+    """Under the locales whose sort order changed, with groups or
+    without: each locale unchanged only as far as step 11 measured it,
+    named, in step 11's order, in its verdict's own words, since it is not
+    known to be unchanged; no cause, which differs from one to another
+    (locale_order.verdicts_by_name: every unchanged one that is not
+    firm); '' where there is none."""
+    fa = [k for k, v in r['step11']['verdicts'].items()
+          if v['verdict'] == 'far']
+    if not fa:
+        return ''
+    return part('changed:far', (
+        '<p class="hint">Unchanged only as far as step 11 measured, so NOT '
+        'known to be unchanged: ' + ', '.join(
+            '<span class="loc" data-k="step11/verdicts" data-p="'
+            f'step11/verdicts/{esc(k)}/verdict" data-v="far">'
+            f'{esc(k)}</span>' for k in fa)
+        + '.</p>'))
 
 
 def changed_order(r):
     """The locales whose sort order changed, one group of locales measured
-    alike at a time, in step 11's order; or why the run does not know:
-    step 11 not run or not reported, its findings not reported."""
+    alike at a time, in step 11's order, then each locale step 11 could
+    not measure (unmeasured_line), each glibc refused (refused_line) and
+    each unchanged only as far as step 11 measured it (far_line); or why
+    the run does not know: step 11 not run or not reported, its findings
+    not reported."""
     s11 = r['step11']
     out = ['<details class="sec" open><summary><h2>Locales whose sort order '
            'changed</h2></summary><div class="secb">']
     if s11['state'] != 'reported':
-        out.append(not_done(s11['state'], 'step11', why_of('step11', s11)))
-        out.append(fixed('changed not run', 'Only the measurements of the '
+        out.append(part('changed:nd:step11', not_done(
+            s11['state'], 'step11', why_of('step11', s11))))
+        out.append(part('changed:not run hint', fixed(
+            'changed not run', 'Only the measurements of the '
                          'two machines show which locales sort differently. '
                          "Which locales' sort rules changed is in the next "
-                         'section.', 'p', 'hint'))
+                         'section.', 'p', 'hint')))
     elif s11['findings']['state'] != 'reported':
         fi = s11['findings']
-        out.append(not_done(fi['state'], 'step11/findings',
-                            why_of('step11/findings', fi)))
+        out.append(part('changed:nd:step11/findings', not_done(
+            fi['state'], 'step11/findings', why_of('step11/findings', fi))))
     elif not s11['findings']['groups']:
-        out.append(empty('step11/findings/groups'))
+        # A locale step 11 could not measure, glibc refused, or measured
+        # unchanged only in part, is not known to be unchanged: the list is
+        # empty only among the locales measured, and the lines under it
+        # name each one.
+        lines = unmeasured_line(r) + refused_line(r) + far_line(r)
+        out.append(part('changed:none', empty(
+            'step11/findings/groups', '(none among the locales measured)'
+            if lines else '(none)')))
+        out.append(lines)
     else:
-        out.append(fixed(
+        out.append(part('changed:hint', fixed(
             'changed', 'Indexes, ORDER BY, comparisons and range partitions '
             'on text in these locales can give other results after the '
-            'upgrade. Open a group for its characters.', 'p', 'hint'))
+            'upgrade. Open a group for its characters.', 'p', 'hint')))
         ch = s11['characters']
-        out.append(label(
+        out.append(part('changed:characters file', label(
             'characters file',
             'Every character, other string and pair found:',
             ' <code>' + made('characters file', characters_file(r))
             + '</code>' if ch['state'] == 'reported' else ' '
             + not_done(ch['state'], 'step11/characters',
                        why_of('step11/characters', ch)),
-            tag='p', cls='hint'))
+            # A <p> cannot hold the box of a file not reported.
+            tag='p' if ch['state'] == 'reported' else 'div', cls='hint')))
         out += [group_html(r, i, g)
                 for i, g in enumerate(s11['findings']['groups'])]
+        out.append(unmeasured_line(r) + refused_line(r) + far_line(r))
     out.append('</div></details>')
     return ''.join(out)
 
@@ -1124,7 +1558,7 @@ def rules_row(r, i, d):
         what = f'{esc(flc.NOT_KNOWN_WORDS)} {esc(c["why"])}'
     if d['every_rule']:
         what += f'<p class="hint">{esc(flc.EVERY_RULE_WORDS)}</p>'
-    return (f'<tr data-s2="differ#{i}"><td>{esc(", ".join(d["names"]))}'
+    return (f'<tr data-part="s2:differ#{i}"><td>{esc(", ".join(d["names"]))}'
             f'</td><td>{what}</td></tr>')
 
 
@@ -1138,49 +1572,52 @@ def sources(r):
     machine's sources it did not read, each with its reason; or its state
     and reason where it compared nothing or its record is not reported;
     and the cards of its warnings of class "change". Its totals, what they
-    count as not compared, its groups and its entries not read are marked
-    data-s2 with their place, each said whole."""
+    count as not compared, its groups and its entries not read are parts
+    of kind s2:... with their place, each said whole."""
     ru = r['step2']['rules']
     out = ['<details class="sec" open><summary><h2>Which locales&#x27; '
            'sort rules changed (step 2)</h2></summary><div class="secb">']
     if ru['state'] != 'reported':
-        out.append(not_done(ru['state'], 'step2/rules',
-                            why_of('step2/rules', ru)))
+        out.append(part('s2:nd:step2/rules', not_done(
+            ru['state'], 'step2/rules', why_of('step2/rules', ru))))
         out.append(homed(r, 'step2'))
         out.append('</div></details>')
         return ''.join(out)
     t = ru['totals']
-    out.append('<p data-s2="totals">' + esc(flc.TOTALS_WORDS.format(
+    out.append('<p data-part="s2:totals">' + esc(flc.TOTALS_WORDS.format(
         **{k: f'{v:,}' for k, v in t.items()})) + '</p>')
     nc = not_compared_parts(r)
     if nc:
-        out.append('<p class="hint" data-s2="not compared">'
+        out.append('<p class="hint" data-part="s2:not compared">'
                    + esc(nc) + '</p>')
-    out.append(fixed('step2 not here', esc(flc.CODE_NOT_COMPARED_HERE)
+    out.append(part('s2:not here', fixed(
+        'step2 not here', esc(flc.CODE_NOT_COMPARED_HERE)
                      + "; of step 2's comparison of the character sets, "
                      'only its warnings are on this page.', 'p',
-                     'hint'))
+                     'hint')))
     if ru['differ']:
         rc = r['step2']['rules_characters']
-        out.append(label(
+        out.append(part('s2:rules file', label(
             'rules file', 'Every character of the changed rules:',
             ' <code>' + made('rules file', rules_file(r)) + '</code>'
             if rc['state'] == 'reported' else ' '
             + not_done(rc['state'], 'step2/rules_characters',
                        why_of('step2/rules_characters', rc)),
-            tag='p', cls='hint'))
+            tag='p' if rc['state'] == 'reported' else 'div', cls='hint')))
         out.append('<table>'
-                   + fixed('step2 heads', '<th>locales whose rules differ'
-                           '</th> <th>' + esc(flc.LISTED_WORDS) + '</th>',
-                           'tr')
+                   + part('s2:heads', fixed(
+                       'step2 heads', '<th>locales whose rules differ'
+                       '</th> <th>' + esc(flc.LISTED_WORDS) + '</th>', 'tr'))
                    + ''.join(rules_row(r, i, d)
                              for i, d in enumerate(ru['differ']))
                    + '</table>')
     else:
-        out.append(empty('step2/rules/differ', flc.NONE_DIFFER_WORDS))
+        out.append(part('s2:differ none', empty('step2/rules/differ',
+                                                flc.NONE_DIFFER_WORDS)))
     if ru['unread']:
         out.append(
-            f'<div class="gap" data-s2="unread"><b>{esc(flc.UNREAD_WORDS)} '
+            '<div class="gap" data-part="s2:unread">'
+            f'<b>{esc(flc.UNREAD_WORDS)} '
             f'({len(ru["unread"]):,}):</b><ul>' + ''.join(
                 f'<li>{esc(u["name"])} ({esc("; ".join(u["why"]))})</li>'
                 for u in ru['unread']) + '</ul></div>')
@@ -1237,7 +1674,8 @@ def other_changes(r):
         b = r['warnings'][st]
         if b['state'] != 'reported':
             p = f'warnings/{st}'
-            nd.append('<div class="nd-card">The warnings of '
+            nd.append(f'<div class="nd-card" data-part="other:block {st}">'
+                      'The warnings of '
                       + fixed('other ' + st, esc(BLOCK_WORDS[st]))
                       + ' ' + not_done(b['state'], p, why_of(p, b))
                       + '</div>')
@@ -1245,7 +1683,7 @@ def other_changes(r):
     out += nd
     out.append(cards)
     if not nd and not cards:
-        out.append(empty('other changes'))
+        out.append(part('other:none', empty('other changes')))
     out.append('</div></details>')
     return ''.join(out)
 
@@ -1294,14 +1732,15 @@ pre{white-space:pre-wrap;font:12px/1.45 ui-monospace,Menlo,monospace;background:
 def render(r):
     pair, run = r['pair'], r['run']
     head = [
-        f'<h1>What changes from {mark("pair/old", pair["old"])} to '
+        '<h1 data-part="h1">What changes from '
+        f'{mark("pair/old", pair["old"])} to '
         f'{mark("pair/new", pair["new"])}</h1>'
     ]
     c = r['step11'].get('counts', {})
     if r['step11']['state'] == 'reported' and c.get('state') == 'reported':
         m = c['machines']
         head.append(
-            '<p class="sub0" data-f="sub measured">'
+            '<p class="sub0" data-f="sub measured" data-part="sub">'
             + label(
                 'measured old',
                 'Old machine measured:',
@@ -1330,30 +1769,30 @@ def render(r):
             + '.</p>'
         )
     elif run['machines']['state'] == 'given':
-        head.append(
+        head.append(part('sub',
             fixed(
                 'sub unreported',
                 "The two machines' files were given; what they measured is "
                 'not reported (see below).',
                 'p',
                 'sub0',
-            )
+            ))
         )
     else:
         head.append(
-            '<p class="sub0" data-f="sub sources">Compared as '
+            '<p class="sub0" data-f="sub sources" data-part="sub">Compared as '
             + mark('run/word', run['word'])
             + " from their glibc sources; no machine's files given.</p>"
         )
     if run['nothing_compared'] != 'none':
         head.append(
-            '<div class="banner">'
+            '<div class="banner" data-part="nothing">'
             + fixed('nothing', 'Nothing was compared', 'b')
             + ': the two sides are one '
             + mark('run/nothing_compared', run['nothing_compared'])
             + '.</div>'
         )
-    head.append(
+    head.append(part('disc',
         fixed(
             'disc',
             'This report is a complement to testing on your '
@@ -1361,7 +1800,7 @@ def render(r):
             'is listed under &ldquo;Not verified&rdquo;.',
             'p',
             'disc',
-        )
+        ))
     )
     nv = not_verified(r)
     body = [
@@ -1372,14 +1811,15 @@ def render(r):
         other_changes(r),
         '<details class="sec" open><summary><h2>Not verified</h2></summary>'
         '<div class="secb">'
-        + fixed(
+        + part('nv:hint', fixed(
             'nv',
             'What this run could not check. None of it means '
             '&ldquo;no change&rdquo;.',
             'p',
             'hint',
-        )
-        + (''.join(nv_html(e) for e in nv) if nv else empty('not verified'))
+        ))
+        + (''.join(nv_html(r, e) for e in nv) if nv else
+           part('nv:none', empty('not verified')))
         + '</div></details>',
         compared(r),
         confirm(r),
